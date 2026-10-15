@@ -59,7 +59,7 @@ export async function PATCH(
   }
 }
 
-/** DELETE /api/decks/<id> */
+/** DELETE /api/decks/<id> — external (linked) projects keep their files on disk */
 export async function DELETE(
   _req: Request,
   { params }: { params: Promise<{ deckId: string }> },
@@ -68,6 +68,6 @@ export async function DELETE(
   if (!validDeckId(deckId) || !(await deckExists(deckId))) {
     return Response.json({ error: "Deck not found" }, { status: 404 });
   }
-  await deleteDeck(deckId);
-  return Response.json({ ok: true });
+  const result = await deleteDeck(deckId);
+  return Response.json({ ok: true, ...result });
 }

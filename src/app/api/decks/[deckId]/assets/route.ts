@@ -1,9 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
-import { deckExists, deckFiles, validDeckId, writeFileAtomic } from "@/lib/stagesmith/store";
+import { deckExists, deckFiles, deckRoot, validDeckId, writeFileAtomic } from "@/lib/stagesmith/store";
 
-const DECKS_ROOT = path.join(process.cwd(), "decks");
 const MAX_UPLOAD = 20 * 1024 * 1024; // 20 MB per asset
 
 /** GET /api/decks/<id>/assets — asset rows under assets/ */
@@ -41,8 +40,9 @@ export async function POST(
       const hash = crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
       const name = sanitize(value.name);
       const rel = uniqueAssetPath(existing, `assets/${name}`);
-      await writeFileAtomic(path.join(DECKS_ROOT, deckId, rel), "");
-      await fs.writeFile(path.join(DECKS_ROOT, deckId, rel), buf);
+      const full = path.join(deckRoot(deckId), rel);
+      await writeFileAtomic(full, "");
+      await fs.writeFile(full, buf);
       out.push({ path: rel, deduped: false });
       void hash;
     }

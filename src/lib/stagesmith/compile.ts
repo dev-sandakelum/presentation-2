@@ -2,7 +2,7 @@ import * as esbuild from "esbuild";
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
-import { DECKS_ROOT, deckPath } from "./store";
+import { deckPath, deckRoot } from "./store";
 
 /**
  * Compile a deck TSX/TS file to an ESM module the sandboxed Stage Runtime
@@ -94,7 +94,7 @@ async function buildModule(
   abs: string,
 ): Promise<{ js: string; deps: Array<{ path: string; ver: string }> }> {
   const deps: Array<{ path: string; ver: string }> = [];
-  const root = path.join(DECKS_ROOT, deckId);
+  const root = path.resolve(deckRoot(deckId));
 
   const resolver: esbuild.Plugin = {
     name: "stagesmith-resolver",
@@ -157,7 +157,9 @@ async function buildModule(
       // relative paths inside the deck
       build.onResolve({ filter: /^\.\.?(\/|$)/ }, async (args) => {
         const importerDir = path.dirname(
-          args.importer && args.importer.startsWith(DECKS_ROOT) ? args.importer : abs,
+          args.importer && (args.importer === root || args.importer.startsWith(root + path.sep))
+            ? args.importer
+            : abs,
         );
         const target = await resolveExt(path.resolve(importerDir, args.path));
         if (!target) {

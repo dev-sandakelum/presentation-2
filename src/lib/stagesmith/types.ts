@@ -78,6 +78,8 @@ export interface DeckSummary {
   modified: string;
   /** signature of the whole folder — changes when anything changes */
   signature: string;
+  /** true when the project folder lives outside decks/ (linked project) */
+  external?: boolean;
 }
 
 export interface CompileResult {

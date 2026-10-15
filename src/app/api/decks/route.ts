@@ -3,14 +3,13 @@ import path from "path";
 import {
   createDeckFolder,
   deckExists,
+  deckRoot,
   listDecks,
   readDeck,
   slugify,
   validDeckId,
 } from "@/lib/stagesmith/store";
 import { starterDeckFiles } from "@/lib/stagesmith/templates";
-
-const DECKS_ROOT = path.join(process.cwd(), "decks");
 
 /** GET /api/decks — library listing */
 export async function GET() {
@@ -53,7 +52,7 @@ export async function POST(req: Request) {
           else files[relPath] = await fs.readFile(path.join(dir, e.name), "utf8");
         }
       };
-      await walk(path.join(DECKS_ROOT, srcId));
+      await walk(path.join(deckRoot(srcId)));
       const deck = JSON.parse(files["deck.json"]);
       deck.title = title;
       files["deck.json"] = JSON.stringify(deck, null, 2);

@@ -1,11 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Copy, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Copy, RefreshCw, Wifi, X } from "lucide-react";
+import { api, type NetworkInfo } from "@/lib/stagesmith/client";
 import { copyText } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 
-/** QR join panel (plan §7): remote URL + token, connected-phone count */
+/**
+ * QR join panel (plan §7): remote URL + token, connected-phone count.
+ * The URL is phone-reachable: when the studio runs on this machine and is
+ * browsed from localhost / a LAN IP, the QR encodes http://<lan-ip>:<port>
+ * so a phone on the same Wi-Fi network can join; behind a public preview
+ * gateway the origin itself is used.
+ */
 export function QrPanel({
   deckId,
   token,
@@ -20,10 +27,42 @@ export function QrPanel({
   absolute?: boolean;
 }) {
   const { toast } = useToast();
+  const [net, setNet] = useState<NetworkInfo | null>(null);
+  const [sel, setSel] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .networkInfo()
+      .then((n) => {
+        if (!cancelled) setNet(n);
+      })
+      .catch(() => {
+        /* fall back to current origin below */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const origins = useMemo(() => {
+    if (net?.urls?.length) return net.urls;
+    return [
+      {
+        url: typeof window !== "undefined" ? window.location.origin : "",
+        ip: "",
+        iface: "",
+      },
+    ];
+  }, [net]);
+
+  const origin = origins[Math.min(sel, origins.length - 1)]?.url ?? "";
+
   const remoteUrl = useMemo(() => {
-    const base = typeof window !== "undefined" ? window.location.origin : "";
-    return token ? `${base}/?remote=${encodeURIComponent(deckId)}&t=${token}` : `${base}/?remote=${encodeURIComponent(deckId)}`;
-  }, [deckId, token]);
+    return token
+      ? `${origin}/?remote=${encodeURIComponent(deckId)}&t=${token}`
+      : `${origin}/?remote=${encodeURIComponent(deckId)}`;
+  }, [origin, deckId, token]);
 
   const qrSrc = useMemo(() => `/api/qr?text=${encodeURIComponent(remoteUrl)}`, [remoteUrl]);
 
@@ -36,6 +75,32 @@ export function QrPanel({
             <X size={14} />
           </button>
         </div>
+
+        {/* LAN origin picker (multiple network interfaces) */}
+        {origins.length > 1 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
+            {origins.map((o, i) => (
+              <button
+                key={o.ip || o.url}
+                className="ss-btn"
+                style={{
+                  height: 24,
+                  padding: "0 9px",
+                  font: "500 11px var(--ss-mono)",
+                  flex: "none",
+                  border: i === sel ? "1px solid var(--ss-acc)" : "1px solid var(--ss-line)",
+                  color: i === sel ? "var(--ss-ink)" : "var(--ss-mut)",
+                  background: i === sel ? "var(--ss-card)" : "transparent",
+                }}
+                title={o.iface ? `Network interface: ${o.iface}` : o.url}
+                onClick={() => setSel(i)}
+              >
+                {o.ip || "origin"}
+              </button>
+            ))}
+          </div>
+        )}
+
         {token ? (
           <img src={qrSrc} alt="Remote join QR code" />
         ) : (
@@ -43,6 +108,7 @@ export function QrPanel({
             Waiting for the sync service to issue a token… open Present once if this persists.
           </div>
         )}
+
         <div className="ss-qr-url">
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{remoteUrl}</span>
           <button
@@ -57,6 +123,42 @@ export function QrPanel({
             <Copy size={12} />
           </button>
         </div>
+
+        {/* same-network hint */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            width: "100%",
+            font: "400 11.5px var(--ss-sans)",
+            color: "var(--ss-mut)",
+          }}
+        >
+          <Wifi size={12} style={{ flex: "none" }} />
+          <span>
+            {net?.hint ??
+              "Scan with your phone camera — the remote works as a clicker."}
+          </span>
+          <button
+            className="ss-btn ss-btn-icon"
+            style={{ height: 22, width: 22, flex: "none", marginLeft: "auto" }}
+            title="Re-check network interfaces"
+            onClick={async () => {
+              try {
+                const n = await api.networkInfo();
+                setNet(n);
+                setSel(0);
+                toast({ title: "Network re-checked" });
+              } catch {
+                toast({ title: "Network check failed", variant: "destructive" });
+              }
+            }}
+          >
+            <RefreshCw size={11} />
+          </button>
+        </div>
+
         <div className="ss-qr-count">
           {remotes > 0 ? `${remotes} phone${remotes > 1 ? "s" : ""} connected` : "no phones connected yet"}
         </div>

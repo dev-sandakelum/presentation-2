@@ -314,6 +314,79 @@ try {
   console.warn("fs.watch recursive unavailable, falling back to scan:", (e as Error).message);
 }
 
+/* ------------------------------------------------------------------ */
+/* External project links (decks/.registry.json) — projects created   */
+/* outside decks/ are watched too, so live edit keeps working.        */
+/* ------------------------------------------------------------------ */
+
+const REGISTRY_PATH = path.join(DECKS_ROOT, ".registry.json");
+const externalWatchers = new Map<string, { watcher: fs.FSWatcher; deckIds: string[] }>();
+let lastRegistryRaw = "";
+
+function syncExternalWatchers() {
+  let raw = "";
+  try {
+    raw = fs.readFileSync(REGISTRY_PATH, "utf8");
+  } catch {
+    raw = "";
+  }
+  if (raw === lastRegistryRaw) return;
+  lastRegistryRaw = raw;
+
+  let links: Record<string, string> = {};
+  try {
+    links = (JSON.parse(raw).links || {}) as Record<string, string>;
+  } catch {
+    links = {};
+  }
+
+  // group roots → deck ids (two ids could point at one folder)
+  const rootsToIds = new Map<string, string[]>();
+  for (const [id, root] of Object.entries(links)) {
+    if (typeof root !== "string") continue;
+    const r = path.resolve(root);
+    if (!rootsToIds.has(r)) rootsToIds.set(r, []);
+    rootsToIds.get(r)!.push(id);
+  }
+
+  // drop watchers for removed / changed links
+  for (const [root, { watcher }] of externalWatchers) {
+    const ids = rootsToIds.get(root);
+    if (!ids) {
+      try {
+        watcher.close();
+      } catch {
+        /* already closed */
+      }
+      externalWatchers.delete(root);
+    }
+  }
+
+  // add watchers for new roots
+  for (const [root, ids] of rootsToIds) {
+    const existing = externalWatchers.get(root);
+    if (existing) {
+      existing.deckIds.length = 0;
+      existing.deckIds.push(...ids);
+      continue;
+    }
+    try {
+      fs.statSync(root);
+      const watcher = fs.watch(root, { recursive: true }, (_event, filename) => {
+        const f = String(filename || "");
+        if (f.startsWith(".") || f.includes(".stagesmith") || f.includes(".tmp-")) return;
+        for (const id of ids) queueDeckUpdate(id);
+      });
+      externalWatchers.set(root, { watcher, deckIds: ids });
+      console.log(`Watching external project ${root} (${ids.join(", ")})`);
+    } catch (e) {
+      console.warn(`Cannot watch external root ${root}:`, (e as Error).message);
+    }
+  }
+}
+setInterval(syncExternalWatchers, 3000);
+syncExternalWatchers();
+
 httpServer.listen(PORT, () => {
   console.log(`Stagesmith sync service running on port ${PORT}`);
 });

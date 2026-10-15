@@ -1,14 +1,21 @@
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
+import { deckRootOf, listLinks, refreshLinks, unlinkDeck } from "./registry";
 import type { DeckJson, DeckSummary, FileRow, SlideEntry, Source } from "./types";
 
 /**
  * Stagesmith deck store — the folder IS the project (plan §2).
  * No hidden database: everything lives under decks/<id>/.
+ * Projects created elsewhere on disk are linked via .registry.json.
  */
 
 export const DECKS_ROOT = path.join(process.cwd(), "decks");
+
+/** on-disk folder of a deck: linked external project or decks/<id> */
+export function deckRoot(deckId: string): string {
+  return deckRootOf(deckId, DECKS_ROOT);
+}
 
 const MAX_PATH = 200;
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -28,7 +35,7 @@ export function validRelPath(p: string): boolean {
 /** join a deck-relative path safely, or throw */
 export function deckPath(deckId: string, rel: string): string {
   if (!validRelPath(rel)) throw new Error(`Illegal path: ${rel}`);
-  const root = path.join(DECKS_ROOT, deckId);
+  const root = path.resolve(deckRoot(deckId));
   const full = path.resolve(root, rel);
   if (full !== root && !full.startsWith(root + path.sep)) {
     throw new Error(`Path escapes deck folder: ${rel}`);
@@ -78,7 +85,7 @@ async function walk(root: string, rel = "", acc: FileRow[] = []): Promise<FileRo
 }
 
 export async function deckFiles(deckId: string): Promise<FileRow[]> {
-  const root = path.join(DECKS_ROOT, deckId);
+  const root = deckRoot(deckId);
   try {
     return await walk(root);
   } catch {
@@ -101,6 +108,7 @@ export async function deckSignature(deckId: string): Promise<string> {
 
 export async function readDeck(deckId: string): Promise<DeckJson> {
   if (!validDeckId(deckId)) throw new Error(`Invalid deck id: ${deckId}`);
+  refreshLinks(); // freshly-linked external projects must resolve immediately
   const p = deckPath(deckId, "deck.json");
   const raw = await fs.readFile(p, "utf8");
   const deck = JSON.parse(raw) as DeckJson;
@@ -109,8 +117,9 @@ export async function readDeck(deckId: string): Promise<DeckJson> {
 }
 
 export async function deckExists(deckId: string): Promise<boolean> {
+  refreshLinks(); // freshly-linked external projects must resolve immediately
   try {
-    await fs.access(path.join(DECKS_ROOT, deckId, "deck.json"));
+    await fs.access(path.join(deckRoot(deckId), "deck.json"));
     return true;
   } catch {
     return false;
@@ -118,15 +127,18 @@ export async function deckExists(deckId: string): Promise<boolean> {
 }
 
 export async function listDecks(): Promise<DeckSummary[]> {
+  refreshLinks(); // always list from the freshest registry on disk
   let entries;
   try {
     entries = await fs.readdir(DECKS_ROOT, { withFileTypes: true });
   } catch {
-    return [];
+    entries = [];
   }
   const out: DeckSummary[] = [];
+  const seen = new Set<string>();
   for (const e of entries) {
     if (!e.isDirectory() || !validDeckId(e.name)) continue;
+    seen.add(e.name);
     try {
       const deck = await readDeck(e.name);
       out.push({
@@ -135,9 +147,28 @@ export async function listDecks(): Promise<DeckSummary[]> {
         slideCount: deck.slides.length,
         modified: deck.modified,
         signature: await deckSignature(e.name),
+        external: false,
       });
     } catch {
       /* not a deck folder — skip */
+    }
+  }
+  // external projects registered in .registry.json
+  for (const id of Object.keys(listLinks())) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    try {
+      const deck = await readDeck(id);
+      out.push({
+        id: deck.id,
+        title: deck.title,
+        slideCount: deck.slides.length,
+        modified: deck.modified,
+        signature: await deckSignature(id),
+        external: true,
+      });
+    } catch {
+      /* moved or deleted on disk — skip */
     }
   }
   out.sort((a, b) => (a.modified < b.modified ? 1 : -1));
@@ -323,7 +354,7 @@ export async function snapshotDeck(deckId: string, tag: string): Promise<string>
   const manifest: Record<string, string> = {};
   for (const f of files) {
     try {
-      const abs = path.join(DECKS_ROOT, deckId, f.path);
+      const abs = path.join(deckRoot(deckId), f.path);
       const body = await fs.readFile(abs);
       manifest[f.path] = body.toString("base64");
     } catch {
@@ -383,7 +414,53 @@ export async function createDeckFolder(
   return deck;
 }
 
-export async function deleteDeck(deckId: string): Promise<void> {
+/**
+ * Remove a deck from the library. External (linked) projects keep their
+ * files on disk — only the library link is removed.
+ */
+export async function deleteDeck(deckId: string): Promise<{
+  removed: boolean;
+  external: boolean;
+  root: string;
+}> {
   if (!validDeckId(deckId)) throw new Error("Invalid deck id");
+  const root = deckRoot(deckId);
+  if (unlinkDeck(deckId)) {
+    return { removed: true, external: true, root };
+  }
   await fs.rm(path.join(DECKS_ROOT, deckId), { recursive: true, force: true });
+  return { removed: true, external: false, root };
+}
+
+/**
+ * Create a deck at an explicit absolute folder (used by "New project…",
+ * which may place the project anywhere on disk). The caller links the
+ * folder into the library afterwards when it lives outside decks/.
+ */
+export async function createDeckAtRoot(
+  deckId: string,
+  title: string,
+  files: Record<string, string>,
+  absRoot: string,
+): Promise<DeckJson> {
+  if (!validDeckId(deckId)) throw new Error("Deck id must be kebab-case");
+  if (await deckExists(deckId)) throw new Error(`A project named “${deckId}” already exists in your library`);
+  const deck = JSON.parse(files["deck.json"]) as DeckJson;
+  deck.id = deckId;
+  deck.title = title || deck.title;
+  deck.created = new Date().toISOString();
+  const root = path.resolve(absRoot);
+  await fs.mkdir(root, { recursive: true });
+  // write everything except the index first (plan §2: deck.json last)
+  for (const [rel, content] of Object.entries(files)) {
+    if (rel === "deck.json") continue;
+    if (!validRelPath(rel)) throw new Error(`Illegal path: ${rel}`);
+    const full = path.resolve(root, rel);
+    if (full !== root && !full.startsWith(root + path.sep)) {
+      throw new Error(`Path escapes project folder: ${rel}`);
+    }
+    await writeFileAtomic(full, content);
+  }
+  await writeFileAtomic(path.join(root, "deck.json"), JSON.stringify(deck, null, 2) + "\n");
+  return deck;
 }

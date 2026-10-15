@@ -45,6 +45,7 @@
     "scripts",
     "upload",
     "db",
-    "tool-results"
+    "tool-results",
+    "stagelink"
   ]
 }

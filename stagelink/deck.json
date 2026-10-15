@@ -1,0 +1,35 @@
+{
+  "format": "smdeck",
+  "format_version": 1,
+  "id": "stagelink",
+  "title": "stagelink",
+  "created": "2026-10-15T05:24:28.487Z",
+  "modified": "2026-10-15T05:24:28.486Z",
+  "settings": {
+    "size": [
+      1280,
+      720
+    ],
+    "defaultMode": "dark",
+    "transitionMs": 220,
+    "bgCrossfadeMs": 1600
+  },
+  "bg": {
+    "type": "code",
+    "path": "bg/common.tsx"
+  },
+  "overlay": {
+    "type": "code",
+    "path": "overlay/common.tsx"
+  },
+  "slides": [
+    {
+      "id": "title",
+      "label": "Title"
+    },
+    {
+      "id": "end",
+      "label": "End"
+    }
+  ]
+}

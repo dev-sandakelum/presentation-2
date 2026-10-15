@@ -27,6 +27,51 @@ export interface DeckBundle {
   themeCss: string;
 }
 
+/** /api/fs — directory browser row */
+export interface FsBrowse {
+  path: string;
+  parent: string | null;
+  home: string;
+  decksRoot: string;
+  writable: boolean;
+  dirs: string[];
+  truncated?: boolean;
+}
+
+/** /api/projects — create-project result */
+export interface CreateProjectResult {
+  deck: DeckJson;
+  deckId: string;
+  root: string;
+  external: boolean;
+}
+
+/** /api/network — phone-reachable URL candidates for the QR panel */
+export interface NetworkInfo {
+  mode: "lan" | "origin";
+  origin: string;
+  hostname: string;
+  port: number;
+  urls: Array<{ url: string; ip: string; iface: string }>;
+  hint: string;
+}
+
+/** DELETE /api/decks/<id> result */
+export interface DeleteDeckResult {
+  ok: boolean;
+  removed: boolean;
+  external: boolean;
+  root: string;
+}
+
+/** /api/import result row */
+export interface ImportReport {
+  deckId: string;
+  slides: number;
+  files: number;
+  warnings: string[];
+}
+
 export const api = {
   listDecks: async (): Promise<DeckSummary[]> => {
     const res = await fetch("/api/decks", { cache: "no-store" });
@@ -47,9 +92,9 @@ export const api = {
     return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
-  deleteDeck: async (deckId: string): Promise<void> => {
+  deleteDeck: async (deckId: string): Promise<DeleteDeckResult> => {
     const res = await fetch(`/api/decks/${deckId}`, { method: "DELETE" });
-    await j<{ ok: boolean }>(res);
+    return j<DeleteDeckResult>(res);
   },
 
   readFile: async (deckId: string, path: string): Promise<string> => {
@@ -174,22 +219,51 @@ export const api = {
     await j(res);
   },
 
-  importFile: async (file: File): Promise<{ deckId: string; slides: number; files: number; warnings: string[] }> => {
+  importFile: async (file: File): Promise<ImportReport> => {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch("/api/import", { method: "POST", body: form });
-    return j(res);
+    return (await j<{ report: ImportReport }>(res)).report;
   },
 
-  importText: async (text: string, name: string): Promise<{ deckId: string; slides: number; files: number; warnings: string[] }> => {
+  importText: async (text: string, name: string): Promise<ImportReport> => {
     const res = await fetch("/api/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, name }),
     });
-    return j(res);
+    return (await j<{ report: ImportReport }>(res)).report;
   },
 
   exportUrl: (deckId: string, format: "smdeck" | "deck.tsx") =>
     `/api/decks/${deckId}/export?format=${encodeURIComponent(format)}`,
+
+  browseFs: async (dirPath?: string): Promise<FsBrowse> => {
+    const q = dirPath ? `?path=${encodeURIComponent(dirPath)}` : "";
+    const res = await fetch(`/api/fs${q}`, { cache: "no-store" });
+    return j<FsBrowse>(res);
+  },
+
+  createFolder: async (dirPath: string): Promise<{ ok: boolean; path: string }> => {
+    const res = await fetch("/api/fs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: dirPath }),
+    });
+    return j<{ ok: boolean; path: string }>(res);
+  },
+
+  createProject: async (name: string, location: string): Promise<CreateProjectResult> => {
+    const res = await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, location }),
+    });
+    return j<CreateProjectResult>(res);
+  },
+
+  networkInfo: async (): Promise<NetworkInfo> => {
+    const res = await fetch("/api/network", { cache: "no-store" });
+    return j<NetworkInfo>(res);
+  },
 };

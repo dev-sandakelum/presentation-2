@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronRight, Copy, FileUp, Import, Layers, Play, Plus, Presentation, QrCode, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderPlus, Import, Layers, Play, Plus, Presentation, QrCode, Trash2 } from "lucide-react";
 import { api } from "@/lib/stagesmith/client";
 import type { DeckBundle } from "@/lib/stagesmith/client";
 import type { DeckSummary } from "@/lib/stagesmith/types";
 import { StageFrame } from "./StageFrame";
+import { NewProjectDialog } from "./NewProjectDialog";
 import { download, formatWhen, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -50,11 +51,13 @@ export function LibraryView({ nav }: { nav: SsNav }) {
   const [decks, setDecks] = useState<DeckSummary[] | null>(null);
   const [bundles, setBundles] = useState<Record<string, DeckBundle>>({});
   const [newOpen, setNewOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [pasted, setPasted] = useState("");
   const [pastedName, setPastedName] = useState("");
   const [busy, setBusy] = useState(false);
+  const smdeckInput = useRef<HTMLInputElement | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -137,6 +140,30 @@ export function LibraryView({ nav }: { nav: SsNav }) {
     }
   };
 
+  /** File → Load .smdeck… — one or many files; opens the last one */
+  const loadSmdeckFiles = async (list: FileList | null) => {
+    const files = Array.from(list || []);
+    if (!files.length) return;
+    setBusy(true);
+    let lastId: string | null = null;
+    try {
+      for (const f of files) {
+        const report = await api.importFile(f);
+        lastId = report.deckId;
+        toast({
+          title: `Loaded “${f.name}”`,
+          description: `${report.slides} slides · ${report.files} files${report.warnings.length ? ` · ${report.warnings.length} warnings` : ""}`,
+        });
+      }
+      if (lastId) nav.deck(lastId);
+    } catch (e) {
+      toast({ title: "Load failed", description: (e as Error).message, variant: "destructive" });
+      refresh();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="ss-library ss-scroll">
       <header
@@ -163,10 +190,39 @@ export function LibraryView({ nav }: { nav: SsNav }) {
             <div className="ss-label" style={{ marginTop: 2 }}>Code-first presentation studio</div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <button className="ss-btn" onClick={() => setImportOpen(true)}>
-            <FileUp size={15} /> Import
-          </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {/* File menu */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="ss-btn" disabled={busy} title="File options">
+                <FolderPlus size={15} /> File <ChevronDown size={13} style={{ opacity: 0.7 }} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea", minWidth: 210 }}>
+              <DropdownMenuItem onClick={() => setNewProjectOpen(true)}>
+                <FolderPlus size={14} /> New project…
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => smdeckInput.current?.click()}>
+                <FileUp size={14} /> Load .smdeck…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator style={{ background: "#2a2a2e" }} />
+              <DropdownMenuItem onClick={() => setImportOpen(true)}>
+                <Import size={14} /> Import / paste…
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {/* hidden multi .smdeck picker */}
+          <input
+            ref={smdeckInput}
+            type="file"
+            accept=".smdeck,.zip"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => {
+              loadSmdeckFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
           <button className="ss-btn ss-btn-acc" onClick={() => setNewOpen(true)}>
             <Plus size={15} /> New deck
           </button>
@@ -205,6 +261,9 @@ export function LibraryView({ nav }: { nav: SsNav }) {
           </div>
         )}
       </main>
+
+      {/* New project (folder structure at a picked location) */}
+      <NewProjectDialog open={newProjectOpen} onOpenChange={setNewProjectOpen} nav={nav} />
 
       {/* New deck */}
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
@@ -331,7 +390,29 @@ function DeckCard({
         )}
       </div>
       <div className="ss-card-body">
-        <div className="ss-card-title">{deck.title}</div>
+        <div className="ss-card-title">
+          {deck.title}
+          {deck.external && (
+            <span
+              title="Linked project — folder lives outside decks/"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 3,
+                marginLeft: 7,
+                verticalAlign: "middle",
+                font: "500 10px var(--ss-mono)",
+                color: "var(--ss-mut)",
+                border: "1px solid var(--ss-line-strong)",
+                borderRadius: 99,
+                padding: "1px 7px",
+                letterSpacing: ".06em",
+              }}
+            >
+              <ExternalLink size={10} /> linked
+            </span>
+          )}
+        </div>
         <div className="ss-card-meta">
           {deck.slideCount} slides · {deck.id} · modified {formatWhen(deck.modified)}
         </div>
@@ -382,13 +463,22 @@ function DeckCard({
                   setTimeout(() => setConfirming(false), 2500);
                   return;
                 }
-                api.deleteDeck(deck.id).then(() => {
+                api.deleteDeck(deck.id).then((r) => {
                   onDeleted();
-                  toast({ title: "Deck deleted" });
+                  toast(
+                    r.external
+                      ? { title: "Removed from library", description: `Files kept on disk at ${r.root}` }
+                      : { title: "Deck deleted" },
+                  );
                 }).catch((e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }));
               }}
             >
-              <Trash2 size={14} /> {confirming ? "Click again to confirm" : "Delete"}
+              <Trash2 size={14} />{" "}
+              {confirming
+                ? "Click again to confirm"
+                : deck.external
+                  ? "Remove from library (keeps files)"
+                  : "Delete"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

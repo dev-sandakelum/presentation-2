@@ -50,44 +50,76 @@ export function useSync(deckId: string | null, role: SyncRole, token?: string | 
 
   useEffect(() => {
     if (!deckId) return;
-    // Gateway pattern for the public preview (single exposed port).
-    // When browsing the dev server directly on localhost there is no
-    // gateway in front, so connect to the sync service directly.
-    const onLocalhost =
-      typeof window !== "undefined" &&
-      (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-    const url = onLocalhost ? `http://${window.location.hostname}:3003` : "/?XTransformPort=3003";
-    const s = io(url, {
-      transports: ["websocket", "polling"],
+    // How do we reach the sync service (socket.io, port 3003)?
+    // - localhost / LAN IP → direct http://<hostname>:3003 (phone remote on
+    //   the same Wi-Fi lands here: the page host IS the machine's IP)
+    // - gateway/preview hostnames → the gateway path, with the direct URL
+    //   as a fallback (and vice-versa) in case the primary fails.
+    const hostname =
+      typeof window !== "undefined" ? window.location.hostname : "localhost";
+    const isLoopback =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "[::1]";
+    const isPrivateIp =
+      /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/.test(hostname);
+    const direct = isLoopback || isPrivateIp;
+    const directUrl = `http://${hostname}:3003`;
+    const gatewayUrl = "/?XTransformPort=3003";
+    const primary = direct ? directUrl : gatewayUrl;
+    const secondary = direct ? gatewayUrl : directUrl;
+
+    const opts = {
+      transports: ["websocket", "polling"] as ("websocket" | "polling")[],
       reconnection: true,
       reconnectionDelay: 1000,
       timeout: 10000,
-    });
-    setSocket(s);
+    };
 
-    s.on("connect", () => {
-      setConnected(true);
-      setError(null);
-      s.emit("join", {
-        deckId,
-        role,
-        token: tokenRef.current ?? undefined,
-        slides: slides || undefined,
+    let active: Socket | null = null;
+    let swapped = false;
+
+    const attach = (sock: Socket): Socket => {
+      sock.on("connect", () => {
+        setConnected(true);
+        setError(null);
+        sock.emit("join", {
+          deckId,
+          role,
+          token: tokenRef.current ?? undefined,
+          slides: slides || undefined,
+        });
       });
-    });
-    s.on("disconnect", () => setConnected(false));
-    s.on("connect_error", () => setConnected(false));
+      sock.on("disconnect", () => setConnected(false));
+      sock.on("connect_error", () => {
+        setConnected(false);
+        // primary unreachable (e.g. firewall blocks :3003) → try the other route once
+        if (!swapped && active === sock) {
+          swapped = true;
+          sock.removeAllListeners();
+          sock.close();
+          const next = attach(io(secondary, opts));
+          active = next;
+          setSocket(next);
+        }
+      });
+      sock.on("joined", (data: { state: SyncState; token?: string | null }) => {
+        setState(data.state);
+        if (data.token) setRoomToken(data.token);
+      });
+      sock.on("state", (st: SyncState) => setState(st));
+      sock.on("presence", (p: { remotes: number }) => setRemotes(p.remotes));
+      sock.on("error", (e: { message?: string }) => setError(e?.message || "Sync error"));
+      return sock;
+    };
 
-    s.on("joined", (data: { state: SyncState; token?: string | null }) => {
-      setState(data.state);
-      if (data.token) setRoomToken(data.token);
-    });
-    s.on("state", (st: SyncState) => setState(st));
-    s.on("presence", (p: { remotes: number }) => setRemotes(p.remotes));
-    s.on("error", (e: { message?: string }) => setError(e?.message || "Sync error"));
+    active = attach(io(primary, opts));
+    setSocket(active);
 
     return () => {
-      s.disconnect();
+      active?.removeAllListeners();
+      active?.close();
       setSocket(null);
     };
     // re-join when slide list identity changes (after add/delete/reorder)
