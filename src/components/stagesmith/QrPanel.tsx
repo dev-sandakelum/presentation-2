@@ -45,16 +45,21 @@ export function QrPanel({
     };
   }, []);
 
+  const [clientOrigin, setClientOrigin] = useState("");
+  useEffect(() => {
+    setClientOrigin(window.location.origin);
+  }, []);
+
   const origins = useMemo(() => {
     if (net?.urls?.length) return net.urls;
     return [
       {
-        url: typeof window !== "undefined" ? window.location.origin : "",
+        url: clientOrigin,
         ip: "",
         iface: "",
       },
     ];
-  }, [net]);
+  }, [net, clientOrigin]);
 
   const origin = origins[Math.min(sel, origins.length - 1)]?.url ?? "";
 

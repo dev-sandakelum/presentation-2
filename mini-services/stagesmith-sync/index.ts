@@ -380,7 +380,12 @@ function syncExternalWatchers() {
       externalWatchers.set(root, { watcher, deckIds: ids });
       console.log(`Watching external project ${root} (${ids.join(", ")})`);
     } catch (e) {
-      console.warn(`Cannot watch external root ${root}:`, (e as Error).message);
+      const err = e as NodeJS.ErrnoException;
+      // Silently skip paths that don't exist on this machine (e.g. Linux paths
+      // registered on another dev's machine). Only warn for unexpected errors.
+      if (err.code !== "ENOENT" && err.code !== "ENOTDIR") {
+        console.warn(`Cannot watch external root ${root}:`, err.message);
+      }
     }
   }
 }
