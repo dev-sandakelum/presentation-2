@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import {
   FileUp,
   Import,
@@ -86,6 +86,14 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
   const undoRef = useRef<Array<{ path: string; content: string }>>([]);
   const redoRef = useRef<Array<{ path: string; content: string }>>([]);
   const undoTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  // clean up any pending undo debounce timers on unmount
+  useEffect(() => {
+    const timers = undoTimers.current;
+    return () => {
+      for (const t of Object.values(timers)) clearTimeout(t);
+    };
+  }, []);
 
   const refreshSnapshots = useCallback(async () => {
     try {

@@ -284,5 +284,105 @@ try {
 
 } // end __ssInstance guard
 </script>
+
+<script>
+/* ---- Code block: fullscreen viewer (item 3) ----
+   Inject .code-expand buttons into every .code-bar after each render,
+   and handle opening/closing the .code-viewer modal entirely inside
+   the sandboxed iframe (no popup, no cross-origin issues). */
+(function () {
+  "use strict";
+
+  // SVG expand icon (inline, no external dependency)
+  var EXPAND_SVG = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 1.5H10.5V4.5"/><path d="M10.5 1.5L6.5 5.5"/><path d="M4.5 10.5H1.5V7.5"/><path d="M1.5 10.5L5.5 6.5"/></svg>';
+  // SVG close icon
+  var CLOSE_SVG = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/></svg>';
+
+  var viewer = null; // the .code-viewer element when open
+
+  function closeViewer() {
+    if (!viewer) return;
+    viewer.remove();
+    viewer = null;
+  }
+
+  function openViewer(codeEl) {
+    // Collect the bar label (first text span in .code-bar)
+    var bar = codeEl.querySelector(".code-bar");
+    var label = bar ? (bar.querySelector(":not(.code-expand):not(.code-tag)")?.textContent?.trim() || "") : "";
+    // Collect the <pre> inner HTML (preserves span token markup)
+    var pre = codeEl.querySelector("pre");
+    var html = pre ? pre.innerHTML : "";
+
+    closeViewer();
+
+    viewer = document.createElement("div");
+    viewer.className = "code-viewer";
+    viewer.setAttribute("role", "dialog");
+    viewer.setAttribute("aria-modal", "true");
+    viewer.setAttribute("aria-label", label || "Code viewer");
+    viewer.innerHTML =
+      '<div class="code-viewer-bar">' +
+        '<span>' + (label || "Code") + '</span>' +
+        '<button class="code-viewer-close" title="Close fullscreen (Esc)">' + CLOSE_SVG + '</button>' +
+      '</div>' +
+      '<pre></pre>';
+
+    // Copy the inner HTML into the pre so token spans are preserved
+    viewer.querySelector("pre").innerHTML = html;
+
+    viewer.querySelector(".code-viewer-close").addEventListener("click", closeViewer);
+
+    document.body.appendChild(viewer);
+    viewer.querySelector("pre").focus && viewer.querySelector("pre").setAttribute("tabindex", "0");
+  }
+
+  // Esc key closes the viewer
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && viewer) {
+      e.stopPropagation();
+      closeViewer();
+    }
+  }, true);
+
+  // Click outside viewer content closes it
+  document.addEventListener("click", function (e) {
+    if (viewer && e.target === viewer) closeViewer();
+  });
+
+  // Inject .code-expand buttons into every .code-bar that doesn't have one yet.
+  // Called after each render via MutationObserver.
+  function injectExpandButtons() {
+    // Skip in static/thumbnail mode
+    if (document.getElementById("root") && document.getElementById("root").classList.contains("ss-static")) return;
+    var bars = document.querySelectorAll(".code-bar");
+    for (var i = 0; i < bars.length; i++) {
+      var bar = bars[i];
+      if (bar.querySelector(".code-expand")) continue; // already injected
+      var btn = document.createElement("button");
+      btn.className = "code-expand";
+      btn.title = "View fullscreen";
+      btn.setAttribute("aria-label", "View code fullscreen");
+      btn.innerHTML = EXPAND_SVG;
+      (function (b, codeEl) {
+        b.addEventListener("click", function (e) {
+          e.stopPropagation();
+          openViewer(codeEl);
+        });
+      })(btn, bar.closest(".code"));
+      bar.appendChild(btn);
+    }
+  }
+
+  // Watch for DOM changes (React re-renders the #root subtree)
+  var mo = new MutationObserver(function () {
+    injectExpandButtons();
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+
+  // Also run once after initial paint
+  window.addEventListener("load", injectExpandButtons);
+})();
+</script>
 </body>
 </html>

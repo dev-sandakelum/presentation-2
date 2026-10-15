@@ -65,7 +65,10 @@ function subscribe(l: () => void) {
 
 /** called by the runtime bootstrap before rendering */
 export function initRuntime(cfg: Partial<StageRuntimeState>) {
-  listeners = new Set();
+  // Clear existing subscribers (e.g. left over from a previous render config)
+  // rather than replacing the Set reference, which would silently orphan any
+  // useSyncExternalStore subscriptions that are still alive.
+  listeners.clear();
   state = { ...state, ...cfg, declaredSteps: 1 };
   emit();
 }

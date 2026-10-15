@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { DeckJson, SlideEntry, Source } from "@/lib/stagesmith/types";
 import { StageFrame, resolveCode } from "./StageFrame";
@@ -23,23 +23,31 @@ function useFitStage(margin = 24) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    let raf = 0;
     const ro = new ResizeObserver((entries) => {
       const r = entries[0].contentRect;
-      if (r.width <= 0 || r.height <= 0) return;
-      const availW = Math.max(0, r.width - margin);
-      const availH = Math.max(0, r.height - margin);
-      const scale = Math.min(availW / 1280, availH / 720);
-      const w = Math.floor(1280 * scale);
-      const h = (w * 720) / 1280; // derive from width → exact 16:9
-      setSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+      // debounce via rAF — avoids layout thrash during resize drags
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (r.width <= 0 || r.height <= 0) return;
+        const availW = Math.max(0, r.width - margin);
+        const availH = Math.max(0, r.height - margin);
+        const scale = Math.min(availW / 1280, availH / 720);
+        const w = Math.floor(1280 * scale);
+        const h = (w * 720) / 1280;
+        setSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+      });
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(raf);
+    };
   }, [margin]);
   return { ref, size };
 }
 
-export function PreviewPane(props: {
+export const PreviewPane = memo(function PreviewPane(props: {
   deckId: string;
   deck: DeckJson;
   sel: SlideEntry | null;
@@ -164,4 +172,4 @@ export function PreviewPane(props: {
       )}
     </>
   );
-}
+});

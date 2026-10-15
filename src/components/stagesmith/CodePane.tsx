@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -60,7 +60,7 @@ function useFormatOnOpen(
   }, [path, content, apply]);
 }
 
-export function CodePane(props: {
+export const CodePane = memo(function CodePane(props: {
   deckId: string;
   deck: DeckJson;
   files: FileRow[];
@@ -356,7 +356,7 @@ export function CodePane(props: {
       )}
     </section>
   );
-}
+});
 
 function EmptyPane({ text }: { text: string }) {
   return (
@@ -627,9 +627,151 @@ function ImageOverlayFields({ source, onChange }: { source: Extract<Source, { ty
 /* Assets tab                                                          */
 /* ------------------------------------------------------------------ */
 
+type AssetsSubTab = "assets" | "overlay" | "bg";
+
+function CodeFileList({
+  deckId,
+  dir,
+  version,
+  onOpenFile,
+}: {
+  deckId: string;
+  dir: "overlay" | "bg";
+  version: string;
+  onOpenFile?: (path: string) => void;
+}) {
+  const { toast } = useToast();
+  const [files, setFiles] = useState<FileRow[] | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setFiles(await api.listCodeFiles(deckId, dir));
+    } catch {
+      setFiles([]);
+    }
+  }, [deckId, dir]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh, version]);
+
+  const upload = async (fileList: FileList | File[]) => {
+    const list = Array.from(fileList);
+    if (!list.length) return;
+    const nonTsx = list.filter((f) => !f.name.endsWith(".tsx"));
+    if (nonTsx.length) {
+      toast({ title: "Only .tsx files allowed", description: nonTsx.map((f) => f.name).join(", "), variant: "destructive" });
+      return;
+    }
+    try {
+      await api.uploadCodeFile(deckId, dir, list);
+      await refresh();
+      toast({ title: `${list.length} file${list.length > 1 ? "s" : ""} uploaded into ${dir}/` });
+    } catch (e) {
+      toast({ title: "Upload failed", description: (e as Error).message, variant: "destructive" });
+    }
+  };
+
+  const rows = files ?? [];
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
+        <label className="ss-btn" style={{ cursor: "pointer" }}>
+          <Upload size={14} /> Upload .tsx into {dir}/
+          <input
+            type="file"
+            multiple
+            accept=".tsx"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              if (e.target.files) upload(e.target.files);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        <span className="ss-label">Upload React components directly into {dir}/</span>
+      </div>
+      {rows.length === 0 ? (
+        <EmptyPane text={files === null ? `Loading ${dir} files…` : `No ${dir} files yet — upload a .tsx component above`} />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {rows.map((f) => {
+            const name = f.path.replace(`${dir}/`, "");
+            return (
+              <div
+                key={f.path}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 8px",
+                  borderRadius: 4,
+                  background: "var(--ss-surface2, rgba(255,255,255,0.04))",
+                }}
+              >
+                <span
+                  style={{
+                    flex: 1,
+                    font: "500 12px var(--ss-mono)",
+                    color: "var(--ss-fg)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  title={f.path}
+                >
+                  {name}
+                </span>
+                {onOpenFile && (
+                  <button
+                    className="ss-btn"
+                    style={{ height: 24, padding: "0 8px", fontSize: 11 }}
+                    title="Open in editor"
+                    onClick={() => onOpenFile(f.path)}
+                  >
+                    <Braces size={11} /> open
+                  </button>
+                )}
+                <button
+                  className="ss-btn"
+                  style={{ height: 24, padding: "0 8px", fontSize: 11 }}
+                  title="Copy import path"
+                  onClick={async () => {
+                    const ok = await copyText(`import './${f.path}';`);
+                    toast(ok ? { title: "Path copied" } : { title: "Clipboard blocked", variant: "destructive" });
+                  }}
+                >
+                  <Copy size={11} /> path
+                </button>
+                <button
+                  className="ss-btn"
+                  style={{ height: 24, padding: "0 8px", fontSize: 11, color: "var(--ss-err)" }}
+                  title="Delete file"
+                  onClick={async () => {
+                    try {
+                      await api.deleteCodeFile(deckId, f.path);
+                      refresh();
+                    } catch (e) {
+                      toast({ title: "Delete failed", description: (e as Error).message, variant: "destructive" });
+                    }
+                  }}
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
   const { toast } = useToast();
   const [assets, setAssets] = useState<FileRow[] | null>(null);
+  const [subTab, setSubTab] = useState<AssetsSubTab>("assets");
 
   const refresh = useCallback(async () => {
     try {
@@ -657,74 +799,108 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
 
   const rows = useMemo(() => assets ?? [], [assets]);
 
+  const subTabStyle = (t: AssetsSubTab): React.CSSProperties => ({
+    padding: "3px 10px",
+    borderRadius: 4,
+    fontSize: 11,
+    fontWeight: 600,
+    cursor: "pointer",
+    border: "none",
+    background: subTab === t ? "var(--ss-accent, #6366f1)" : "transparent",
+    color: subTab === t ? "#fff" : "var(--ss-mut)",
+    letterSpacing: "0.02em",
+  });
+
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: 14 }} className="ss-scroll">
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
-        <label className="ss-btn" style={{ cursor: "pointer" }}>
-          <Upload size={14} /> Upload into assets/
-          <input
-            type="file"
-            multiple
-            accept=".png,.jpg,.jpeg,.svg,.webp,.gif,.avif,.woff,.woff2,.ttf,.otf,.html"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              if (e.target.files) upload(e.target.files);
-              e.target.value = "";
-            }}
-          />
-        </label>
-        <span className="ss-label">Assets are copied into the deck folder — never linked (plan §2)</span>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      {/* Sub-tab bar */}
+      <div style={{ display: "flex", gap: 4, padding: "8px 14px 0", borderBottom: "1px solid var(--ss-border, rgba(255,255,255,0.08))", paddingBottom: 8 }}>
+        <button style={subTabStyle("assets")} onClick={() => setSubTab("assets")}>Assets</button>
+        <button style={subTabStyle("overlay")} onClick={() => setSubTab("overlay")}>Overlay</button>
+        <button style={subTabStyle("bg")} onClick={() => setSubTab("bg")}>Background</button>
       </div>
-      {rows.length === 0 ? (
-        <EmptyPane text={assets === null ? "Loading assets…" : "No assets — drop files into the deck via upload"} />
-      ) : (
-        <div className="ss-assets-grid">
-          {rows.map((a) => {
-            const isImage = /\.(png|jpe?g|svg|webp|gif|avif)$/i.test(a.path);
-            return (
-              <div key={a.path} className="ss-asset">
-                {isImage ? (
-                  <img src={`/api/assets/${deckId}/${a.path}`} alt={a.path} loading="lazy" />
-                ) : (
-                  <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", font: "500 10px var(--ss-mono)", color: "var(--ss-mut)" }}>
-                    {a.path.split(".").pop()?.toUpperCase()}
-                  </div>
-                )}
-                <div className="nm" title={a.path}>
-                  {a.path.replace("assets/", "")}
-                </div>
-                <div className="acts">
-                  <button
-                    className="ss-btn"
-                    style={{ height: 24, padding: "0 8px", fontSize: 11 }}
-                    title="Copy <Img name='…' /> snippet"
-                    onClick={async () => {
-                      const ok = await copyText(`<Img name='${a.path}' />`);
-                      toast(ok ? { title: "Snippet copied" } : { title: "Clipboard blocked", variant: "destructive" });
-                    }}
-                  >
-                    <Copy size={11} /> snippet
-                  </button>
-                  <button
-                    className="ss-btn"
-                    style={{ height: 24, padding: "0 8px", fontSize: 11, color: "var(--ss-err)" }}
-                    onClick={async () => {
-                      try {
-                        await api.deleteFile(deckId, a.path);
-                        refresh();
-                      } catch (e) {
-                        toast({ title: "Delete failed", description: (e as Error).message, variant: "destructive" });
-                      }
-                    }}
-                  >
-                    <Trash2 size={11} />
-                  </button>
-                </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, overflowY: "auto", padding: 14 }} className="ss-scroll">
+        {subTab === "assets" && (
+          <>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
+              <label className="ss-btn" style={{ cursor: "pointer" }}>
+                <Upload size={14} /> Upload into assets/
+                <input
+                  type="file"
+                  multiple
+                  accept=".png,.jpg,.jpeg,.svg,.webp,.gif,.avif,.woff,.woff2,.ttf,.otf,.html"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    if (e.target.files) upload(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <span className="ss-label">Assets are copied into the deck folder — never linked (plan §2)</span>
+            </div>
+            {rows.length === 0 ? (
+              <EmptyPane text={assets === null ? "Loading assets…" : "No assets — drop files into the deck via upload"} />
+            ) : (
+              <div className="ss-assets-grid">
+                {rows.map((a) => {
+                  const isImage = /\.(png|jpe?g|svg|webp|gif|avif)$/i.test(a.path);
+                  return (
+                    <div key={a.path} className="ss-asset">
+                      {isImage ? (
+                        <img src={`/api/assets/${deckId}/${a.path}`} alt={a.path} loading="lazy" />
+                      ) : (
+                        <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", font: "500 10px var(--ss-mono)", color: "var(--ss-mut)" }}>
+                          {a.path.split(".").pop()?.toUpperCase()}
+                        </div>
+                      )}
+                      <div className="nm" title={a.path}>
+                        {a.path.replace("assets/", "")}
+                      </div>
+                      <div className="acts">
+                        <button
+                          className="ss-btn"
+                          style={{ height: 24, padding: "0 8px", fontSize: 11 }}
+                          title="Copy <Img name='…' /> snippet"
+                          onClick={async () => {
+                            const ok = await copyText(`<Img name='${a.path}' />`);
+                            toast(ok ? { title: "Snippet copied" } : { title: "Clipboard blocked", variant: "destructive" });
+                          }}
+                        >
+                          <Copy size={11} /> snippet
+                        </button>
+                        <button
+                          className="ss-btn"
+                          style={{ height: 24, padding: "0 8px", fontSize: 11, color: "var(--ss-err)" }}
+                          onClick={async () => {
+                            try {
+                              await api.deleteFile(deckId, a.path);
+                              refresh();
+                            } catch (e) {
+                              toast({ title: "Delete failed", description: (e as Error).message, variant: "destructive" });
+                            }
+                          }}
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
-      )}
+            )}
+          </>
+        )}
+
+        {subTab === "overlay" && (
+          <CodeFileList deckId={deckId} dir="overlay" version={version} />
+        )}
+
+        {subTab === "bg" && (
+          <CodeFileList deckId={deckId} dir="bg" version={version} />
+        )}
+      </div>
     </div>
   );
 }

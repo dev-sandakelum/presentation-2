@@ -175,12 +175,24 @@ export function StageFrame(props: StageFrameProps) {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    let raf = 0;
     const ro = new ResizeObserver((entries) => {
       const w = entries[0].contentRect.width;
-      if (w > 0) setScale(w / 1280);
+      // debounce via rAF — avoids a setState per pixel during resize drags
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (w > 0) setScale((prev) => {
+          const next = w / 1280;
+          // skip trivial sub-pixel jitter (< 0.5px change in stage width)
+          return Math.abs(next - prev) * 1280 > 0.5 ? next : prev;
+        });
+      });
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(raf);
+    };
   }, []);
 
   // post config when ready / changed — latest config kept in a ref so the

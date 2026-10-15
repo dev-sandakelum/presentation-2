@@ -196,6 +196,23 @@ export const api = {
     return (await j<{ uploaded: Array<{ path: string }> }>(res)).uploaded;
   },
 
+  listCodeFiles: async (deckId: string, dir: "overlay" | "bg"): Promise<FileRow[]> => {
+    const res = await fetch(`/api/decks/${deckId}/code-files?dir=${dir}`, { cache: "no-store" });
+    return (await j<{ files?: FileRow[] }>(res)).files ?? [];
+  },
+
+  uploadCodeFile: async (deckId: string, dir: "overlay" | "bg", files: File[]): Promise<Array<{ path: string }>> => {
+    const form = new FormData();
+    for (const f of files) form.append("file", f);
+    const res = await fetch(`/api/decks/${deckId}/code-files?dir=${dir}`, { method: "POST", body: form });
+    return (await j<{ uploaded: Array<{ path: string }> }>(res)).uploaded;
+  },
+
+  deleteCodeFile: async (deckId: string, path: string): Promise<void> => {
+    const res = await fetch(`/api/decks/${deckId}/code-files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+    await j(res);
+  },
+
   listSnapshots: async (deckId: string): Promise<string[]> => {
     const res = await fetch(`/api/decks/${deckId}/snapshots`, { cache: "no-store" });
     return (await j<{ snapshots?: string[] }>(res)).snapshots ?? [];
