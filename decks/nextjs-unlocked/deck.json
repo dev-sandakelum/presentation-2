@@ -1,0 +1,98 @@
+{
+  "format": "smdeck",
+  "format_version": 1,
+  "id": "nextjs-unlocked",
+  "title": "Next.js Unlocked",
+  "created": "2026-10-15T00:00:00.000Z",
+  "modified": "2026-10-15T02:03:33.312Z",
+  "settings": {
+    "size": [
+      1280,
+      720
+    ],
+    "defaultMode": "dark",
+    "transitionMs": 220,
+    "bgCrossfadeMs": 1600
+  },
+  "bg": {
+    "type": "none"
+  },
+  "overlay": {
+    "type": "code",
+    "path": "overlay/common.tsx"
+  },
+  "slides": [
+    {
+      "id": "01-title",
+      "label": "Next.js Unlocked"
+    },
+    {
+      "id": "02-presenter",
+      "label": "Your Presenter",
+      "bg": {
+        "type": "code",
+        "path": "bg/aurora.tsx"
+      }
+    },
+    {
+      "id": "03-what-is-nextjs",
+      "label": "What is Next.js?"
+    },
+    {
+      "id": "04-react-baseline",
+      "label": "Did you know about React?"
+    },
+    {
+      "id": "05-library-vs-framework",
+      "label": "Library vs. Framework"
+    },
+    {
+      "id": "06-csr",
+      "label": "How React Works — CSR"
+    },
+    {
+      "id": "07-ssr",
+      "label": "What is SSR?"
+    },
+    {
+      "id": "08-react-vs-nextjs",
+      "label": "React vs. Next.js"
+    },
+    {
+      "id": "09-features",
+      "label": "New Features in Next.js 13+"
+    },
+    {
+      "id": "10-app-router",
+      "label": "Deep Dive: The App Router"
+    },
+    {
+      "id": "11-routing-variants",
+      "label": "Folder-Based Routing Variants"
+    },
+    {
+      "id": "12-server-components",
+      "label": "Deep Dive: Server Components"
+    },
+    {
+      "id": "13-data-fetching",
+      "label": "Deep Dive: Data Fetching"
+    },
+    {
+      "id": "14-create-project",
+      "label": "Creating a Next.js Project"
+    },
+    {
+      "id": "15-file-structure",
+      "label": "File Structure Overview"
+    },
+    {
+      "id": "16-demo-phases",
+      "label": "Live Demo — Five Phases"
+    },
+    {
+      "id": "17-end",
+      "label": "Questions?"
+    }
+  ]
+}

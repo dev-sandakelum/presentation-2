@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Next.js Unlocked — From React Library to Full-Stack Framework</title>
+<meta name="description" content="Next.js Unlocked — a presentation on going from React to full-stack. Microsoft Learn Student Ambassadors, Part 1 of 3: Concepts.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============ Theme tokens ============ */
+:root{
+  --font-sans:'Geist',ui-sans-serif,system-ui,sans-serif;
+  --font-mono:'Geist Mono',ui-monospace,SFMono-Regular,monospace;
+}
+html[data-theme="dark"]{
+  --bg:#000; --fg:#fff; --fg-soft:#d6d6d6; --muted:#a5a5a5; --faint:#6e6e6e;
+  --border:#242424; --border-strong:#3d3d3d;
+  --code-bg:#0a0a0a; --grid:rgba(255,255,255,.05);
+  --inv-bg:#fff; --inv-fg:#000; --hover:#161616;
+  --inv-fg-soft:rgba(0,0,0,.72);
+}
+html[data-theme="light"]{
+  --bg:#fff; --fg:#000; --fg-soft:#171717; --muted:#5a5a5a; --faint:#a0a0a0;
+  --border:#e6e6e6; --border-strong:#c8c8c8;
+  --code-bg:#fafafa; --grid:rgba(0,0,0,.055);
+  --inv-bg:#000; --inv-fg:#fff; --hover:#f4f4f4;
+  --inv-fg-soft:rgba(255,255,255,.72);
+}
+
+/* ============ Projector-friendly type scale ============
+   Every size is capped by BOTH width (vw) and height (vh),
+   so text is always large but never taller than the screen. */
+:root{
+  --fs-display: min(7.6rem, 11.5vw, 15vh);   /* slide titles / hero  */
+  --fs-h2:      min(3.7rem, 5.2vw, 7.8vh);   /* section headings     */
+  --fs-lead:    min(1.55rem, 1.9vw, 3.1vh);  /* intro paragraphs     */
+  --fs-h4:      min(1.5rem, 1.65vw, 2.7vh);   /* card / row titles    */
+  --fs-body:    min(1.4rem, 1.5vw, 2.4vh);   /* body copy            */
+  --fs-body-s:  min(1.3rem, 1.4vw, 2.2vh);    /* secondary copy       */
+  --fs-code:    min(1.3rem, 1.4vw, 2.2vh);    /* code / terminal      */
+  --fs-label:   min(.78rem, .85vw, 1.35vh);  /* mono labels / chips  */
+}
+
+/* ============ Base ============ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--fg);font-family:var(--font-sans);
+  -webkit-font-smoothing:antialiased;overflow:hidden;
+}
+::selection{background:var(--fg);color:var(--bg)}
+button{font-family:inherit}
+
+body,.chrome,.grid-bg,.code,.term,.step,.row-ic,.chip,.icon-btn,.progress-bar,.ov,.pc,.vs-wrap,.boundary,.mark,.b-item,.pn,.ov-n,.kbd,kbd{
+  transition:background-color .35s ease,color .35s ease,border-color .35s ease;
+}
+
+/* Icon system (stroke-based sprite) */
+.ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none;display:block}
+.ic-fill{fill:currentColor;stroke:none}
+
+/* ============ Backdrop ============ */
+.grid-bg{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(var(--grid) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:88px 88px;
+}
+.mark{position:fixed;width:15px;height:15px;z-index:35;pointer-events:none;color:var(--faint)}
+.mark::before,.mark::after{content:"";position:absolute;background:currentColor}
+.mark::before{left:7px;top:0;width:1px;height:100%}
+.mark::after{top:7px;left:0;width:100%;height:1px}
+.m-tl{top:70px;left:12px}.m-tr{top:70px;right:12px}
+.m-bl{bottom:70px;left:12px}.m-br{bottom:70px;right:12px}
+
+/* ============ Chrome (header / footer) ============ */
+.chrome{
+  position:fixed;left:0;right:0;height:56px;z-index:40;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 clamp(16px,2.5vw,32px);
+  background:color-mix(in srgb,var(--bg) 82%,transparent);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
+.chrome.top{top:0;border-bottom:1px solid var(--border)}
+.chrome.bottom{bottom:0;border-top:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:12px;min-width:0}
+.brand-tri{width:16px;height:16px}
+.brand-name{font-size:17px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+.brand-sep{width:1px;height:19px;background:var(--border-strong);margin:0 4px 0 6px}
+.brand-sub{font:500 var(--fs-label) var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.chrome-actions{display:flex;gap:9px}
+.icon-btn{
+  width:40px;height:40px;display:grid;place-items:center;
+  background:transparent;border:1px solid var(--border);border-radius:9px;
+  color:var(--fg);cursor:pointer;
+  transition:background .18s,color .18s,border-color .18s,transform .12s;
+}
+.icon-btn:hover{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.icon-btn:active{transform:scale(.93)}
+.icon-btn .ic{width:18px;height:18px}
+html[data-theme="dark"] #btnTheme .ic-moon{display:none}
+html[data-theme="light"] #btnTheme .ic-sun{display:none}
+.foot-title{
+  font:500 var(--fs-label) var(--font-mono);letter-spacing:.18em;text-transform:uppercase;
+  color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:34vw;
+}
+.foot-mid{display:flex;align-items:center;gap:12px;position:absolute;left:50%;transform:translateX(-50%)}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--fg);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+.clock{font:500 var(--fs-label) var(--font-mono);letter-spacing:.1em;color:var(--muted);font-variant-numeric:tabular-nums}
+.foot-right{display:flex;align-items:center;gap:12px}
+.counter{font:500 var(--fs-label) var(--font-mono);letter-spacing:.14em;color:var(--fg);font-variant-numeric:tabular-nums}
+.progress{position:fixed;left:0;bottom:0;height:3px;width:100%;z-index:45;pointer-events:none}
+.progress-bar{height:100%;width:0;background:var(--fg);transition:width .5s cubic-bezier(.22,1,.36,1)}
+
+/* ============ Deck & slides ============ */
+#deck{position:fixed;inset:0;z-index:1}
+.slide{
+  position:absolute;inset:0;display:none;flex-direction:column;
+  padding:clamp(76px,8.5vh,100px) clamp(24px,5.5vw,84px) clamp(74px,8.5vh,94px);
+  overflow-y:auto;overflow-x:hidden;
+}
+.slide.active{display:flex}
+.s-head{flex:none}
+.s-body{flex:1;margin-top:clamp(22px,3.6vh,44px);min-height:0}
+
+/* Reveal animations */
+.rv{animation:rv-in .8s cubic-bezier(.16,1,.3,1) both;animation-delay:var(--d,0s)}
+@keyframes rv-in{from{opacity:0;transform:translateY(26px)}}
+.mask{display:block;overflow:hidden;padding-bottom:.12em}
+.mask>span{display:block;transform:translateY(112%);animation:m-in .9s cubic-bezier(.16,1,.3,1) var(--d,.12s) both}
+@keyframes m-in{to{transform:translateY(0)}}
+
+/* Typography */
+.kick{
+  display:flex;align-items:center;gap:12px;
+  font:500 min(.8rem,.9vw,1.4vh) var(--font-mono);letter-spacing:.22em;text-transform:uppercase;
+  color:var(--muted);margin-bottom:clamp(14px,2.4vh,24px);
+}
+.kick::before{content:"";width:9px;height:9px;background:var(--fg);flex:none}
+.h2{font-size:var(--fs-h2);font-weight:600;letter-spacing:-.035em;line-height:1.05}
+.lead{margin-top:clamp(12px,2vh,20px);font-size:var(--fs-lead);line-height:1.5;color:var(--muted);max-width:56ch}
+
+/* ============ Components ============ */
+.split{display:grid;grid-template-columns:1.08fr 1fr;gap:clamp(30px,4.5vw,64px);align-items:start}
+.stack-note{display:flex;flex-wrap:wrap;gap:12px;margin-top:clamp(20px,3vh,30px)}
+.chip{
+  display:inline-flex;align-items:center;gap:9px;
+  font:500 var(--fs-label) var(--font-mono);letter-spacing:.15em;text-transform:uppercase;
+  padding:10px 16px;border:1px solid var(--border-strong);border-radius:999px;
+  color:var(--fg);background:var(--code-bg);
+}
+.chip .ic{width:13px;height:13px}
+.chip-ghost{border-style:dashed;color:var(--muted)}
+a.chip{text-decoration:none;color:inherit;transition:border-color .18s,background .18s}
+a.chip:hover{border-color:var(--fg);background:var(--hover)}
+.trust{margin-top:clamp(24px,4vh,36px);border-top:1px solid var(--border);padding-top:clamp(14px,2.2vh,20px)}
+.trust-k{display:block;font:500 var(--fs-label) var(--font-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
+.trust-n{font-size:var(--fs-h4);font-weight:600;letter-spacing:.02em}
+
+.rows{border-bottom:1px solid var(--border)}
+.row{display:grid;grid-template-columns:56px 1fr;gap:clamp(16px,1.8vw,26px);padding:clamp(14px,2.2vh,20px) 0;border-top:1px solid var(--border);align-items:flex-start}
+.row-ic{width:52px;height:52px;border:1px solid var(--border);border-radius:11px;display:grid;place-items:center;background:var(--code-bg)}
+.row-ic .ic{width:23px;height:23px}
+.row h4{font-size:var(--fs-h4);font-weight:600;letter-spacing:-.01em;margin-bottom:5px}
+.row p{font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+
+/* ============ Presenter slide ============ */
+.pres{display:grid;grid-template-columns:auto 1fr;gap:clamp(28px,4.5vw,64px);align-items:center}
+.avatar{
+  width:clamp(180px,20vw,260px);aspect-ratio:1;
+  border:1px solid var(--border-strong);border-radius:22px;
+  background:var(--code-bg);display:grid;place-items:center;
+  overflow:hidden;position:relative;
+}
+.avatar::after{ /* inner crosshair, echoes the deck's marks */
+  content:"";position:absolute;inset:14px;border:1px dashed var(--border);
+  border-radius:14px;pointer-events:none;
+}
+.avatar-initials{font:600 clamp(3.6rem,6.5vw,6rem) var(--font-mono);letter-spacing:-.05em;color:var(--fg)}
+.avatar img{width:100%;height:100%;object-fit:cover;display:block;position:relative;z-index:1}
+.pres-name{font-size:min(4.2rem,5.9vw,8.6vh);font-weight:700;letter-spacing:-.04em;line-height:1}
+.pres-role{margin-top:clamp(10px,1.8vh,16px);font-size:var(--fs-lead);line-height:1.4;color:var(--muted)}
+.pres-role b{color:var(--fg);font-weight:600}
+.pres-rows{margin-top:clamp(18px,3.2vh,30px)}
+.pres-contact{display:flex;flex-wrap:wrap;gap:12px;margin-top:clamp(20px,3.4vh,32px)}
+.pres-hello{
+  display:flex;align-items:center;gap:12px;margin-top:clamp(16px,2.6vh,24px);
+  font:400 var(--fs-body-s) var(--font-mono);color:var(--muted);
+}
+.pres-hello .ic{width:19px;height:19px;flex:none}
+
+/* React atom */
+.react-side{display:flex;flex-direction:column;align-items:center;gap:clamp(18px,3vh,26px);padding-top:6px}
+.react-logo{width:clamp(170px,19vw,235px);height:auto;color:var(--faint);transition:color .4s}
+.react-side:hover .react-logo{color:var(--muted)}
+.react-logo ellipse{fill:none;stroke:currentColor;stroke-width:6}
+.react-logo .core{fill:var(--fg);stroke:none}
+.react-spin{transform-box:fill-box;transform-origin:center;animation:spin 30s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.react-cap{text-align:center}
+.cap-t{display:block;font-size:var(--fs-h4);font-weight:600;margin-bottom:7px}
+.cap-s{font:400 var(--fs-label) var(--font-mono);letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+
+/* Quote slide */
+.quote{
+  font-size:min(2rem,2.9vw,4.2vh);font-weight:500;letter-spacing:-.02em;line-height:1.4;
+  border-left:4px solid var(--fg);padding-left:clamp(20px,2.5vw,32px);max-width:54ch;
+}
+.defs{margin-top:clamp(20px,4vh,40px);border-bottom:1px solid var(--border)}
+.def{display:grid;grid-template-columns:56px minmax(190px,330px) 1fr;gap:clamp(16px,1.8vw,26px);align-items:start;padding:clamp(14px,2.2vh,20px) 0;border-top:1px solid var(--border)}
+.def-ic{width:52px;height:52px;border:1px solid var(--border);border-radius:11px;display:grid;place-items:center;background:var(--code-bg)}
+.def-ic .ic{width:23px;height:23px}
+.def h4{font-size:var(--fs-h4);font-weight:600;padding-top:4px}
+.def p{font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+.foot-note{display:flex;gap:14px;align-items:flex-start;margin-top:clamp(18px,3vh,28px);font:400 var(--fs-body-s) var(--font-mono);color:var(--muted)}
+.foot-note .ic{width:18px;height:18px;margin-top:.35em}
+
+/* Flow diagrams (CSR dashed = empty shell / SSR solid inverted = populated) */
+.flow{display:flex;align-items:stretch}
+.step{flex:1;border:2px dashed var(--border-strong);border-radius:14px;padding:clamp(16px,2.6vh,24px);position:relative}
+.step .n{position:absolute;top:14px;right:16px;font:500 var(--fs-label) var(--font-mono);color:var(--faint)}
+.step>.ic{width:26px;height:26px;margin-bottom:14px}
+.step h4{font-size:var(--fs-h4);font-weight:600;margin-bottom:6px;letter-spacing:-.01em}
+.step p{font-size:var(--fs-body-s);line-height:1.4;color:var(--muted)}
+.flow-sep{flex:none;width:clamp(30px,3vw,44px);display:grid;place-items:center;color:var(--faint)}
+.flow-sep .ic{width:19px;height:19px}
+.flow.solid .step{border-style:solid;border-color:var(--inv-bg);background:var(--inv-bg);color:var(--inv-fg)}
+.flow.solid .step p{color:var(--inv-fg-soft)}
+.flow.solid .step .n{color:var(--inv-fg-soft)}
+.flow.solid .flow-sep{color:var(--fg)}
+
+/* Pros / cons */
+.pc{margin-top:clamp(18px,3.4vh,34px);display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.pc>div{padding:clamp(14px,2.2vh,20px) clamp(16px,2vw,24px);display:flex;gap:14px;align-items:flex-start}
+.pc .ic{width:19px;height:19px;margin-top:.3em}
+.pc .pros{color:var(--fg)}
+.pc .cons{color:var(--muted);border-left:1px solid var(--border)}
+.pc .tag{display:block;font:600 var(--fs-label) var(--font-mono);letter-spacing:.2em;text-transform:uppercase;margin-bottom:6px}
+.pc p{font-size:var(--fs-body-s);line-height:1.45}
+
+/* Comparison table */
+.vs-wrap{border:1px solid var(--border);border-radius:16px;overflow:hidden;max-width:1100px}
+.vs{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;min-width:760px}
+.vs th,.vs td{border-bottom:1px solid var(--border);padding:clamp(12px,2vh,18px) clamp(16px,2vw,24px);text-align:left;vertical-align:top}
+.vs tr:last-child td{border-bottom:0}
+.vs thead th{border-bottom:1px solid var(--border-strong);font:600 min(.85rem,.95vw,1.5vh) var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+.vs th.corner{width:17%}
+.vs td:first-child{font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);padding-top:.6em}
+.vs td{font-size:var(--fs-body);line-height:1.4}
+.vs .nx{background:color-mix(in srgb,var(--fg) 5%,transparent);border-left:1px solid var(--border)}
+.vs thead .nx{background:var(--inv-bg);color:var(--inv-fg)}
+.cl{display:flex;gap:12px;align-items:flex-start}
+.cl .ic{width:19px;height:19px;margin-top:.22em;flex:none}
+.cl-x .ic{color:var(--faint)}
+.vs .cl-x{color:var(--muted)}
+.cl-ok .ic{color:var(--fg)}
+
+/* Numbered feature rows */
+.feats{border-bottom:1px solid var(--border)}
+.feat{display:grid;grid-template-columns:clamp(60px,7vw,96px) minmax(230px,370px) 1fr;gap:clamp(16px,2vw,28px);align-items:baseline;padding:clamp(13px,2.1vh,19px) 0;border-top:1px solid var(--border)}
+.feat .fn{font:500 min(1rem,1.1vw,1.8vh) var(--font-mono);letter-spacing:.12em;color:var(--faint)}
+.feat h4{font-size:var(--fs-h4);font-weight:600;letter-spacing:-.015em}
+.feat p{font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+
+/* Code panels */
+.code{border:1px solid var(--border);border-radius:14px;background:var(--code-bg);overflow:hidden}
+.code-hi{border-color:var(--fg)}
+.code-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--fg)}
+.code-tag{color:var(--faint)}
+.code pre{padding:clamp(14px,2.2vh,20px) clamp(16px,2vw,22px);overflow-x:auto;font:400 var(--fs-code) var(--font-mono);line-height:1.65;color:var(--muted)}
+.code .d{color:var(--fg);font-weight:600}
+.code .f{color:var(--fg-soft)}
+.code .cm{color:var(--faint)}
+.tk-k{color:var(--fg);font-weight:600}
+.tk-str{color:var(--muted);text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:4px;text-decoration-thickness:1px}
+.tk-tag{color:var(--fg-soft)}
+
+/* Routing variants */
+.rout{display:grid;grid-template-columns:minmax(0,1.12fr) 1fr auto;gap:clamp(16px,2.4vw,30px);align-items:center;padding:clamp(15px,2.4vh,22px) 0;border-top:1px solid var(--border)}
+.rout:last-child{border-bottom:1px solid var(--border)}
+.rout-pat{display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.pat{font:500 min(1.5rem,1.6vw,2.6vh) var(--font-mono);color:var(--fg);word-break:break-all}
+.pat-tag{font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);border:1px dashed var(--border-strong);padding:6px 12px;border-radius:999px}
+.rout h4{font-size:var(--fs-h4);font-weight:600;margin-bottom:5px}
+.rout p{font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+.url-chip{font:500 min(1.25rem,1.35vw,2.2vh) var(--font-mono);padding:10px 15px;border:1px solid var(--border-strong);border-radius:9px;background:var(--code-bg);white-space:nowrap}
+
+/* Server / client boundary */
+.boundary{display:grid;grid-template-columns:1.6fr 1fr;border:1px solid var(--border);border-radius:16px;overflow:hidden}
+.b-zone{padding:clamp(16px,2.6vh,24px) clamp(18px,2.4vw,28px)}
+.b-server{background:color-mix(in srgb,var(--fg) 6%,transparent)}
+.b-client{border-left:2px dashed var(--border-strong)}
+.b-zone h5{font:600 var(--fs-label) var(--font-mono);letter-spacing:.22em;text-transform:uppercase;margin-bottom:15px;color:var(--muted)}
+.b-server h5{color:var(--fg)}
+.b-list{display:flex;flex-wrap:wrap;gap:10px}
+.b-item{font:400 min(1.25rem,1.35vw,2.2vh) var(--font-mono);padding:9px 15px;border:1px solid var(--border);border-radius:9px;background:var(--bg)}
+.b-inv{background:var(--inv-bg);color:var(--inv-fg);border-color:var(--inv-bg);font-weight:600}
+
+/* Data fetching */
+.df-grid{display:grid;grid-template-columns:1fr 1fr;gap:clamp(22px,3vw,34px);align-items:start}
+.df-cap{display:flex;gap:12px;align-items:flex-start;margin-top:15px;font:400 min(1.25rem,1.35vw,2.2vh) var(--font-mono);color:var(--muted)}
+.df-cap .ic{width:17px;height:17px;margin-top:.32em;flex:none}
+
+/* Terminal */
+.term{border:1px solid var(--border-strong);border-radius:14px;background:var(--code-bg);overflow:hidden;max-width:880px}
+.term-bar{display:flex;align-items:center;gap:14px;padding:13px 18px;border-bottom:1px solid var(--border)}
+.term-dots{display:flex;gap:7px}
+.term-dots i{width:13px;height:13px;border-radius:50%;border:1px solid var(--border-strong)}
+.term-title{font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-left:auto}
+.term-body{padding:clamp(14px,2.4vh,22px) clamp(16px,2.2vw,24px);font:400 var(--fs-code) var(--font-mono);line-height:1.9}
+.tl{white-space:pre-wrap;word-break:break-word}
+.tl.out{opacity:0;transform:translateY(4px);transition:opacity .3s,transform .3s}
+.tl.out.show{opacity:1;transform:none}
+.prompt{color:var(--muted)}
+.cmd{color:var(--fg);font-weight:500}
+.tl .a{color:var(--fg);font-weight:600}
+.tl .dim{color:var(--faint)}
+.tl .ic{display:inline-block;vertical-align:-2px;width:14px;height:14px}
+.caret{display:inline-block;width:.55ch;height:1.05em;background:var(--fg);vertical-align:-.12em;margin-left:2px;animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.copy-btn{
+  display:inline-flex;align-items:center;gap:16px;margin-top:clamp(18px,3vh,26px);
+  padding:14px 22px;border:1px solid var(--border-strong);border-radius:12px;
+  background:var(--code-bg);color:var(--fg);cursor:pointer;text-align:left;
+  transition:border-color .18s,background .18s,transform .12s;
+}
+.copy-btn:hover{border-color:var(--fg)}
+.copy-btn:active{transform:scale(.98)}
+.copy-btn .ic{width:19px;height:19px}
+.copy-btn .c-cmd{font:500 min(1.5rem,1.6vw,2.6vh) var(--font-mono)}
+.copy-btn .c-hint{font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+
+/* Demo timeline */
+.phases{display:grid;grid-template-columns:repeat(5,1fr);gap:clamp(20px,2.6vw,30px);border-top:1px solid var(--border-strong);padding-top:0}
+.phase{display:flex;flex-direction:column;align-items:flex-start}
+.pn{
+  width:clamp(48px,5.4vh,58px);height:clamp(48px,5.4vh,58px);display:grid;place-items:center;margin-top:calc(clamp(48px,5.4vh,58px) / -2);
+  border:1px solid var(--border-strong);background:var(--bg);border-radius:12px;
+  font:600 min(1.15rem,1.25vw,2vh) var(--font-mono);
+}
+.phase h4{margin-top:clamp(14px,2.2vh,18px);font-size:var(--fs-h4);font-weight:600;letter-spacing:-.01em}
+.phase p{margin-top:8px;font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+.phase .chip{margin-top:clamp(12px,1.8vh,16px)}
+.phase code{font:500 min(1.15rem,1.25vw,2vh) var(--font-mono);background:color-mix(in srgb,var(--fg) 8%,transparent);padding:3px 8px;border-radius:6px}
+
+/* Title slide */
+.s-title,.s-end{align-items:center;justify-content:center;text-align:center}
+.title-wrap,.end-wrap{display:flex;flex-direction:column;align-items:center;max-width:min(94vw,1200px)}
+.title-tri{width:clamp(34px,4.5vw,52px);height:auto;margin-bottom:clamp(20px,3.4vh,34px)}
+.title-badges{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-bottom:clamp(18px,3.4vh,34px)}
+.title{font-size:var(--fs-display);font-weight:700;letter-spacing:-.045em;line-height:.98}
+.t-ol{position:relative;display:inline-block}
+.ol-o{-webkit-text-stroke:3px var(--fg);color:transparent}
+.ol-f{position:absolute;inset:0;color:var(--fg);clip-path:inset(-12% 100% -12% 0)}
+.slide.active .ol-f{animation:wipe 1s cubic-bezier(.76,0,.24,1) 1.05s both}
+@keyframes wipe{to{clip-path:inset(-12% -12% -12% -12%)}}
+.t-caret{display:inline-block;width:.085em;height:.66em;background:var(--fg);margin-left:.07em;animation:blink 1.1s steps(1) infinite}
+.title-sub{margin-top:clamp(14px,2.4vh,24px);font-size:min(1.7rem,2.4vw,3.4vh);color:var(--muted)}
+.title-hint{display:flex;gap:clamp(16px,3vw,34px);flex-wrap:wrap;justify-content:center;margin-top:clamp(26px,6vh,58px);font:400 min(.85rem,.95vw,1.5vh) var(--font-mono);color:var(--muted)}
+.title-hint span{display:flex;align-items:center;gap:9px}
+kbd{font:500 min(.75rem,.8vw,1.3vh) var(--font-mono);border:1px solid var(--border-strong);border-bottom-width:2px;border-radius:6px;padding:4px 8px;color:var(--fg);background:var(--code-bg)}
+
+/* End slide */
+.end-tri{width:clamp(32px,4vw,48px);height:auto;margin-bottom:clamp(20px,3.2vh,32px)}
+.s-end .kick{justify-content:center}
+.end-title{font-size:var(--fs-display);font-weight:700;letter-spacing:-.045em;line-height:.98}
+.end-sub{margin-top:clamp(14px,2.4vh,24px);font-size:min(1.7rem,2.3vw,3.3vh);color:var(--muted)}
+.end-actions{margin-top:clamp(24px,5vh,44px)}
+.btn{
+  display:inline-flex;align-items:center;gap:13px;padding:16px 28px;
+  border:1px solid var(--fg);background:var(--fg);color:var(--bg);
+  font:500 min(.85rem,.95vw,1.5vh) var(--font-mono);letter-spacing:.1em;text-transform:uppercase;
+  border-radius:999px;cursor:pointer;transition:opacity .18s,transform .15s;
+}
+.btn:hover{opacity:.82}
+.btn:active{transform:scale(.97)}
+.btn .ic{width:17px;height:17px}
+.end-credit{margin-top:clamp(28px,5.6vh,52px);font:400 min(.7rem,.78vw,1.25vh) var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--faint);max-width:76ch;line-height:1.8}
+
+/* Overview */
+.ov{
+  position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;
+  padding:clamp(64px,9vh,84px) clamp(24px,7vw,110px) clamp(64px,9vh,84px);overflow-y:auto;
+  background:color-mix(in srgb,var(--bg) 93%,transparent);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+}
+.ov[hidden]{display:none}
+.ov-head{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:clamp(16px,2.6vh,26px);flex:none}
+.ov-title{font-size:min(2rem,3vw,4vh);font-weight:600;letter-spacing:-.03em}
+.ov-hint{font:400 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+.ov-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 clamp(28px,4vw,64px)}
+.ov-item{
+  display:grid;grid-template-columns:56px 1fr auto;gap:16px;align-items:center;
+  padding:13px 10px;border:none;border-top:1px solid var(--border);
+  background:none;color:var(--fg);text-align:left;cursor:pointer;width:100%;
+}
+.ov-item:hover{background:var(--hover)}
+.ov-n{width:42px;height:42px;border:1px solid var(--border-strong);border-radius:10px;display:grid;place-items:center;font:500 min(.85rem,.95vw,1.5vh) var(--font-mono);color:var(--muted)}
+.ov-item.cur .ov-n{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.ov-t{font-size:min(1.15rem,1.3vw,2.1vh);font-weight:600;letter-spacing:-.01em}
+.ov-k{font:400 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+
+/* Toast */
+.toast{
+  position:fixed;bottom:80px;left:50%;transform:translate(-50%,12px);
+  background:var(--inv-bg);color:var(--inv-fg);
+  font:500 min(.85rem,.95vw,1.5vh) var(--font-mono);letter-spacing:.06em;
+  padding:13px 22px;border-radius:999px;opacity:0;pointer-events:none;
+  transition:opacity .25s,transform .25s;z-index:80;max-width:88vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ============ Responsive ============ */
+@media (max-width:980px){
+  .split{grid-template-columns:1fr}
+  .react-side{order:2;flex-direction:row;justify-content:flex-start;gap:26px}
+  .react-logo{width:130px}
+  .pres{grid-template-columns:1fr;justify-items:center;text-align:center;gap:26px}
+  .avatar{width:180px}
+  .pres-contact{justify-content:center}
+  .flow{flex-direction:column}
+  .flow-sep{width:auto;height:28px}
+  .flow-sep .ic{transform:rotate(90deg)}
+  .feat{grid-template-columns:64px 1fr}
+  .feat p{grid-column:2}
+  .rout{grid-template-columns:1fr;gap:12px}
+  .df-grid{grid-template-columns:1fr}
+  .phases{grid-template-columns:1fr;border-top:0;gap:0}
+  .phase{display:grid;grid-template-columns:52px 1fr;column-gap:18px;align-items:start;padding:16px 0;border-top:1px solid var(--border)}
+  .pn{margin:0;width:48px;height:48px}
+  .phase h4{margin-top:2px}
+  .phase p,.phase .chip{grid-column:2}
+  .phase .chip{margin-top:12px;align-self:flex-start}
+  .ov-grid{grid-template-columns:1fr}
+}
+@media (max-width:720px){
+  .brand-sub,.brand-sep,.foot-title,.foot-mid{display:none}
+  .vs-wrap{overflow-x:auto}
+  .pc{grid-template-columns:1fr}
+  .pc .cons{border-left:0;border-top:1px solid var(--border)}
+  :root{--fs-h2:min(2.2rem,8vw,7vh);--fs-body:min(1.15rem,3.4vw,2.4vh);--fs-body-s:min(1.05rem,3.1vw,2.2vh);--fs-h4:min(1.2rem,3.6vw,2.6vh);--fs-lead:min(1.1rem,3.4vw,2.8vh);--fs-code:min(1rem,2.9vw,2.1vh)}
+  .pres-name{font-size:min(2.6rem,9vw,6.5vh)}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001s!important;animation-delay:0s!important}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ Icon sprite ============ -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-tri" viewBox="0 0 24 24"><path d="M12 3 22 20H2Z"/></symbol>
+  <symbol id="i-arrow-r" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-chev-l" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+  <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 12.5A8.5 8.5 0 0 1 11.5 4a7 7 0 1 0 8.5 8.5Z"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></symbol>
+  <symbol id="i-max" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M2.5 12h19M12 2.5a14.5 14.5 0 0 1 0 19 14.5 14.5 0 0 1 0-19Z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Zm0 0v6h6"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 19h16"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3M19 9h3m-3 6h3"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="7" rx="1.5"/><rect x="3" y="13.5" width="18" height="7" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8 21h8m-4-4.5V21"/></symbol>
+  <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 1 7 7c0 2-1 3.8-2.9 5.4-1.6 1.3-3.2 3.6-4.1 5.6-.9-2-2.5-4.3-4.1-5.6C6 13.8 5 12 5 10a7 7 0 0 1 7-7Z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.5-4.5"/></symbol>
+  <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="8.5" ry="3"/><path d="M3.5 5.5v13c0 1.7 3.8 3 8.5 3s8.5-1.3 8.5-3v-13M3.5 12c0 1.7 3.8 3 8.5 3s8.5-1.3 8.5-3"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2.5 9.5 5L12 12.5l-9.5-5 9.5-5Z"/><path d="m2.5 12.5 9.5 5 9.5-5M2.5 17l9.5 5 9.5-5"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.5 6.5a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-8 7.9l-6.9 7a2.1 2.1 0 0 1-3-3l7-6.9a6 6 0 0 1 7.9-8l-3.8 3.8Z"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="m15.5 18 6-6-6-6m-7 0-6 6 6 6"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 7V2m6 5V2M7.5 7h9v5a4.5 4.5 0 0 1-9 0V7ZM12 16.5V22"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8.2a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4a2 2 0 0 0-1 1.7v7.6a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 18.5H5A1.5 1.5 0 0 1 3.5 17V6.5Z"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-5-6-5M12 19h8"/></symbol>
+  <symbol id="i-pointer" viewBox="0 0 24 24"><path d="m3 3 7.1 17 2.5-7.4L20 10.1 3 3Z"/></symbol>
+  <symbol id="i-circle-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5L16 9.5"/></symbol>
+  <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 10a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-5.3-7-11a7 7 0 0 1 14 0c0 5.7-7 11-7 11Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+  <symbol id="i-grad" viewBox="0 0 24 24"><path d="m2.5 9 9.5-4.5L21.5 9 12 13.5 2.5 9Z"/><path d="M6 11v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5M21.5 9v5"/></symbol>
+</svg>
+
+<div class="grid-bg" aria-hidden="true"></div>
+<span class="mark m-tl" aria-hidden="true"></span><span class="mark m-tr" aria-hidden="true"></span>
+<span class="mark m-bl" aria-hidden="true"></span><span class="mark m-br" aria-hidden="true"></span>
+
+<!-- ============ Chrome ============ -->
+<header class="chrome top">
+  <div class="brand">
+    <svg class="ic ic-fill brand-tri"><use href="#i-tri"/></svg>
+    <span class="brand-name">Next.js Unlocked</span>
+    <span class="brand-sep"></span>
+    <span class="brand-sub">Part 1 / 3 — Concepts</span>
+  </div>
+  <div class="chrome-actions">
+    <button class="icon-btn" id="btnTheme" title="Toggle theme (T)" aria-label="Toggle theme">
+      <svg class="ic ic-sun"><use href="#i-sun"/></svg>
+      <svg class="ic ic-moon"><use href="#i-moon"/></svg>
+    </button>
+    <button class="icon-btn" id="btnOverview" title="Overview (O)" aria-label="Slide overview"><svg class="ic"><use href="#i-grid"/></svg></button>
+    <button class="icon-btn" id="btnFull" title="Fullscreen (F)" aria-label="Fullscreen"><svg class="ic"><use href="#i-max"/></svg></button>
+  </div>
+</header>
+
+<!-- ============ Deck ============ -->
+<main id="deck">
+
+  <!-- 01 · Title -->
+  <section class="slide s-title active" data-title="Next.js Unlocked" data-kick="Opening">
+    <div class="title-wrap">
+      <svg class="ic ic-fill title-tri rv" style="--d:.05s"><use href="#i-tri"/></svg>
+      <div class="title-badges rv" style="--d:.15s">
+        <span class="chip">Microsoft Learn Student Ambassadors</span>
+        <span class="chip chip-ghost">Part 1 of 3 — Concepts</span>
+      </div>
+      <h1 class="title rv" style="--d:.25s">Next.js <span class="t-ol"><span class="ol-o" aria-hidden="true">Unlocked</span><span class="ol-f">Unlocked</span></span><span class="t-caret" aria-hidden="true"></span></h1>
+      <p class="title-sub rv" style="--d:.45s">From React library to full-stack framework.</p>
+      <div class="title-hint rv" style="--d:.65s">
+        <span><kbd>←</kbd><kbd>→</kbd> navigate</span>
+        <span><kbd>T</kbd> theme</span>
+        <span><kbd>F</kbd> fullscreen</span>
+        <span><kbd>O</kbd> overview</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 · Presenter -->
+  <section class="slide" data-title="Your Presenter" data-kick="Your Host">
+    <header class="s-head">
+      <p class="kick rv">Your Host</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>Nice to meet you.</span></h2>
+    </header>
+    <div class="s-body pres">
+      <!--
+        ✏️ EDIT — AVATAR:
+        Replace the <span class="avatar-initials">YN</span> below with your own initials,
+        OR swap it for a real photo:
+        <img src="your-photo.jpg" alt="Photo of Your Name">
+      -->
+      <div class="avatar rv" style="--d:.22s">
+        <span class="avatar-initials">YN</span>
+      </div>
+      <div class="pres-right">
+        <!-- ✏️ EDIT — YOUR NAME -->
+        <h3 class="pres-name mask" style="--d:.2s"><span>Your Name</span></h3>
+        <!-- ✏️ EDIT — YOUR ROLE / TITLE (keep it one line) -->
+        <p class="pres-role rv" style="--d:.34s">Microsoft Learn Student Ambassador · <b>Web &amp; Cloud enthusiast</b></p>
+
+        <div class="rows pres-rows">
+          <!-- ✏️ EDIT — FACT ROW 1: what you study / where -->
+          <div class="row rv" style="--d:.44s">
+            <span class="row-ic"><svg class="ic"><use href="#i-grad"/></svg></span>
+            <div><h4>Studying Computer Science</h4><p>Your University, Year 3 — focused on web engineering and developer communities.</p></div>
+          </div>
+          <!-- ✏️ EDIT — FACT ROW 2: your experience with the topic -->
+          <div class="row rv" style="--d:.54s">
+            <span class="row-ic"><svg class="ic"><use href="#i-code"/></svg></span>
+            <div><h4>Building with React &amp; Next.js</h4><p>Side projects, hackathon wins, and shipping full-stack apps to real users.</p></div>
+          </div>
+          <!-- ✏️ EDIT — FACT ROW 3: location / community (delete this row if not needed) -->
+          <div class="row rv" style="--d:.64s">
+            <span class="row-ic"><svg class="ic"><use href="#i-pin"/></svg></span>
+            <div><h4>Based in Your City</h4><p>Hosting workshops like this one — and always up for a chat about the web.</p></div>
+          </div>
+        </div>
+
+        <!-- ✏️ EDIT — CONTACT: update href links + labels -->
+        <div class="pres-contact rv" style="--d:.78s">
+          <a class="chip" href="https://github.com/yourhandle" target="_blank" rel="noopener"><svg class="ic"><use href="#i-at"/></svg> github.com/yourhandle</a>
+          <a class="chip" href="https://linkedin.com/in/yourhandle" target="_blank" rel="noopener"><svg class="ic"><use href="#i-link"/></svg> linkedin.com/in/yourhandle</a>
+          <a class="chip" href="mailto:your@email.dev"><svg class="ic"><use href="#i-mail"/></svg> your@email.dev</a>
+        </div>
+
+        <p class="pres-hello rv" style="--d:.9s"><svg class="ic"><use href="#i-terminal"/></svg> $ echo "Ask me anything — before, during, or after the talk."</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 · What is Next.js -->
+  <section class="slide" data-title="What is Next.js?" data-kick="Foundation">
+    <header class="s-head">
+      <p class="kick rv">Foundation — 01</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>The React framework<br>for the web.</span></h2>
+    </header>
+    <div class="s-body split">
+      <div class="split-l">
+        <p class="lead rv" style="--d:.28s">A full-stack React framework, built and maintained by Vercel — everything you need ships in the box. And every bit of your existing React knowledge still applies.</p>
+        <div class="stack-note rv" style="--d:.42s">
+          <span class="chip"><svg class="ic ic-fill"><use href="#i-tri"/></svg> Built on React</span>
+          <span class="chip chip-ghost">Maintained by Vercel</span>
+        </div>
+        <div class="trust rv" style="--d:.55s">
+          <span class="trust-k">Powering production at</span>
+          <span class="trust-n">Netflix · TikTok · Twitch</span>
+        </div>
+      </div>
+      <div class="split-r rows">
+        <div class="row rv" style="--d:.3s">
+          <span class="row-ic"><svg class="ic"><use href="#i-circle-check"/></svg></span>
+          <div><h4>Production-Ready</h4><p>Battle-tested at scale — the default choice for shipping React to the real world.</p></div>
+        </div>
+        <div class="row rv" style="--d:.42s">
+          <span class="row-ic"><svg class="ic"><use href="#i-layers"/></svg></span>
+          <div><h4>Full-Stack</h4><p>Routing, rendering, and API routes — front-end and back-end living in one project.</p></div>
+        </div>
+        <div class="row rv" style="--d:.54s">
+          <span class="row-ic"><svg class="ic"><use href="#i-wrench"/></svg></span>
+          <div><h4>Opinionated</h4><p>Sensible conventions decided for you — less time configuring, more time building.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 · React baseline -->
+  <section class="slide" data-title="Did you know about React?" data-kick="React">
+    <header class="s-head">
+      <p class="kick rv">The Baseline</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>Did you know about React?</span></h2>
+      <p class="lead rv" style="--d:.3s">React is a UI library — not a full framework. It's powerful, but intentionally minimal.</p>
+    </header>
+    <div class="s-body split">
+      <div class="split-l react-side rv" style="--d:.22s">
+        <svg class="react-logo" viewBox="0 0 220 220" aria-hidden="true">
+          <g class="react-spin">
+            <ellipse cx="110" cy="110" rx="92" ry="34"/>
+            <ellipse cx="110" cy="110" rx="92" ry="34" transform="rotate(60 110 110)"/>
+            <ellipse cx="110" cy="110" rx="92" ry="34" transform="rotate(120 110 110)"/>
+          </g>
+          <circle class="core" cx="110" cy="110" r="9"/>
+        </svg>
+        <div class="react-cap">
+          <span class="cap-t">React</span>
+          <span class="cap-s">A library for the View layer</span>
+        </div>
+      </div>
+      <div class="split-r rows">
+        <div class="row rv" style="--d:.28s">
+          <span class="row-ic"><svg class="ic"><use href="#i-code"/></svg></span>
+          <div><h4>Component-Based</h4><p>Build UIs from small, reusable, declarative pieces.</p></div>
+        </div>
+        <div class="row rv" style="--d:.38s">
+          <span class="row-ic"><svg class="ic"><use href="#i-swap"/></svg></span>
+          <div><h4>No Built-in Routing</h4><p>You pick and install your own router — React Router, TanStack, and friends.</p></div>
+        </div>
+        <div class="row rv" style="--d:.48s">
+          <span class="row-ic"><svg class="ic"><use href="#i-search"/></svg></span>
+          <div><h4>SEO Challenges</h4><p>Client-side rendering makes search indexing harder.</p></div>
+        </div>
+        <div class="row rv" style="--d:.58s">
+          <span class="row-ic"><svg class="ic"><use href="#i-plug"/></svg></span>
+          <div><h4>External Tools Required</h4><p>Routing and data fetching must be wired up by you.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 05 · Library vs Framework -->
+  <section class="slide" data-title="Library vs. Framework" data-kick="Concepts">
+    <header class="s-head">
+      <p class="kick rv">The Key Insight</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>Library vs. Framework</span></h2>
+    </header>
+    <div class="s-body">
+      <blockquote class="quote mask" style="--d:.22s">
+        <span>“With a library, you're the architect. With a framework, the structure is already designed — you fill in the details.”</span>
+      </blockquote>
+      <div class="defs">
+        <div class="def rv" style="--d:.38s">
+          <span class="def-ic"><svg class="ic"><use href="#i-box"/></svg></span>
+          <h4>The Foundation</h4>
+          <p>Provides a predefined structure for your application.</p>
+        </div>
+        <div class="def rv" style="--d:.48s">
+          <span class="def-ic"><svg class="ic"><use href="#i-wrench"/></svg></span>
+          <h4>Built-in Tools</h4>
+          <p>Routing and bundling are included, out of the box.</p>
+        </div>
+        <div class="def rv" style="--d:.58s">
+          <span class="def-ic"><svg class="ic"><use href="#i-repeat"/></svg></span>
+          <h4>Inversion of Control</h4>
+          <p>The framework calls your code — not the other way around.</p>
+        </div>
+      </div>
+      <p class="foot-note rv" style="--d:.72s"><svg class="ic"><use href="#i-arrow-r"/></svg>Next.js adds conventions on top of React — so your team spends less time on setup and more time on shipping.</p>
+    </div>
+  </section>
+
+  <!-- 06 · CSR -->
+  <section class="slide" data-title="How React Works — CSR" data-kick="Rendering">
+    <header class="s-head">
+      <p class="kick rv">Rendering — 01</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>How React works — CSR</span></h2>
+      <p class="lead rv" style="--d:.3s">Client-Side Rendering — the server sends a bare shell, and React builds the whole UI in the browser.</p>
+    </header>
+    <div class="s-body">
+      <div class="flow rv" style="--d:.25s">
+        <div class="step">
+          <span class="n">01</span>
+          <svg class="ic"><use href="#i-globe"/></svg>
+          <h4>Request</h4><p>The browser asks the server for the page.</p>
+        </div>
+        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+        <div class="step">
+          <span class="n">02</span>
+          <svg class="ic"><use href="#i-file"/></svg>
+          <h4>Empty HTML</h4><p>The server responds with a bare shell.</p>
+        </div>
+        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+        <div class="step">
+          <span class="n">03</span>
+          <svg class="ic"><use href="#i-download"/></svg>
+          <h4>JS Download</h4><p>The browser fetches the React bundle.</p>
+        </div>
+        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+        <div class="step">
+          <span class="n">04</span>
+          <svg class="ic"><use href="#i-cpu"/></svg>
+          <h4>Render</h4><p>React builds the UI on the client.</p>
+        </div>
+      </div>
+      <div class="pc rv" style="--d:.5s">
+        <div class="pros"><svg class="ic"><use href="#i-check"/></svg><div><span class="tag">Pros</span><p>Rich, dynamic interactivity once the app has loaded.</p></div></div>
+        <div class="cons"><svg class="ic"><use href="#i-x"/></svg><div><span class="tag">Cons</span><p>Slow first load · weak SEO · JavaScript required.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 07 · SSR -->
+  <section class="slide" data-title="What is SSR?" data-kick="Rendering">
+    <header class="s-head">
+      <p class="kick rv">Rendering — 02</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>What is SSR?</span></h2>
+      <p class="lead rv" style="--d:.3s">Server-Side Rendering — HTML is generated on the server, per request. The browser receives fully populated HTML, immediately.</p>
+    </header>
+    <div class="s-body">
+      <div class="flow solid rv" style="--d:.25s">
+        <div class="step">
+          <span class="n">01</span>
+          <svg class="ic"><use href="#i-globe"/></svg>
+          <h4>Request</h4><p>The browser asks the server for the page.</p>
+        </div>
+        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+        <div class="step">
+          <span class="n">02</span>
+          <svg class="ic"><use href="#i-server"/></svg>
+          <h4>Server Renders</h4><p>HTML is generated on the server, per request.</p>
+        </div>
+        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+        <div class="step">
+          <span class="n">03</span>
+          <svg class="ic"><use href="#i-monitor"/></svg>
+          <h4>Immediate Paint</h4><p>Content is visible right away — no blank screen.</p>
+        </div>
+        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+        <div class="step">
+          <span class="n">04</span>
+          <svg class="ic"><use href="#i-drop"/></svg>
+          <h4>Hydration</h4><p>React attaches interactivity to the HTML.</p>
+        </div>
+      </div>
+      <div class="pc rv" style="--d:.5s">
+        <div class="pros"><svg class="ic"><use href="#i-check"/></svg><div><span class="tag">Pros</span><p>Fast first paint · better SEO · accessible content.</p></div></div>
+        <div class="cons"><svg class="ic"><use href="#i-x"/></svg><div><span class="tag">Cons</span><p>More server load · interactions wait for hydration.</p></div></div>
+      </div>
+      <p class="foot-note rv" style="--d:.62s"><svg class="ic"><use href="#i-arrow-r"/></svg>Net result: better SEO and initial-load performance.</p>
+    </div>
+  </section>
+
+  <!-- 08 · React vs Next.js -->
+  <section class="slide" data-title="React vs. Next.js" data-kick="Comparison">
+    <header class="s-head">
+      <p class="kick rv">Head to Head</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>React vs. Next.js</span></h2>
+    </header>
+    <div class="s-body">
+      <div class="vs-wrap rv" style="--d:.25s">
+        <table class="vs">
+          <thead>
+            <tr>
+              <th class="corner"></th>
+              <th>React — CSR</th>
+              <th class="nx">Next.js — SSR / Full-Stack</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Routing</td>
+              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>Manual — install a library</span></td>
+              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>File-based, built-in</span></td>
+            </tr>
+            <tr>
+              <td>Rendering</td>
+              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>CSR only</span></td>
+              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>CSR · SSR · SSG · ISR</span></td>
+            </tr>
+            <tr>
+              <td>Backend</td>
+              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>None — external API needed</span></td>
+              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>Built-in API routes</span></td>
+            </tr>
+            <tr>
+              <td>SEO</td>
+              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>Poor by default</span></td>
+              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>Excellent out of the box</span></td>
+            </tr>
+            <tr>
+              <td>Setup</td>
+              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>Many tools to configure</span></td>
+              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>Zero config to start</span></td>
+            </tr>
+            <tr>
+              <td>First Load</td>
+              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>Blank screen first</span></td>
+              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>Instant page view</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 09 · New features -->
+  <section class="slide" data-title="New Features in Next.js 13+" data-kick="Features">
+    <header class="s-head">
+      <p class="kick rv">What's New — 13+</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>A new generation of features.</span></h2>
+      <p class="lead rv" style="--d:.3s">Next.js 13+ brought faster, smarter defaults for building modern applications.</p>
+    </header>
+    <div class="s-body">
+      <div class="feats">
+        <div class="feat rv" style="--d:.22s"><span class="fn">01</span><h4>App Router</h4><p>A new routing system built on React conventions — intuitive and nested by design.</p></div>
+        <div class="feat rv" style="--d:.32s"><span class="fn">02</span><h4>Server Components</h4><p>Components render on the server, by default.</p></div>
+        <div class="feat rv" style="--d:.42s"><span class="fn">03</span><h4>Server Actions</h4><p>Run server-side code directly from your components.</p></div>
+        <div class="feat rv" style="--d:.52s"><span class="fn">04</span><h4>Streaming &amp; Suspense</h4><p>Progressive page loading with instant fallback UI.</p></div>
+        <div class="feat rv" style="--d:.62s"><span class="fn">05</span><h4>Built-in Optimizations</h4><p>Automatic image, font, and script optimization — no extra tooling.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 · App Router -->
+  <section class="slide" data-title="Deep Dive: The App Router" data-kick="App Router">
+    <header class="s-head">
+      <p class="kick rv">Deep Dive — 01</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>The App Router</span></h2>
+      <p class="lead rv" style="--d:.3s">Replaces the old /pages directory with a powerful, nested structure — everything lives in <em>app</em>.</p>
+    </header>
+    <div class="s-body split">
+      <div class="split-l rv" style="--d:.25s">
+        <div class="code">
+          <div class="code-bar"><span>file tree</span><span class="code-tag">app/</span></div>
+          <pre><span class="d">app/</span>
+├── <span class="f">page.tsx</span>            <span class="cm"># /</span>
+└── <span class="d">dashboard/</span>
+    └── <span class="f">page.tsx</span>        <span class="cm"># /dashboard</span></pre>
+        </div>
+      </div>
+      <div class="split-r rows">
+        <div class="row rv" style="--d:.32s">
+          <span class="row-ic"><svg class="ic"><use href="#i-folder"/></svg></span>
+          <div><h4>Routes = Folders</h4><p>Every folder under <em>app</em> maps to a URL segment — no manual route configuration.</p></div>
+        </div>
+        <div class="row rv" style="--d:.44s">
+          <span class="row-ic"><svg class="ic"><use href="#i-layers"/></svg></span>
+          <div><h4>Nested Layouts</h4><p>Layouts persist across their children — no remounting between pages.</p></div>
+        </div>
+        <div class="row rv" style="--d:.56s">
+          <span class="row-ic"><svg class="ic"><use href="#i-file"/></svg></span>
+          <div><h4>Special Files</h4><p>page · layout · loading · error. A folder only becomes a public route once it holds a page.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 · Routing patterns -->
+  <section class="slide" data-title="Folder-Based Routing Variants" data-kick="Routing">
+    <header class="s-head">
+      <p class="kick rv">Deep Dive — Routing Patterns</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>Three ways to shape a route.</span></h2>
+    </header>
+    <div class="s-body">
+      <div class="rout rv" style="--d:.25s">
+        <div class="rout-pat">
+          <span class="pat">app/about/page.tsx</span>
+          <span class="pat-tag">Standard · Static</span>
+        </div>
+        <div><h4>Static Routes</h4><p>A predictable, fixed path — nothing dynamic about it.</p></div>
+        <span class="url-chip">→ /about</span>
+      </div>
+      <div class="rout rv" style="--d:.38s">
+        <div class="rout-pat">
+          <span class="pat">app/blog/[slug]/page.tsx</span>
+          <span class="pat-tag">Dynamic Segment</span>
+        </div>
+        <div><h4>Dynamic Routes</h4><p>Captures dynamic data from the URL — matches any value.</p></div>
+        <span class="url-chip">→ /blog/hello</span>
+      </div>
+      <div class="rout rv" style="--d:.51s">
+        <div class="rout-pat">
+          <span class="pat">app/(marketing)/page.tsx</span>
+          <span class="pat-tag">Route Group</span>
+        </div>
+        <div><h4>Route Groups</h4><p>Organizes files logically — without affecting the URL path.</p></div>
+        <span class="url-chip">→ /</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 · Server Components -->
+  <section class="slide" data-title="Deep Dive: Server Components" data-kick="RSC">
+    <header class="s-head">
+      <p class="kick rv">Deep Dive — 02</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>Server Components —<br>the new default.</span></h2>
+      <p class="lead rv" style="--d:.3s">Every component in the App Router is a Server Component — unless you explicitly say otherwise.</p>
+    </header>
+    <div class="s-body">
+      <div class="rows">
+        <div class="row rv" style="--d:.28s">
+          <span class="row-ic"><svg class="ic"><use href="#i-server"/></svg></span>
+          <div><h4>Zero Client Bundle</h4><p>Server Components never ship to the browser — no impact on your JavaScript bundle size.</p></div>
+        </div>
+        <div class="row rv" style="--d:.38s">
+          <span class="row-ic"><svg class="ic"><use href="#i-database"/></svg></span>
+          <div><h4>Direct Backend Access</h4><p>Query databases and read secrets safely, right inside the component.</p></div>
+        </div>
+        <div class="row rv" style="--d:.48s">
+          <span class="row-ic"><svg class="ic"><use href="#i-pointer"/></svg></span>
+          <div><h4>Opt-in Interactivity</h4><p>Add the "use client" directive only where you need state and events.</p></div>
+        </div>
+      </div>
+      <div class="boundary rv" style="--d:.6s">
+        <div class="b-zone b-server">
+          <h5>Server — the default</h5>
+          <div class="b-list">
+            <span class="b-item">page.tsx</span>
+            <span class="b-item">layout.tsx</span>
+            <span class="b-item">fetch data</span>
+            <span class="b-item">db access</span>
+            <span class="b-item">secrets</span>
+          </div>
+        </div>
+        <div class="b-zone b-client">
+          <h5>Client — the island</h5>
+          <div class="b-list">
+            <span class="b-item b-inv">"use client"</span>
+            <span class="b-item">state</span>
+            <span class="b-item">events</span>
+            <span class="b-item">browser APIs</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 · Data fetching -->
+  <section class="slide" data-title="Deep Dive: Data Fetching" data-kick="Data">
+    <header class="s-head">
+      <p class="kick rv">Deep Dive — 03</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>Data fetching — before &amp; after.</span></h2>
+    </header>
+    <div class="s-body df-grid">
+      <div class="df-col rv" style="--d:.22s">
+        <div class="code">
+          <div class="code-bar"><span>The Old Way</span><span class="code-tag">React · Client</span></div>
+          <pre><span class="tk-k">useEffect</span>(() => {
+  <span class="tk-k">fetch</span>(<span class="tk-str">'/api/data'</span>)
+    .then(res => res.<span class="tk-k">json</span>())
+    .then(setData)
+}, [])</pre>
+        </div>
+        <p class="df-cap"><svg class="ic"><use href="#i-x"/></svg>Requires state, effects — and every fetch happens on the client.</p>
+      </div>
+      <div class="df-col rv" style="--d:.36s">
+        <div class="code code-hi">
+          <div class="code-bar"><span>The New Way</span><span class="code-tag">Next.js · RSC</span></div>
+          <pre><span class="tk-k">export default async function</span> Page() {
+  <span class="tk-k">const</span> res = <span class="tk-k">await</span> <span class="tk-k">fetch</span>(<span class="tk-str">'https://api.xyz/data'</span>)
+  <span class="tk-k">const</span> data = <span class="tk-k">await</span> res.<span class="tk-k">json</span>()
+
+  <span class="tk-k">return</span> <span class="tk-tag">&lt;h1&gt;</span>{data.name}<span class="tk-tag">&lt;/h1&gt;</span>
+}</pre>
+        </div>
+        <p class="df-cap"><svg class="ic"><use href="#i-check"/></svg>Async components — fetching directly on the server.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 · Creating a project -->
+  <section class="slide" data-title="Creating a Next.js Project" data-kick="CLI">
+    <header class="s-head">
+      <p class="kick rv">Hands On — Scaffold</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>One command to start.</span></h2>
+      <p class="lead rv" style="--d:.3s">This single CLI command scaffolds a complete, production-ready environment — instantly.</p>
+    </header>
+    <div class="s-body">
+      <div class="term rv" style="--d:.25s">
+        <div class="term-bar">
+          <span class="term-dots"><i></i><i></i><i></i></span>
+          <span class="term-title">bash — create-next-app</span>
+        </div>
+        <div class="term-body">
+          <div class="tl"><span class="prompt">$</span> <span class="cmd" data-type="npx create-next-app@latest"></span><span class="caret"></span></div>
+          <div class="tl out"><span class="dim">√</span> What is your project named? <span class="dim">…</span> <span class="a">my-app</span></div>
+          <div class="tl out"><span class="dim">√</span> Would you like to use TypeScript? <span class="dim">…</span> <span class="a">Yes</span></div>
+          <div class="tl out"><span class="dim">√</span> Would you like to use ESLint? <span class="dim">…</span> <span class="a">Yes</span></div>
+          <div class="tl out"><span class="dim">√</span> Would you like to use Tailwind CSS? <span class="dim">…</span> <span class="a">No</span></div>
+          <div class="tl out"><span class="dim">√</span> Would you like to use App Router? <span class="dim">(recommended) …</span> <span class="a">Yes</span></div>
+          <div class="tl out" aria-hidden="true">&nbsp;</div>
+          <div class="tl out">Success! Created <span class="a">my-app</span> <span class="dim">— run</span> npm run dev <span class="dim">to start.</span></div>
+          <div class="tl out"><svg class="ic ic-fill"><use href="#i-tri"/></svg> Next.js <span class="dim">— ready when you are.</span></div>
+        </div>
+      </div>
+      <button class="copy-btn rv" style="--d:.5s" id="copyCmd" type="button">
+        <svg class="ic"><use href="#i-copy"/></svg>
+        <span class="c-cmd">npx create-next-app@latest</span>
+        <span class="c-hint">Click to copy</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- 15 · File structure -->
+  <section class="slide" data-title="File Structure Overview" data-kick="Structure">
+    <header class="s-head">
+      <p class="kick rv">Hands On — Anatomy</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>The file structure.</span></h2>
+      <p class="lead rv" style="--d:.3s">A fresh installation gives you a clean, predictable workspace — and <em>app</em> is the core of it all.</p>
+    </header>
+    <div class="s-body split">
+      <div class="split-l rv" style="--d:.25s">
+        <div class="code">
+          <div class="code-bar"><span>file tree</span><span class="code-tag">my-app/</span></div>
+          <pre>my-app/
+├── <span class="d">app/</span>
+│   ├── <span class="d">layout.tsx</span>
+│   ├── <span class="d">page.tsx</span>
+│   └── <span class="f">globals.css</span>
+├── <span class="f">public/</span>
+├── <span class="f">next.config.js</span>
+└── <span class="f">package.json</span></pre>
+        </div>
+      </div>
+      <div class="split-r rows">
+        <div class="row rv" style="--d:.32s">
+          <span class="row-ic"><svg class="ic"><use href="#i-folder"/></svg></span>
+          <div><h4>app/</h4><p>The root directory of the App Router — every route and every piece of UI lives here.</p></div>
+        </div>
+        <div class="row rv" style="--d:.44s">
+          <span class="row-ic"><svg class="ic"><use href="#i-layout"/></svg></span>
+          <div><h4>layout.tsx</h4><p>Shared UI for a segment and its children — persistent headers and footers that never remount.</p></div>
+        </div>
+        <div class="row rv" style="--d:.56s">
+          <span class="row-ic"><svg class="ic"><use href="#i-file"/></svg></span>
+          <div><h4>page.tsx</h4><p>The unique UI of a route segment — its presence is what makes a route public.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 16 · Live demo -->
+  <section class="slide" data-title="Live Demo — Five Phases" data-kick="Demo">
+    <header class="s-head">
+      <p class="kick rv">Live Demo</p>
+      <h2 class="h2 mask" style="--d:.12s"><span>Watch it come together.</span></h2>
+      <p class="lead rv" style="--d:.3s">Five phases — from an empty folder to a fetching, full-stack app.</p>
+    </header>
+    <div class="s-body">
+      <div class="phases">
+        <div class="phase rv" style="--d:.22s">
+          <span class="pn">01</span>
+          <h4>Initialization</h4>
+          <p>Run <code>npm run dev</code> and explore the default setup.</p>
+          <span class="chip">Setup</span>
+        </div>
+        <div class="phase rv" style="--d:.32s">
+          <span class="pn">02</span>
+          <h4>Building Routes</h4>
+          <p>Create a folder and a <code>page.tsx</code> — a new view appears.</p>
+          <span class="chip">Frontend</span>
+        </div>
+        <div class="phase rv" style="--d:.42s">
+          <span class="pn">03</span>
+          <h4>Interactivity</h4>
+          <p>Wire up <code>onClick</code> events with the "use client" directive.</p>
+          <span class="chip">Frontend</span>
+        </div>
+        <div class="phase rv" style="--d:.52s">
+          <span class="pn">04</span>
+          <h4>API Route</h4>
+          <p>A <code>route.ts</code> file handles backend GET requests.</p>
+          <span class="chip">Backend</span>
+        </div>
+        <div class="phase rv" style="--d:.62s">
+          <span class="pn">05</span>
+          <h4>Fetching Data</h4>
+          <p>A Server Component pulls data from our new API.</p>
+          <span class="chip">Full-Stack</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 17 · End -->
+  <section class="slide s-end" data-title="Questions?" data-kick="Closing">
+    <div class="end-wrap">
+      <svg class="ic ic-fill end-tri rv" style="--d:.05s"><use href="#i-tri"/></svg>
+      <p class="kick rv" style="--d:.15s">Part 1 of 3 — Concepts · Complete</p>
+      <h2 class="end-title mask" style="--d:.25s"><span>Questions?</span></h2>
+      <p class="end-sub rv" style="--d:.45s">Thank you for your time.</p>
+      <div class="end-actions rv" style="--d:.6s">
+        <button class="btn" id="restart" type="button"><svg class="ic"><use href="#i-chev-l"/></svg> Restart presentation</button>
+      </div>
+      <p class="end-credit rv" style="--d:.75s">Adapted from "Next.js Unlocked" &amp; "Introduction to Next.js — Part 1: Concepts" · Microsoft Learn Student Ambassadors</p>
+    </div>
+  </section>
+
+</main>
+
+<!-- ============ Footer chrome ============ -->
+<footer class="chrome bottom">
+  <div class="foot-title" id="footTitle">Next.js Unlocked</div>
+  <div class="foot-mid"><span class="live-dot" aria-hidden="true"></span><span class="clock" id="clock">00:00:00</span></div>
+  <div class="foot-right">
+    <button class="icon-btn" id="btnPrev" title="Previous (←)" aria-label="Previous slide"><svg class="ic"><use href="#i-chev-l"/></svg></button>
+    <span class="counter" id="counter">01 / 17</span>
+    <button class="icon-btn" id="btnNext" title="Next (→)" aria-label="Next slide"><svg class="ic"><use href="#i-chev-r"/></svg></button>
+  </div>
+</footer>
+<div class="progress" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
+
+<!-- ============ Overview ============ -->
+<div class="ov" id="overview" hidden role="dialog" aria-label="Slide overview">
+  <div class="ov-head">
+    <span class="ov-title">Overview</span>
+    <span class="ov-hint">Click a slide to jump · Esc to close</span>
+    <button class="icon-btn" id="ovClose" title="Close (Esc)" aria-label="Close overview"><svg class="ic"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="ov-grid" id="ovGrid"></div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function(){
+  'use strict';
+  var $ = function(s, c){ return (c || document).querySelector(s); };
+  var $$ = function(s, c){ return Array.prototype.slice.call((c || document).querySelectorAll(s)); };
+
+  /* ---------- Theme ---------- */
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem('nx-theme'); if (saved) root.dataset.theme = saved; } catch(e){}
+  function toggleTheme(){
+    var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    root.dataset.theme = next;
+    try { localStorage.setItem('nx-theme', next); } catch(e){}
+    toast(next === 'dark' ? 'Dark theme' : 'Light theme');
+  }
+
+  /* ---------- Slides ---------- */
+  var slides = $$('.slide');
+  var total = slides.length;
+  var cur = -1;
+  var counter = $('#counter'), footTitle = $('#footTitle'), bar = $('#progressBar');
+  function pad(n){ return String(n).padStart(2, '0'); }
+
+  function go(n){
+    n = Math.max(0, Math.min(total - 1, n));
+    if (n === cur) return;
+    if (cur > -1) slides[cur].classList.remove('active');
+    cur = n;
+    var s = slides[cur];
+    s.classList.add('active');
+    s.scrollTop = 0;
+    counter.textContent = pad(cur + 1) + ' / ' + pad(total);
+    footTitle.textContent = s.dataset.title || '';
+    bar.style.width = ((cur + 1) / total * 100) + '%';
+    try { history.replaceState(null, '', '#/' + (cur + 1)); } catch(e){}
+    $$('.ov-item').forEach(function(el, i){ el.classList.toggle('cur', i === cur); });
+    runTyping(s);
+  }
+  function next(){ go(cur + 1); }
+  function prev(){ go(cur - 1); }
+
+  /* ---------- Terminal typing ---------- */
+  var typeTimer = null, outTimers = [];
+  function runTyping(slide){
+    clearInterval(typeTimer);
+    outTimers.forEach(clearTimeout); outTimers = [];
+    var el = slide.querySelector('[data-type]');
+    if (!el) return;
+    var text = el.getAttribute('data-type');
+    var outs = $$('.tl.out', slide);
+    outs.forEach(function(o){ o.classList.remove('show'); });
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+      el.textContent = text;
+      outs.forEach(function(o){ o.classList.add('show'); });
+      return;
+    }
+    el.textContent = '';
+    var i = 0;
+    typeTimer = setInterval(function(){
+      i++;
+      el.textContent = text.slice(0, i);
+      if (i >= text.length){
+        clearInterval(typeTimer);
+        outs.forEach(function(o, idx){
+          outTimers.push(setTimeout(function(){ o.classList.add('show'); }, 300 + idx * 240));
+        });
+      }
+    }, 45);
+  }
+
+  /* ---------- Live clock ---------- */
+  var clock = $('#clock');
+  function tick(){
+    var d = new Date();
+    clock.textContent = [d.getHours(), d.getMinutes(), d.getSeconds()].map(function(v){
+      return String(v).padStart(2, '0');
+    }).join(':');
+  }
+  tick(); setInterval(tick, 1000);
+
+  /* ---------- Toast ---------- */
+  var toastEl = $('#toast'), toastT = null;
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastT);
+    toastT = setTimeout(function(){ toastEl.classList.remove('show'); }, 1900);
+  }
+
+  /* ---------- Overview ---------- */
+  var ov = $('#overview'), ovGrid = $('#ovGrid'), ovClose = $('#ovClose');
+  slides.forEach(function(s, i){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ov-item';
+    b.innerHTML = '<span class="ov-n">' + pad(i + 1) + '</span>' +
+                  '<span class="ov-t"></span>' +
+                  '<span class="ov-k"></span>';
+    b.querySelector('.ov-t').textContent = s.dataset.title || ('Slide ' + (i + 1));
+    b.querySelector('.ov-k').textContent = s.dataset.kick || '';
+    b.addEventListener('click', function(){ toggleOverview(false); go(i); });
+    ovGrid.appendChild(b);
+  });
+  function toggleOverview(force){
+    var show = (force !== undefined) ? force : ov.hidden;
+    ov.hidden = !show;
+    if (show) ovClose.focus();
+  }
+
+  /* ---------- Fullscreen ---------- */
+  function toggleFull(){
+    if (document.fullscreenElement) { document.exitFullscreen().catch(function(){}); }
+    else { root.requestFullscreen().catch(function(){}); }
+  }
+
+  /* ---------- Wiring ---------- */
+  $('#btnNext').addEventListener('click', next);
+  $('#btnPrev').addEventListener('click', prev);
+  $('#btnTheme').addEventListener('click', toggleTheme);
+  $('#btnFull').addEventListener('click', toggleFull);
+  $('#btnOverview').addEventListener('click', function(){ toggleOverview(); });
+  ovClose.addEventListener('click', function(){ toggleOverview(false); });
+  $('#restart').addEventListener('click', function(){ go(0); });
+
+  var copyBtn = $('#copyCmd');
+  if (copyBtn){
+    copyBtn.addEventListener('click', function(){
+      var cmd = 'npx create-next-app@latest';
+      if (navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(cmd).then(
+          function(){ toast('Copied — ' + cmd); },
+          function(){ toast('Copy blocked by the browser'); }
+        );
+      } else {
+        toast('Copy not available in this browser');
+      }
+    });
+  }
+
+  document.addEventListener('keydown', function(e){
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key;
+    var onBtn = e.target instanceof Element && e.target.closest('button, a, input, textarea');
+    if (k === 'Escape'){ if (!ov.hidden) toggleOverview(false); return; }
+    if (!ov.hidden){ if (k === 'o' || k === 'O') toggleOverview(false); return; }
+    if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown'){ e.preventDefault(); next(); }
+    else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp'){ e.preventDefault(); prev(); }
+    else if (k === 'Home'){ e.preventDefault(); go(0); }
+    else if (k === 'End'){ e.preventDefault(); go(total - 1); }
+    else if ((k === ' ' || k === 'Enter') && !onBtn){ e.preventDefault(); next(); }
+    else if (k === 'f' || k === 'F'){ toggleFull(); }
+    else if (k === 't' || k === 'T'){ toggleTheme(); }
+    else if (k === 'o' || k === 'O'){ toggleOverview(); }
+  });
+
+  /* Touch swipe */
+  var tx = 0, ty = 0;
+  document.addEventListener('touchstart', function(e){
+    tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+  }, { passive: true });
+  document.addEventListener('touchend', function(e){
+    var dx = e.changedTouches[0].clientX - tx;
+    var dy = e.changedTouches[0].clientY - ty;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5){ (dx < 0) ? next() : prev(); }
+  }, { passive: true });
+
+  /* Init from hash (#/n survives refresh) */
+  var m = location.hash.match(/^#\/(\d+)/);
+  var start = m ? Math.min(total, Math.max(1, +m[1])) - 1 : 0;
+  go(start);
+
+  /* ---------- postMessage bridge (for iframe embedding) ---------- */
+  // Patch go() to also notify the parent frame on every slide change
+  var _origGo = go;
+  go = function(n) {
+    _origGo(n);
+    try {
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'slide-change', index: cur }, '*');
+      }
+    } catch(e){}
+  };
+
+  // Listen for go-to-slide commands from the parent frame
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'go-to-slide' && typeof e.data.index === 'number') {
+      go(e.data.index);
+    }
+  });
+})();
+</script>
+</body>
+</html>

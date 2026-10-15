@@ -1,0 +1,1347 @@
+     1→<!DOCTYPE html>
+     2→<html lang="en" data-theme="dark">
+     3→<head>
+     4→<meta charset="UTF-8">
+     5→<meta name="viewport" content="width=device-width, initial-scale=1.0">
+     6→<title>Next.js Unlocked — From React Library to Full-Stack Framework</title>
+     7→<meta name="description" content="Next.js Unlocked — a presentation on going from React to full-stack. Microsoft Learn Student Ambassadors, Part 1 of 3: Concepts.">
+     8→<link rel="preconnect" href="https://fonts.googleapis.com">
+     9→<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    10→<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    11→<style>
+    12→/* ============ Theme tokens ============ */
+    13→:root{
+    14→  --font-sans:'Geist',ui-sans-serif,system-ui,sans-serif;
+    15→  --font-mono:'Geist Mono',ui-monospace,SFMono-Regular,monospace;
+    16→}
+    17→html[data-theme="dark"]{
+    18→  --bg:#000; --fg:#fff; --fg-soft:#d6d6d6; --muted:#a5a5a5; --faint:#6e6e6e;
+    19→  --border:#242424; --border-strong:#3d3d3d;
+    20→  --code-bg:#0a0a0a; --grid:rgba(255,255,255,.05);
+    21→  --inv-bg:#fff; --inv-fg:#000; --hover:#161616;
+    22→  --inv-fg-soft:rgba(0,0,0,.72);
+    23→}
+    24→html[data-theme="light"]{
+    25→  --bg:#fff; --fg:#000; --fg-soft:#171717; --muted:#5a5a5a; --faint:#a0a0a0;
+    26→  --border:#e6e6e6; --border-strong:#c8c8c8;
+    27→  --code-bg:#fafafa; --grid:rgba(0,0,0,.055);
+    28→  --inv-bg:#000; --inv-fg:#fff; --hover:#f4f4f4;
+    29→  --inv-fg-soft:rgba(255,255,255,.72);
+    30→}
+    31→
+    32→/* ============ Projector-friendly type scale ============
+    33→   Every size is capped by BOTH width (vw) and height (vh),
+    34→   so text is always large but never taller than the screen. */
+    35→:root{
+    36→  --fs-display: min(7.6rem, 11.5vw, 15vh);   /* slide titles / hero  */
+    37→  --fs-h2:      min(3.7rem, 5.2vw, 7.8vh);   /* section headings     */
+    38→  --fs-lead:    min(1.55rem, 1.9vw, 3.1vh);  /* intro paragraphs     */
+    39→  --fs-h4:      min(1.5rem, 1.65vw, 2.7vh);   /* card / row titles    */
+    40→  --fs-body:    min(1.4rem, 1.5vw, 2.4vh);   /* body copy            */
+    41→  --fs-body-s:  min(1.3rem, 1.4vw, 2.2vh);    /* secondary copy       */
+    42→  --fs-code:    min(1.3rem, 1.4vw, 2.2vh);    /* code / terminal      */
+    43→  --fs-label:   min(.78rem, .85vw, 1.35vh);  /* mono labels / chips  */
+    44→}
+    45→
+    46→/* ============ Base ============ */
+    47→*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    48→html,body{height:100%}
+    49→body{
+    50→  background:var(--bg);color:var(--fg);font-family:var(--font-sans);
+    51→  -webkit-font-smoothing:antialiased;overflow:hidden;
+    52→}
+    53→::selection{background:var(--fg);color:var(--bg)}
+    54→button{font-family:inherit}
+    55→
+    56→body,.chrome,.grid-bg,.code,.term,.step,.row-ic,.chip,.icon-btn,.progress-bar,.ov,.pc,.vs-wrap,.boundary,.mark,.b-item,.pn,.ov-n,.kbd,kbd{
+    57→  transition:background-color .35s ease,color .35s ease,border-color .35s ease;
+    58→}
+    59→
+    60→/* Icon system (stroke-based sprite) */
+    61→.ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none;display:block}
+    62→.ic-fill{fill:currentColor;stroke:none}
+    63→
+    64→/* ============ Backdrop ============ */
+    65→.grid-bg{
+    66→  position:fixed;inset:0;z-index:0;pointer-events:none;
+    67→  background-image:
+    68→    linear-gradient(var(--grid) 1px,transparent 1px),
+    69→    linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    70→  background-size:88px 88px;
+    71→}
+    72→.mark{position:fixed;width:15px;height:15px;z-index:35;pointer-events:none;color:var(--faint)}
+    73→.mark::before,.mark::after{content:"";position:absolute;background:currentColor}
+    74→.mark::before{left:7px;top:0;width:1px;height:100%}
+    75→.mark::after{top:7px;left:0;width:100%;height:1px}
+    76→.m-tl{top:70px;left:12px}.m-tr{top:70px;right:12px}
+    77→.m-bl{bottom:70px;left:12px}.m-br{bottom:70px;right:12px}
+    78→
+    79→/* ============ Chrome (header / footer) ============ */
+    80→.chrome{
+    81→  position:fixed;left:0;right:0;height:56px;z-index:40;
+    82→  display:flex;align-items:center;justify-content:space-between;
+    83→  padding:0 clamp(16px,2.5vw,32px);
+    84→  background:color-mix(in srgb,var(--bg) 82%,transparent);
+    85→  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    86→}
+    87→.chrome.top{top:0;border-bottom:1px solid var(--border)}
+    88→.chrome.bottom{bottom:0;border-top:1px solid var(--border)}
+    89→.brand{display:flex;align-items:center;gap:12px;min-width:0}
+    90→.brand-tri{width:16px;height:16px}
+    91→.brand-name{font-size:17px;font-weight:600;letter-spacing:-.01em;white-space:nowrap}
+    92→.brand-sep{width:1px;height:19px;background:var(--border-strong);margin:0 4px 0 6px}
+    93→.brand-sub{font:500 var(--fs-label) var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+    94→.chrome-actions{display:flex;gap:9px}
+    95→.icon-btn{
+    96→  width:40px;height:40px;display:grid;place-items:center;
+    97→  background:transparent;border:1px solid var(--border);border-radius:9px;
+    98→  color:var(--fg);cursor:pointer;
+    99→  transition:background .18s,color .18s,border-color .18s,transform .12s;
+   100→}
+   101→.icon-btn:hover{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+   102→.icon-btn:active{transform:scale(.93)}
+   103→.icon-btn .ic{width:18px;height:18px}
+   104→html[data-theme="dark"] #btnTheme .ic-moon{display:none}
+   105→html[data-theme="light"] #btnTheme .ic-sun{display:none}
+   106→.foot-title{
+   107→  font:500 var(--fs-label) var(--font-mono);letter-spacing:.18em;text-transform:uppercase;
+   108→  color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:34vw;
+   109→}
+   110→.foot-mid{display:flex;align-items:center;gap:12px;position:absolute;left:50%;transform:translateX(-50%)}
+   111→.live-dot{width:8px;height:8px;border-radius:50%;background:var(--fg);animation:pulse 2s ease-in-out infinite}
+   112→@keyframes pulse{50%{opacity:.25}}
+   113→.clock{font:500 var(--fs-label) var(--font-mono);letter-spacing:.1em;color:var(--muted);font-variant-numeric:tabular-nums}
+   114→.foot-right{display:flex;align-items:center;gap:12px}
+   115→.counter{font:500 var(--fs-label) var(--font-mono);letter-spacing:.14em;color:var(--fg);font-variant-numeric:tabular-nums}
+   116→.progress{position:fixed;left:0;bottom:0;height:3px;width:100%;z-index:45;pointer-events:none}
+   117→.progress-bar{height:100%;width:0;background:var(--fg);transition:width .5s cubic-bezier(.22,1,.36,1)}
+   118→
+   119→/* ============ Deck & slides ============ */
+   120→#deck{position:fixed;inset:0;z-index:1}
+   121→.slide{
+   122→  position:absolute;inset:0;display:none;flex-direction:column;
+   123→  padding:clamp(76px,8.5vh,100px) clamp(24px,5.5vw,84px) clamp(74px,8.5vh,94px);
+   124→  overflow-y:auto;overflow-x:hidden;
+   125→}
+   126→.slide.active{display:flex}
+   127→.s-head{flex:none}
+   128→.s-body{flex:1;margin-top:clamp(22px,3.6vh,44px);min-height:0}
+   129→
+   130→/* Reveal animations */
+   131→.rv{animation:rv-in .8s cubic-bezier(.16,1,.3,1) both;animation-delay:var(--d,0s)}
+   132→@keyframes rv-in{from{opacity:0;transform:translateY(26px)}}
+   133→.mask{display:block;overflow:hidden;padding-bottom:.12em}
+   134→.mask>span{display:block;transform:translateY(112%);animation:m-in .9s cubic-bezier(.16,1,.3,1) var(--d,.12s) both}
+   135→@keyframes m-in{to{transform:translateY(0)}}
+   136→
+   137→/* Typography */
+   138→.kick{
+   139→  display:flex;align-items:center;gap:12px;
+   140→  font:500 min(.8rem,.9vw,1.4vh) var(--font-mono);letter-spacing:.22em;text-transform:uppercase;
+   141→  color:var(--muted);margin-bottom:clamp(14px,2.4vh,24px);
+   142→}
+   143→.kick::before{content:"";width:9px;height:9px;background:var(--fg);flex:none}
+   144→.h2{font-size:var(--fs-h2);font-weight:600;letter-spacing:-.035em;line-height:1.05}
+   145→.lead{margin-top:clamp(12px,2vh,20px);font-size:var(--fs-lead);line-height:1.5;color:var(--muted);max-width:56ch}
+   146→
+   147→/* ============ Components ============ */
+   148→.split{display:grid;grid-template-columns:1.08fr 1fr;gap:clamp(30px,4.5vw,64px);align-items:start}
+   149→.stack-note{display:flex;flex-wrap:wrap;gap:12px;margin-top:clamp(20px,3vh,30px)}
+   150→.chip{
+   151→  display:inline-flex;align-items:center;gap:9px;
+   152→  font:500 var(--fs-label) var(--font-mono);letter-spacing:.15em;text-transform:uppercase;
+   153→  padding:10px 16px;border:1px solid var(--border-strong);border-radius:999px;
+   154→  color:var(--fg);background:var(--code-bg);
+   155→}
+   156→.chip .ic{width:13px;height:13px}
+   157→.chip-ghost{border-style:dashed;color:var(--muted)}
+   158→a.chip{text-decoration:none;color:inherit;transition:border-color .18s,background .18s}
+   159→a.chip:hover{border-color:var(--fg);background:var(--hover)}
+   160→.trust{margin-top:clamp(24px,4vh,36px);border-top:1px solid var(--border);padding-top:clamp(14px,2.2vh,20px)}
+   161→.trust-k{display:block;font:500 var(--fs-label) var(--font-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--faint);margin-bottom:10px}
+   162→.trust-n{font-size:var(--fs-h4);font-weight:600;letter-spacing:.02em}
+   163→
+   164→.rows{border-bottom:1px solid var(--border)}
+   165→.row{display:grid;grid-template-columns:56px 1fr;gap:clamp(16px,1.8vw,26px);padding:clamp(14px,2.2vh,20px) 0;border-top:1px solid var(--border);align-items:flex-start}
+   166→.row-ic{width:52px;height:52px;border:1px solid var(--border);border-radius:11px;display:grid;place-items:center;background:var(--code-bg)}
+   167→.row-ic .ic{width:23px;height:23px}
+   168→.row h4{font-size:var(--fs-h4);font-weight:600;letter-spacing:-.01em;margin-bottom:5px}
+   169→.row p{font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+   170→
+   171→/* ============ Presenter slide ============ */
+   172→.pres{display:grid;grid-template-columns:auto 1fr;gap:clamp(28px,4.5vw,64px);align-items:center}
+   173→.avatar{
+   174→  width:clamp(180px,20vw,260px);aspect-ratio:1;
+   175→  border:1px solid var(--border-strong);border-radius:22px;
+   176→  background:var(--code-bg);display:grid;place-items:center;
+   177→  overflow:hidden;position:relative;
+   178→}
+   179→.avatar::after{ /* inner crosshair, echoes the deck's marks */
+   180→  content:"";position:absolute;inset:14px;border:1px dashed var(--border);
+   181→  border-radius:14px;pointer-events:none;
+   182→}
+   183→.avatar-initials{font:600 clamp(3.6rem,6.5vw,6rem) var(--font-mono);letter-spacing:-.05em;color:var(--fg)}
+   184→.avatar img{width:100%;height:100%;object-fit:cover;display:block;position:relative;z-index:1}
+   185→.pres-name{font-size:min(4.2rem,5.9vw,8.6vh);font-weight:700;letter-spacing:-.04em;line-height:1}
+   186→.pres-role{margin-top:clamp(10px,1.8vh,16px);font-size:var(--fs-lead);line-height:1.4;color:var(--muted)}
+   187→.pres-role b{color:var(--fg);font-weight:600}
+   188→.pres-rows{margin-top:clamp(18px,3.2vh,30px)}
+   189→.pres-contact{display:flex;flex-wrap:wrap;gap:12px;margin-top:clamp(20px,3.4vh,32px)}
+   190→.pres-hello{
+   191→  display:flex;align-items:center;gap:12px;margin-top:clamp(16px,2.6vh,24px);
+   192→  font:400 var(--fs-body-s) var(--font-mono);color:var(--muted);
+   193→}
+   194→.pres-hello .ic{width:19px;height:19px;flex:none}
+   195→
+   196→/* React atom */
+   197→.react-side{display:flex;flex-direction:column;align-items:center;gap:clamp(18px,3vh,26px);padding-top:6px}
+   198→.react-logo{width:clamp(170px,19vw,235px);height:auto;color:var(--faint);transition:color .4s}
+   199→.react-side:hover .react-logo{color:var(--muted)}
+   200→.react-logo ellipse{fill:none;stroke:currentColor;stroke-width:6}
+   201→.react-logo .core{fill:var(--fg);stroke:none}
+   202→.react-spin{transform-box:fill-box;transform-origin:center;animation:spin 30s linear infinite}
+   203→@keyframes spin{to{transform:rotate(360deg)}}
+   204→.react-cap{text-align:center}
+   205→.cap-t{display:block;font-size:var(--fs-h4);font-weight:600;margin-bottom:7px}
+   206→.cap-s{font:400 var(--fs-label) var(--font-mono);letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+   207→
+   208→/* Quote slide */
+   209→.quote{
+   210→  font-size:min(2rem,2.9vw,4.2vh);font-weight:500;letter-spacing:-.02em;line-height:1.4;
+   211→  border-left:4px solid var(--fg);padding-left:clamp(20px,2.5vw,32px);max-width:54ch;
+   212→}
+   213→.defs{margin-top:clamp(20px,4vh,40px);border-bottom:1px solid var(--border)}
+   214→.def{display:grid;grid-template-columns:56px minmax(190px,330px) 1fr;gap:clamp(16px,1.8vw,26px);align-items:start;padding:clamp(14px,2.2vh,20px) 0;border-top:1px solid var(--border)}
+   215→.def-ic{width:52px;height:52px;border:1px solid var(--border);border-radius:11px;display:grid;place-items:center;background:var(--code-bg)}
+   216→.def-ic .ic{width:23px;height:23px}
+   217→.def h4{font-size:var(--fs-h4);font-weight:600;padding-top:4px}
+   218→.def p{font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+   219→.foot-note{display:flex;gap:14px;align-items:flex-start;margin-top:clamp(18px,3vh,28px);font:400 var(--fs-body-s) var(--font-mono);color:var(--muted)}
+   220→.foot-note .ic{width:18px;height:18px;margin-top:.35em}
+   221→
+   222→/* Flow diagrams (CSR dashed = empty shell / SSR solid inverted = populated) */
+   223→.flow{display:flex;align-items:stretch}
+   224→.step{flex:1;border:2px dashed var(--border-strong);border-radius:14px;padding:clamp(16px,2.6vh,24px);position:relative}
+   225→.step .n{position:absolute;top:14px;right:16px;font:500 var(--fs-label) var(--font-mono);color:var(--faint)}
+   226→.step>.ic{width:26px;height:26px;margin-bottom:14px}
+   227→.step h4{font-size:var(--fs-h4);font-weight:600;margin-bottom:6px;letter-spacing:-.01em}
+   228→.step p{font-size:var(--fs-body-s);line-height:1.4;color:var(--muted)}
+   229→.flow-sep{flex:none;width:clamp(30px,3vw,44px);display:grid;place-items:center;color:var(--faint)}
+   230→.flow-sep .ic{width:19px;height:19px}
+   231→.flow.solid .step{border-style:solid;border-color:var(--inv-bg);background:var(--inv-bg);color:var(--inv-fg)}
+   232→.flow.solid .step p{color:var(--inv-fg-soft)}
+   233→.flow.solid .step .n{color:var(--inv-fg-soft)}
+   234→.flow.solid .flow-sep{color:var(--fg)}
+   235→
+   236→/* Pros / cons */
+   237→.pc{margin-top:clamp(18px,3.4vh,34px);display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--border);border-radius:14px;overflow:hidden}
+   238→.pc>div{padding:clamp(14px,2.2vh,20px) clamp(16px,2vw,24px);display:flex;gap:14px;align-items:flex-start}
+   239→.pc .ic{width:19px;height:19px;margin-top:.3em}
+   240→.pc .pros{color:var(--fg)}
+   241→.pc .cons{color:var(--muted);border-left:1px solid var(--border)}
+   242→.pc .tag{display:block;font:600 var(--fs-label) var(--font-mono);letter-spacing:.2em;text-transform:uppercase;margin-bottom:6px}
+   243→.pc p{font-size:var(--fs-body-s);line-height:1.45}
+   244→
+   245→/* Comparison table */
+   246→.vs-wrap{border:1px solid var(--border);border-radius:16px;overflow:hidden;max-width:1100px}
+   247→.vs{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;min-width:760px}
+   248→.vs th,.vs td{border-bottom:1px solid var(--border);padding:clamp(12px,2vh,18px) clamp(16px,2vw,24px);text-align:left;vertical-align:top}
+   249→.vs tr:last-child td{border-bottom:0}
+   250→.vs thead th{border-bottom:1px solid var(--border-strong);font:600 min(.85rem,.95vw,1.5vh) var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
+   251→.vs th.corner{width:17%}
+   252→.vs td:first-child{font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);padding-top:.6em}
+   253→.vs td{font-size:var(--fs-body);line-height:1.4}
+   254→.vs .nx{background:color-mix(in srgb,var(--fg) 5%,transparent);border-left:1px solid var(--border)}
+   255→.vs thead .nx{background:var(--inv-bg);color:var(--inv-fg)}
+   256→.cl{display:flex;gap:12px;align-items:flex-start}
+   257→.cl .ic{width:19px;height:19px;margin-top:.22em;flex:none}
+   258→.cl-x .ic{color:var(--faint)}
+   259→.vs .cl-x{color:var(--muted)}
+   260→.cl-ok .ic{color:var(--fg)}
+   261→
+   262→/* Numbered feature rows */
+   263→.feats{border-bottom:1px solid var(--border)}
+   264→.feat{display:grid;grid-template-columns:clamp(60px,7vw,96px) minmax(230px,370px) 1fr;gap:clamp(16px,2vw,28px);align-items:baseline;padding:clamp(13px,2.1vh,19px) 0;border-top:1px solid var(--border)}
+   265→.feat .fn{font:500 min(1rem,1.1vw,1.8vh) var(--font-mono);letter-spacing:.12em;color:var(--faint)}
+   266→.feat h4{font-size:var(--fs-h4);font-weight:600;letter-spacing:-.015em}
+   267→.feat p{font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+   268→
+   269→/* Code panels */
+   270→.code{border:1px solid var(--border);border-radius:14px;background:var(--code-bg);overflow:hidden}
+   271→.code-hi{border-color:var(--fg)}
+   272→.code-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--fg)}
+   273→.code-tag{color:var(--faint)}
+   274→.code pre{padding:clamp(14px,2.2vh,20px) clamp(16px,2vw,22px);overflow-x:auto;font:400 var(--fs-code) var(--font-mono);line-height:1.65;color:var(--muted)}
+   275→.code .d{color:var(--fg);font-weight:600}
+   276→.code .f{color:var(--fg-soft)}
+   277→.code .cm{color:var(--faint)}
+   278→.tk-k{color:var(--fg);font-weight:600}
+   279→.tk-str{color:var(--muted);text-decoration:underline;text-decoration-color:var(--faint);text-underline-offset:4px;text-decoration-thickness:1px}
+   280→.tk-tag{color:var(--fg-soft)}
+   281→
+   282→/* Routing variants */
+   283→.rout{display:grid;grid-template-columns:minmax(0,1.12fr) 1fr auto;gap:clamp(16px,2.4vw,30px);align-items:center;padding:clamp(15px,2.4vh,22px) 0;border-top:1px solid var(--border)}
+   284→.rout:last-child{border-bottom:1px solid var(--border)}
+   285→.rout-pat{display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+   286→.pat{font:500 min(1.5rem,1.6vw,2.6vh) var(--font-mono);color:var(--fg);word-break:break-all}
+   287→.pat-tag{font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);border:1px dashed var(--border-strong);padding:6px 12px;border-radius:999px}
+   288→.rout h4{font-size:var(--fs-h4);font-weight:600;margin-bottom:5px}
+   289→.rout p{font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+   290→.url-chip{font:500 min(1.25rem,1.35vw,2.2vh) var(--font-mono);padding:10px 15px;border:1px solid var(--border-strong);border-radius:9px;background:var(--code-bg);white-space:nowrap}
+   291→
+   292→/* Server / client boundary */
+   293→.boundary{display:grid;grid-template-columns:1.6fr 1fr;border:1px solid var(--border);border-radius:16px;overflow:hidden}
+   294→.b-zone{padding:clamp(16px,2.6vh,24px) clamp(18px,2.4vw,28px)}
+   295→.b-server{background:color-mix(in srgb,var(--fg) 6%,transparent)}
+   296→.b-client{border-left:2px dashed var(--border-strong)}
+   297→.b-zone h5{font:600 var(--fs-label) var(--font-mono);letter-spacing:.22em;text-transform:uppercase;margin-bottom:15px;color:var(--muted)}
+   298→.b-server h5{color:var(--fg)}
+   299→.b-list{display:flex;flex-wrap:wrap;gap:10px}
+   300→.b-item{font:400 min(1.25rem,1.35vw,2.2vh) var(--font-mono);padding:9px 15px;border:1px solid var(--border);border-radius:9px;background:var(--bg)}
+   301→.b-inv{background:var(--inv-bg);color:var(--inv-fg);border-color:var(--inv-bg);font-weight:600}
+   302→
+   303→/* Data fetching */
+   304→.df-grid{display:grid;grid-template-columns:1fr 1fr;gap:clamp(22px,3vw,34px);align-items:start}
+   305→.df-cap{display:flex;gap:12px;align-items:flex-start;margin-top:15px;font:400 min(1.25rem,1.35vw,2.2vh) var(--font-mono);color:var(--muted)}
+   306→.df-cap .ic{width:17px;height:17px;margin-top:.32em;flex:none}
+   307→
+   308→/* Terminal */
+   309→.term{border:1px solid var(--border-strong);border-radius:14px;background:var(--code-bg);overflow:hidden;max-width:880px}
+   310→.term-bar{display:flex;align-items:center;gap:14px;padding:13px 18px;border-bottom:1px solid var(--border)}
+   311→.term-dots{display:flex;gap:7px}
+   312→.term-dots i{width:13px;height:13px;border-radius:50%;border:1px solid var(--border-strong)}
+   313→.term-title{font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-left:auto}
+   314→.term-body{padding:clamp(14px,2.4vh,22px) clamp(16px,2.2vw,24px);font:400 var(--fs-code) var(--font-mono);line-height:1.9}
+   315→.tl{white-space:pre-wrap;word-break:break-word}
+   316→.tl.out{opacity:0;transform:translateY(4px);transition:opacity .3s,transform .3s}
+   317→.tl.out.show{opacity:1;transform:none}
+   318→.prompt{color:var(--muted)}
+   319→.cmd{color:var(--fg);font-weight:500}
+   320→.tl .a{color:var(--fg);font-weight:600}
+   321→.tl .dim{color:var(--faint)}
+   322→.tl .ic{display:inline-block;vertical-align:-2px;width:14px;height:14px}
+   323→.caret{display:inline-block;width:.55ch;height:1.05em;background:var(--fg);vertical-align:-.12em;margin-left:2px;animation:blink 1.1s steps(1) infinite}
+   324→@keyframes blink{50%{opacity:0}}
+   325→.copy-btn{
+   326→  display:inline-flex;align-items:center;gap:16px;margin-top:clamp(18px,3vh,26px);
+   327→  padding:14px 22px;border:1px solid var(--border-strong);border-radius:12px;
+   328→  background:var(--code-bg);color:var(--fg);cursor:pointer;text-align:left;
+   329→  transition:border-color .18s,background .18s,transform .12s;
+   330→}
+   331→.copy-btn:hover{border-color:var(--fg)}
+   332→.copy-btn:active{transform:scale(.98)}
+   333→.copy-btn .ic{width:19px;height:19px}
+   334→.copy-btn .c-cmd{font:500 min(1.5rem,1.6vw,2.6vh) var(--font-mono)}
+   335→.copy-btn .c-hint{font:500 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+   336→
+   337→/* Demo timeline */
+   338→.phases{display:grid;grid-template-columns:repeat(5,1fr);gap:clamp(20px,2.6vw,30px);border-top:1px solid var(--border-strong);padding-top:0}
+   339→.phase{display:flex;flex-direction:column;align-items:flex-start}
+   340→.pn{
+   341→  width:clamp(48px,5.4vh,58px);height:clamp(48px,5.4vh,58px);display:grid;place-items:center;margin-top:calc(clamp(48px,5.4vh,58px) / -2);
+   342→  border:1px solid var(--border-strong);background:var(--bg);border-radius:12px;
+   343→  font:600 min(1.15rem,1.25vw,2vh) var(--font-mono);
+   344→}
+   345→.phase h4{margin-top:clamp(14px,2.2vh,18px);font-size:var(--fs-h4);font-weight:600;letter-spacing:-.01em}
+   346→.phase p{margin-top:8px;font-size:var(--fs-body-s);line-height:1.45;color:var(--muted)}
+   347→.phase .chip{margin-top:clamp(12px,1.8vh,16px)}
+   348→.phase code{font:500 min(1.15rem,1.25vw,2vh) var(--font-mono);background:color-mix(in srgb,var(--fg) 8%,transparent);padding:3px 8px;border-radius:6px}
+   349→
+   350→/* Title slide */
+   351→.s-title,.s-end{align-items:center;justify-content:center;text-align:center}
+   352→.title-wrap,.end-wrap{display:flex;flex-direction:column;align-items:center;max-width:min(94vw,1200px)}
+   353→.title-tri{width:clamp(34px,4.5vw,52px);height:auto;margin-bottom:clamp(20px,3.4vh,34px)}
+   354→.title-badges{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-bottom:clamp(18px,3.4vh,34px)}
+   355→.title{font-size:var(--fs-display);font-weight:700;letter-spacing:-.045em;line-height:.98}
+   356→.t-ol{position:relative;display:inline-block}
+   357→.ol-o{-webkit-text-stroke:3px var(--fg);color:transparent}
+   358→.ol-f{position:absolute;inset:0;color:var(--fg);clip-path:inset(-12% 100% -12% 0)}
+   359→.slide.active .ol-f{animation:wipe 1s cubic-bezier(.76,0,.24,1) 1.05s both}
+   360→@keyframes wipe{to{clip-path:inset(-12% -12% -12% -12%)}}
+   361→.t-caret{display:inline-block;width:.085em;height:.66em;background:var(--fg);margin-left:.07em;animation:blink 1.1s steps(1) infinite}
+   362→.title-sub{margin-top:clamp(14px,2.4vh,24px);font-size:min(1.7rem,2.4vw,3.4vh);color:var(--muted)}
+   363→.title-hint{display:flex;gap:clamp(16px,3vw,34px);flex-wrap:wrap;justify-content:center;margin-top:clamp(26px,6vh,58px);font:400 min(.85rem,.95vw,1.5vh) var(--font-mono);color:var(--muted)}
+   364→.title-hint span{display:flex;align-items:center;gap:9px}
+   365→kbd{font:500 min(.75rem,.8vw,1.3vh) var(--font-mono);border:1px solid var(--border-strong);border-bottom-width:2px;border-radius:6px;padding:4px 8px;color:var(--fg);background:var(--code-bg)}
+   366→
+   367→/* End slide */
+   368→.end-tri{width:clamp(32px,4vw,48px);height:auto;margin-bottom:clamp(20px,3.2vh,32px)}
+   369→.s-end .kick{justify-content:center}
+   370→.end-title{font-size:var(--fs-display);font-weight:700;letter-spacing:-.045em;line-height:.98}
+   371→.end-sub{margin-top:clamp(14px,2.4vh,24px);font-size:min(1.7rem,2.3vw,3.3vh);color:var(--muted)}
+   372→.end-actions{margin-top:clamp(24px,5vh,44px)}
+   373→.btn{
+   374→  display:inline-flex;align-items:center;gap:13px;padding:16px 28px;
+   375→  border:1px solid var(--fg);background:var(--fg);color:var(--bg);
+   376→  font:500 min(.85rem,.95vw,1.5vh) var(--font-mono);letter-spacing:.1em;text-transform:uppercase;
+   377→  border-radius:999px;cursor:pointer;transition:opacity .18s,transform .15s;
+   378→}
+   379→.btn:hover{opacity:.82}
+   380→.btn:active{transform:scale(.97)}
+   381→.btn .ic{width:17px;height:17px}
+   382→.end-credit{margin-top:clamp(28px,5.6vh,52px);font:400 min(.7rem,.78vw,1.25vh) var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--faint);max-width:76ch;line-height:1.8}
+   383→
+   384→/* Overview */
+   385→.ov{
+   386→  position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;
+   387→  padding:clamp(64px,9vh,84px) clamp(24px,7vw,110px) clamp(64px,9vh,84px);overflow-y:auto;
+   388→  background:color-mix(in srgb,var(--bg) 93%,transparent);
+   389→  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+   390→}
+   391→.ov[hidden]{display:none}
+   392→.ov-head{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:clamp(16px,2.6vh,26px);flex:none}
+   393→.ov-title{font-size:min(2rem,3vw,4vh);font-weight:600;letter-spacing:-.03em}
+   394→.ov-hint{font:400 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+   395→.ov-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 clamp(28px,4vw,64px)}
+   396→.ov-item{
+   397→  display:grid;grid-template-columns:56px 1fr auto;gap:16px;align-items:center;
+   398→  padding:13px 10px;border:none;border-top:1px solid var(--border);
+   399→  background:none;color:var(--fg);text-align:left;cursor:pointer;width:100%;
+   400→}
+   401→.ov-item:hover{background:var(--hover)}
+   402→.ov-n{width:42px;height:42px;border:1px solid var(--border-strong);border-radius:10px;display:grid;place-items:center;font:500 min(.85rem,.95vw,1.5vh) var(--font-mono);color:var(--muted)}
+   403→.ov-item.cur .ov-n{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+   404→.ov-t{font-size:min(1.15rem,1.3vw,2.1vh);font-weight:600;letter-spacing:-.01em}
+   405→.ov-k{font:400 var(--fs-label) var(--font-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+   406→
+   407→/* Toast */
+   408→.toast{
+   409→  position:fixed;bottom:80px;left:50%;transform:translate(-50%,12px);
+   410→  background:var(--inv-bg);color:var(--inv-fg);
+   411→  font:500 min(.85rem,.95vw,1.5vh) var(--font-mono);letter-spacing:.06em;
+   412→  padding:13px 22px;border-radius:999px;opacity:0;pointer-events:none;
+   413→  transition:opacity .25s,transform .25s;z-index:80;max-width:88vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+   414→}
+   415→.toast.show{opacity:1;transform:translate(-50%,0)}
+   416→
+   417→/* ============ Responsive ============ */
+   418→@media (max-width:980px){
+   419→  .split{grid-template-columns:1fr}
+   420→  .react-side{order:2;flex-direction:row;justify-content:flex-start;gap:26px}
+   421→  .react-logo{width:130px}
+   422→  .pres{grid-template-columns:1fr;justify-items:center;text-align:center;gap:26px}
+   423→  .avatar{width:180px}
+   424→  .pres-contact{justify-content:center}
+   425→  .flow{flex-direction:column}
+   426→  .flow-sep{width:auto;height:28px}
+   427→  .flow-sep .ic{transform:rotate(90deg)}
+   428→  .feat{grid-template-columns:64px 1fr}
+   429→  .feat p{grid-column:2}
+   430→  .rout{grid-template-columns:1fr;gap:12px}
+   431→  .df-grid{grid-template-columns:1fr}
+   432→  .phases{grid-template-columns:1fr;border-top:0;gap:0}
+   433→  .phase{display:grid;grid-template-columns:52px 1fr;column-gap:18px;align-items:start;padding:16px 0;border-top:1px solid var(--border)}
+   434→  .pn{margin:0;width:48px;height:48px}
+   435→  .phase h4{margin-top:2px}
+   436→  .phase p,.phase .chip{grid-column:2}
+   437→  .phase .chip{margin-top:12px;align-self:flex-start}
+   438→  .ov-grid{grid-template-columns:1fr}
+   439→}
+   440→@media (max-width:720px){
+   441→  .brand-sub,.brand-sep,.foot-title,.foot-mid{display:none}
+   442→  .vs-wrap{overflow-x:auto}
+   443→  .pc{grid-template-columns:1fr}
+   444→  .pc .cons{border-left:0;border-top:1px solid var(--border)}
+   445→  :root{--fs-h2:min(2.2rem,8vw,7vh);--fs-body:min(1.15rem,3.4vw,2.4vh);--fs-body-s:min(1.05rem,3.1vw,2.2vh);--fs-h4:min(1.2rem,3.6vw,2.6vh);--fs-lead:min(1.1rem,3.4vw,2.8vh);--fs-code:min(1rem,2.9vw,2.1vh)}
+   446→  .pres-name{font-size:min(2.6rem,9vw,6.5vh)}
+   447→}
+   448→@media (prefers-reduced-motion:reduce){
+   449→  *,*::before,*::after{animation-duration:.001s!important;animation-delay:0s!important}
+   450→}
+   451→</style>
+   452→</head>
+   453→<body>
+   454→
+   455→<!-- ============ Icon sprite ============ -->
+   456→<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+   457→  <symbol id="i-tri" viewBox="0 0 24 24"><path d="M12 3 22 20H2Z"/></symbol>
+   458→  <symbol id="i-arrow-r" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+   459→  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5L20 7"/></symbol>
+   460→  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+   461→  <symbol id="i-chev-l" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+   462→  <symbol id="i-chev-r" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+   463→  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+   464→  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 12.5A8.5 8.5 0 0 1 11.5 4a7 7 0 1 0 8.5 8.5Z"/></symbol>
+   465→  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></symbol>
+   466→  <symbol id="i-max" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/></symbol>
+   467→  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M2.5 12h19M12 2.5a14.5 14.5 0 0 1 0 19 14.5 14.5 0 0 1 0-19Z"/></symbol>
+   468→  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Zm0 0v6h6"/></symbol>
+   469→  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 19h16"/></symbol>
+   470→  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3M19 9h3m-3 6h3"/></symbol>
+   471→  <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3.5" width="18" height="7" rx="1.5"/><rect x="3" y="13.5" width="18" height="7" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></symbol>
+   472→  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8 21h8m-4-4.5V21"/></symbol>
+   473→  <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 3a7 7 0 0 1 7 7c0 2-1 3.8-2.9 5.4-1.6 1.3-3.2 3.6-4.1 5.6-.9-2-2.5-4.3-4.1-5.6C6 13.8 5 12 5 10a7 7 0 0 1 7-7Z"/></symbol>
+   474→  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.5-4.5"/></symbol>
+   475→  <symbol id="i-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="8.5" ry="3"/><path d="M3.5 5.5v13c0 1.7 3.8 3 8.5 3s8.5-1.3 8.5-3v-13M3.5 12c0 1.7 3.8 3 8.5 3s8.5-1.3 8.5-3"/></symbol>
+   476→  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2.5 9.5 5L12 12.5l-9.5-5 9.5-5Z"/><path d="m2.5 12.5 9.5 5 9.5-5M2.5 17l9.5 5 9.5-5"/></symbol>
+   477→  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.5 6.5a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-8 7.9l-6.9 7a2.1 2.1 0 0 1-3-3l7-6.9a6 6 0 0 1 7.9-8l-3.8 3.8Z"/></symbol>
+   478→  <symbol id="i-code" viewBox="0 0 24 24"><path d="m15.5 18 6-6-6-6m-7 0-6 6 6 6"/></symbol>
+   479→  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/></symbol>
+   480→  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 7V2m6 5V2M7.5 7h9v5a4.5 4.5 0 0 1-9 0V7ZM12 16.5V22"/></symbol>
+   481→  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+   482→  <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8.2a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4a2 2 0 0 0-1 1.7v7.6a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></symbol>
+   483→  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 18.5H5A1.5 1.5 0 0 1 3.5 17V6.5Z"/></symbol>
+   484→  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-5-6-5M12 19h8"/></symbol>
+   485→  <symbol id="i-pointer" viewBox="0 0 24 24"><path d="m3 3 7.1 17 2.5-7.4L20 10.1 3 3Z"/></symbol>
+   486→  <symbol id="i-circle-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8.5 12 2.5 2.5L16 9.5"/></symbol>
+   487→  <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></symbol>
+   488→  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+   489→  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+   490→  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
+   491→  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 10a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
+   492→  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></symbol>
+   493→  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-5.3-7-11a7 7 0 0 1 14 0c0 5.7-7 11-7 11Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+   494→  <symbol id="i-grad" viewBox="0 0 24 24"><path d="m2.5 9 9.5-4.5L21.5 9 12 13.5 2.5 9Z"/><path d="M6 11v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5M21.5 9v5"/></symbol>
+   495→</svg>
+   496→
+   497→<div class="grid-bg" aria-hidden="true"></div>
+   498→<span class="mark m-tl" aria-hidden="true"></span><span class="mark m-tr" aria-hidden="true"></span>
+   499→<span class="mark m-bl" aria-hidden="true"></span><span class="mark m-br" aria-hidden="true"></span>
+   500→
+   501→<!-- ============ Chrome ============ -->
+   502→<header class="chrome top">
+   503→  <div class="brand">
+   504→    <svg class="ic ic-fill brand-tri"><use href="#i-tri"/></svg>
+   505→    <span class="brand-name">Next.js Unlocked</span>
+   506→    <span class="brand-sep"></span>
+   507→    <span class="brand-sub">Part 1 / 3 — Concepts</span>
+   508→  </div>
+   509→  <div class="chrome-actions">
+   510→    <button class="icon-btn" id="btnTheme" title="Toggle theme (T)" aria-label="Toggle theme">
+   511→      <svg class="ic ic-sun"><use href="#i-sun"/></svg>
+   512→      <svg class="ic ic-moon"><use href="#i-moon"/></svg>
+   513→    </button>
+   514→    <button class="icon-btn" id="btnOverview" title="Overview (O)" aria-label="Slide overview"><svg class="ic"><use href="#i-grid"/></svg></button>
+   515→    <button class="icon-btn" id="btnFull" title="Fullscreen (F)" aria-label="Fullscreen"><svg class="ic"><use href="#i-max"/></svg></button>
+   516→  </div>
+   517→</header>
+   518→
+   519→<!-- ============ Deck ============ -->
+   520→<main id="deck">
+   521→
+   522→  <!-- 01 · Title -->
+   523→  <section class="slide s-title active" data-title="Next.js Unlocked" data-kick="Opening">
+   524→    <div class="title-wrap">
+   525→      <svg class="ic ic-fill title-tri rv" style="--d:.05s"><use href="#i-tri"/></svg>
+   526→      <div class="title-badges rv" style="--d:.15s">
+   527→        <span class="chip">Microsoft Learn Student Ambassadors</span>
+   528→        <span class="chip chip-ghost">Part 1 of 3 — Concepts</span>
+   529→      </div>
+   530→      <h1 class="title rv" style="--d:.25s">Next.js <span class="t-ol"><span class="ol-o" aria-hidden="true">Unlocked</span><span class="ol-f">Unlocked</span></span><span class="t-caret" aria-hidden="true"></span></h1>
+   531→      <p class="title-sub rv" style="--d:.45s">From React library to full-stack framework.</p>
+   532→      <div class="title-hint rv" style="--d:.65s">
+   533→        <span><kbd>←</kbd><kbd>→</kbd> navigate</span>
+   534→        <span><kbd>T</kbd> theme</span>
+   535→        <span><kbd>F</kbd> fullscreen</span>
+   536→        <span><kbd>O</kbd> overview</span>
+   537→      </div>
+   538→    </div>
+   539→  </section>
+   540→
+   541→  <!-- 02 · Presenter -->
+   542→  <section class="slide" data-title="Your Presenter" data-kick="Your Host">
+   543→    <header class="s-head">
+   544→      <p class="kick rv">Your Host</p>
+   545→      <h2 class="h2 mask" style="--d:.12s"><span>Nice to meet you.</span></h2>
+   546→    </header>
+   547→    <div class="s-body pres">
+   548→      <!--
+   549→        ✏️ EDIT — AVATAR:
+   550→        Replace the <span class="avatar-initials">YN</span> below with your own initials,
+   551→        OR swap it for a real photo:
+   552→        <img src="your-photo.jpg" alt="Photo of Your Name">
+   553→      -->
+   554→      <div class="avatar rv" style="--d:.22s">
+   555→        <span class="avatar-initials">YN</span>
+   556→      </div>
+   557→      <div class="pres-right">
+   558→        <!-- ✏️ EDIT — YOUR NAME -->
+   559→        <h3 class="pres-name mask" style="--d:.2s"><span>Your Name</span></h3>
+   560→        <!-- ✏️ EDIT — YOUR ROLE / TITLE (keep it one line) -->
+   561→        <p class="pres-role rv" style="--d:.34s">Microsoft Learn Student Ambassador · <b>Web &amp; Cloud enthusiast</b></p>
+   562→
+   563→        <div class="rows pres-rows">
+   564→          <!-- ✏️ EDIT — FACT ROW 1: what you study / where -->
+   565→          <div class="row rv" style="--d:.44s">
+   566→            <span class="row-ic"><svg class="ic"><use href="#i-grad"/></svg></span>
+   567→            <div><h4>Studying Computer Science</h4><p>Your University, Year 3 — focused on web engineering and developer communities.</p></div>
+   568→          </div>
+   569→          <!-- ✏️ EDIT — FACT ROW 2: your experience with the topic -->
+   570→          <div class="row rv" style="--d:.54s">
+   571→            <span class="row-ic"><svg class="ic"><use href="#i-code"/></svg></span>
+   572→            <div><h4>Building with React &amp; Next.js</h4><p>Side projects, hackathon wins, and shipping full-stack apps to real users.</p></div>
+   573→          </div>
+   574→          <!-- ✏️ EDIT — FACT ROW 3: location / community (delete this row if not needed) -->
+   575→          <div class="row rv" style="--d:.64s">
+   576→            <span class="row-ic"><svg class="ic"><use href="#i-pin"/></svg></span>
+   577→            <div><h4>Based in Your City</h4><p>Hosting workshops like this one — and always up for a chat about the web.</p></div>
+   578→          </div>
+   579→        </div>
+   580→
+   581→        <!-- ✏️ EDIT — CONTACT: update href links + labels -->
+   582→        <div class="pres-contact rv" style="--d:.78s">
+   583→          <a class="chip" href="https://github.com/yourhandle" target="_blank" rel="noopener"><svg class="ic"><use href="#i-at"/></svg> github.com/yourhandle</a>
+   584→          <a class="chip" href="https://linkedin.com/in/yourhandle" target="_blank" rel="noopener"><svg class="ic"><use href="#i-link"/></svg> linkedin.com/in/yourhandle</a>
+   585→          <a class="chip" href="mailto:your@email.dev"><svg class="ic"><use href="#i-mail"/></svg> your@email.dev</a>
+   586→        </div>
+   587→
+   588→        <p class="pres-hello rv" style="--d:.9s"><svg class="ic"><use href="#i-terminal"/></svg> $ echo "Ask me anything — before, during, or after the talk."</p>
+   589→      </div>
+   590→    </div>
+   591→  </section>
+   592→
+   593→  <!-- 03 · What is Next.js -->
+   594→  <section class="slide" data-title="What is Next.js?" data-kick="Foundation">
+   595→    <header class="s-head">
+   596→      <p class="kick rv">Foundation — 01</p>
+   597→      <h2 class="h2 mask" style="--d:.12s"><span>The React framework<br>for the web.</span></h2>
+   598→    </header>
+   599→    <div class="s-body split">
+   600→      <div class="split-l">
+   601→        <p class="lead rv" style="--d:.28s">A full-stack React framework, built and maintained by Vercel — everything you need ships in the box. And every bit of your existing React knowledge still applies.</p>
+   602→        <div class="stack-note rv" style="--d:.42s">
+   603→          <span class="chip"><svg class="ic ic-fill"><use href="#i-tri"/></svg> Built on React</span>
+   604→          <span class="chip chip-ghost">Maintained by Vercel</span>
+   605→        </div>
+   606→        <div class="trust rv" style="--d:.55s">
+   607→          <span class="trust-k">Powering production at</span>
+   608→          <span class="trust-n">Netflix · TikTok · Twitch</span>
+   609→        </div>
+   610→      </div>
+   611→      <div class="split-r rows">
+   612→        <div class="row rv" style="--d:.3s">
+   613→          <span class="row-ic"><svg class="ic"><use href="#i-circle-check"/></svg></span>
+   614→          <div><h4>Production-Ready</h4><p>Battle-tested at scale — the default choice for shipping React to the real world.</p></div>
+   615→        </div>
+   616→        <div class="row rv" style="--d:.42s">
+   617→          <span class="row-ic"><svg class="ic"><use href="#i-layers"/></svg></span>
+   618→          <div><h4>Full-Stack</h4><p>Routing, rendering, and API routes — front-end and back-end living in one project.</p></div>
+   619→        </div>
+   620→        <div class="row rv" style="--d:.54s">
+   621→          <span class="row-ic"><svg class="ic"><use href="#i-wrench"/></svg></span>
+   622→          <div><h4>Opinionated</h4><p>Sensible conventions decided for you — less time configuring, more time building.</p></div>
+   623→        </div>
+   624→      </div>
+   625→    </div>
+   626→  </section>
+   627→
+   628→  <!-- 04 · React baseline -->
+   629→  <section class="slide" data-title="Did you know about React?" data-kick="React">
+   630→    <header class="s-head">
+   631→      <p class="kick rv">The Baseline</p>
+   632→      <h2 class="h2 mask" style="--d:.12s"><span>Did you know about React?</span></h2>
+   633→      <p class="lead rv" style="--d:.3s">React is a UI library — not a full framework. It's powerful, but intentionally minimal.</p>
+   634→    </header>
+   635→    <div class="s-body split">
+   636→      <div class="split-l react-side rv" style="--d:.22s">
+   637→        <svg class="react-logo" viewBox="0 0 220 220" aria-hidden="true">
+   638→          <g class="react-spin">
+   639→            <ellipse cx="110" cy="110" rx="92" ry="34"/>
+   640→            <ellipse cx="110" cy="110" rx="92" ry="34" transform="rotate(60 110 110)"/>
+   641→            <ellipse cx="110" cy="110" rx="92" ry="34" transform="rotate(120 110 110)"/>
+   642→          </g>
+   643→          <circle class="core" cx="110" cy="110" r="9"/>
+   644→        </svg>
+   645→        <div class="react-cap">
+   646→          <span class="cap-t">React</span>
+   647→          <span class="cap-s">A library for the View layer</span>
+   648→        </div>
+   649→      </div>
+   650→      <div class="split-r rows">
+   651→        <div class="row rv" style="--d:.28s">
+   652→          <span class="row-ic"><svg class="ic"><use href="#i-code"/></svg></span>
+   653→          <div><h4>Component-Based</h4><p>Build UIs from small, reusable, declarative pieces.</p></div>
+   654→        </div>
+   655→        <div class="row rv" style="--d:.38s">
+   656→          <span class="row-ic"><svg class="ic"><use href="#i-swap"/></svg></span>
+   657→          <div><h4>No Built-in Routing</h4><p>You pick and install your own router — React Router, TanStack, and friends.</p></div>
+   658→        </div>
+   659→        <div class="row rv" style="--d:.48s">
+   660→          <span class="row-ic"><svg class="ic"><use href="#i-search"/></svg></span>
+   661→          <div><h4>SEO Challenges</h4><p>Client-side rendering makes search indexing harder.</p></div>
+   662→        </div>
+   663→        <div class="row rv" style="--d:.58s">
+   664→          <span class="row-ic"><svg class="ic"><use href="#i-plug"/></svg></span>
+   665→          <div><h4>External Tools Required</h4><p>Routing and data fetching must be wired up by you.</p></div>
+   666→        </div>
+   667→      </div>
+   668→    </div>
+   669→  </section>
+   670→
+   671→  <!-- 05 · Library vs Framework -->
+   672→  <section class="slide" data-title="Library vs. Framework" data-kick="Concepts">
+   673→    <header class="s-head">
+   674→      <p class="kick rv">The Key Insight</p>
+   675→      <h2 class="h2 mask" style="--d:.12s"><span>Library vs. Framework</span></h2>
+   676→    </header>
+   677→    <div class="s-body">
+   678→      <blockquote class="quote mask" style="--d:.22s">
+   679→        <span>“With a library, you're the architect. With a framework, the structure is already designed — you fill in the details.”</span>
+   680→      </blockquote>
+   681→      <div class="defs">
+   682→        <div class="def rv" style="--d:.38s">
+   683→          <span class="def-ic"><svg class="ic"><use href="#i-box"/></svg></span>
+   684→          <h4>The Foundation</h4>
+   685→          <p>Provides a predefined structure for your application.</p>
+   686→        </div>
+   687→        <div class="def rv" style="--d:.48s">
+   688→          <span class="def-ic"><svg class="ic"><use href="#i-wrench"/></svg></span>
+   689→          <h4>Built-in Tools</h4>
+   690→          <p>Routing and bundling are included, out of the box.</p>
+   691→        </div>
+   692→        <div class="def rv" style="--d:.58s">
+   693→          <span class="def-ic"><svg class="ic"><use href="#i-repeat"/></svg></span>
+   694→          <h4>Inversion of Control</h4>
+   695→          <p>The framework calls your code — not the other way around.</p>
+   696→        </div>
+   697→      </div>
+   698→      <p class="foot-note rv" style="--d:.72s"><svg class="ic"><use href="#i-arrow-r"/></svg>Next.js adds conventions on top of React — so your team spends less time on setup and more time on shipping.</p>
+   699→    </div>
+   700→  </section>
+   701→
+   702→  <!-- 06 · CSR -->
+   703→  <section class="slide" data-title="How React Works — CSR" data-kick="Rendering">
+   704→    <header class="s-head">
+   705→      <p class="kick rv">Rendering — 01</p>
+   706→      <h2 class="h2 mask" style="--d:.12s"><span>How React works — CSR</span></h2>
+   707→      <p class="lead rv" style="--d:.3s">Client-Side Rendering — the server sends a bare shell, and React builds the whole UI in the browser.</p>
+   708→    </header>
+   709→    <div class="s-body">
+   710→      <div class="flow rv" style="--d:.25s">
+   711→        <div class="step">
+   712→          <span class="n">01</span>
+   713→          <svg class="ic"><use href="#i-globe"/></svg>
+   714→          <h4>Request</h4><p>The browser asks the server for the page.</p>
+   715→        </div>
+   716→        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+   717→        <div class="step">
+   718→          <span class="n">02</span>
+   719→          <svg class="ic"><use href="#i-file"/></svg>
+   720→          <h4>Empty HTML</h4><p>The server responds with a bare shell.</p>
+   721→        </div>
+   722→        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+   723→        <div class="step">
+   724→          <span class="n">03</span>
+   725→          <svg class="ic"><use href="#i-download"/></svg>
+   726→          <h4>JS Download</h4><p>The browser fetches the React bundle.</p>
+   727→        </div>
+   728→        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+   729→        <div class="step">
+   730→          <span class="n">04</span>
+   731→          <svg class="ic"><use href="#i-cpu"/></svg>
+   732→          <h4>Render</h4><p>React builds the UI on the client.</p>
+   733→        </div>
+   734→      </div>
+   735→      <div class="pc rv" style="--d:.5s">
+   736→        <div class="pros"><svg class="ic"><use href="#i-check"/></svg><div><span class="tag">Pros</span><p>Rich, dynamic interactivity once the app has loaded.</p></div></div>
+   737→        <div class="cons"><svg class="ic"><use href="#i-x"/></svg><div><span class="tag">Cons</span><p>Slow first load · weak SEO · JavaScript required.</p></div></div>
+   738→      </div>
+   739→    </div>
+   740→  </section>
+   741→
+   742→  <!-- 07 · SSR -->
+   743→  <section class="slide" data-title="What is SSR?" data-kick="Rendering">
+   744→    <header class="s-head">
+   745→      <p class="kick rv">Rendering — 02</p>
+   746→      <h2 class="h2 mask" style="--d:.12s"><span>What is SSR?</span></h2>
+   747→      <p class="lead rv" style="--d:.3s">Server-Side Rendering — HTML is generated on the server, per request. The browser receives fully populated HTML, immediately.</p>
+   748→    </header>
+   749→    <div class="s-body">
+   750→      <div class="flow solid rv" style="--d:.25s">
+   751→        <div class="step">
+   752→          <span class="n">01</span>
+   753→          <svg class="ic"><use href="#i-globe"/></svg>
+   754→          <h4>Request</h4><p>The browser asks the server for the page.</p>
+   755→        </div>
+   756→        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+   757→        <div class="step">
+   758→          <span class="n">02</span>
+   759→          <svg class="ic"><use href="#i-server"/></svg>
+   760→          <h4>Server Renders</h4><p>HTML is generated on the server, per request.</p>
+   761→        </div>
+   762→        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+   763→        <div class="step">
+   764→          <span class="n">03</span>
+   765→          <svg class="ic"><use href="#i-monitor"/></svg>
+   766→          <h4>Immediate Paint</h4><p>Content is visible right away — no blank screen.</p>
+   767→        </div>
+   768→        <div class="flow-sep"><svg class="ic"><use href="#i-arrow-r"/></svg></div>
+   769→        <div class="step">
+   770→          <span class="n">04</span>
+   771→          <svg class="ic"><use href="#i-drop"/></svg>
+   772→          <h4>Hydration</h4><p>React attaches interactivity to the HTML.</p>
+   773→        </div>
+   774→      </div>
+   775→      <div class="pc rv" style="--d:.5s">
+   776→        <div class="pros"><svg class="ic"><use href="#i-check"/></svg><div><span class="tag">Pros</span><p>Fast first paint · better SEO · accessible content.</p></div></div>
+   777→        <div class="cons"><svg class="ic"><use href="#i-x"/></svg><div><span class="tag">Cons</span><p>More server load · interactions wait for hydration.</p></div></div>
+   778→      </div>
+   779→      <p class="foot-note rv" style="--d:.62s"><svg class="ic"><use href="#i-arrow-r"/></svg>Net result: better SEO and initial-load performance.</p>
+   780→    </div>
+   781→  </section>
+   782→
+   783→  <!-- 08 · React vs Next.js -->
+   784→  <section class="slide" data-title="React vs. Next.js" data-kick="Comparison">
+   785→    <header class="s-head">
+   786→      <p class="kick rv">Head to Head</p>
+   787→      <h2 class="h2 mask" style="--d:.12s"><span>React vs. Next.js</span></h2>
+   788→    </header>
+   789→    <div class="s-body">
+   790→      <div class="vs-wrap rv" style="--d:.25s">
+   791→        <table class="vs">
+   792→          <thead>
+   793→            <tr>
+   794→              <th class="corner"></th>
+   795→              <th>React — CSR</th>
+   796→              <th class="nx">Next.js — SSR / Full-Stack</th>
+   797→            </tr>
+   798→          </thead>
+   799→          <tbody>
+   800→            <tr>
+   801→              <td>Routing</td>
+   802→              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>Manual — install a library</span></td>
+   803→              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>File-based, built-in</span></td>
+   804→            </tr>
+   805→            <tr>
+   806→              <td>Rendering</td>
+   807→              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>CSR only</span></td>
+   808→              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>CSR · SSR · SSG · ISR</span></td>
+   809→            </tr>
+   810→            <tr>
+   811→              <td>Backend</td>
+   812→              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>None — external API needed</span></td>
+   813→              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>Built-in API routes</span></td>
+   814→            </tr>
+   815→            <tr>
+   816→              <td>SEO</td>
+   817→              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>Poor by default</span></td>
+   818→              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>Excellent out of the box</span></td>
+   819→            </tr>
+   820→            <tr>
+   821→              <td>Setup</td>
+   822→              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>Many tools to configure</span></td>
+   823→              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>Zero config to start</span></td>
+   824→            </tr>
+   825→            <tr>
+   826→              <td>First Load</td>
+   827→              <td><span class="cl cl-x"><svg class="ic"><use href="#i-x"/></svg>Blank screen first</span></td>
+   828→              <td class="nx"><span class="cl cl-ok"><svg class="ic"><use href="#i-check"/></svg>Instant page view</span></td>
+   829→            </tr>
+   830→          </tbody>
+   831→        </table>
+   832→      </div>
+   833→    </div>
+   834→  </section>
+   835→
+   836→  <!-- 09 · New features -->
+   837→  <section class="slide" data-title="New Features in Next.js 13+" data-kick="Features">
+   838→    <header class="s-head">
+   839→      <p class="kick rv">What's New — 13+</p>
+   840→      <h2 class="h2 mask" style="--d:.12s"><span>A new generation of features.</span></h2>
+   841→      <p class="lead rv" style="--d:.3s">Next.js 13+ brought faster, smarter defaults for building modern applications.</p>
+   842→    </header>
+   843→    <div class="s-body">
+   844→      <div class="feats">
+   845→        <div class="feat rv" style="--d:.22s"><span class="fn">01</span><h4>App Router</h4><p>A new routing system built on React conventions — intuitive and nested by design.</p></div>
+   846→        <div class="feat rv" style="--d:.32s"><span class="fn">02</span><h4>Server Components</h4><p>Components render on the server, by default.</p></div>
+   847→        <div class="feat rv" style="--d:.42s"><span class="fn">03</span><h4>Server Actions</h4><p>Run server-side code directly from your components.</p></div>
+   848→        <div class="feat rv" style="--d:.52s"><span class="fn">04</span><h4>Streaming &amp; Suspense</h4><p>Progressive page loading with instant fallback UI.</p></div>
+   849→        <div class="feat rv" style="--d:.62s"><span class="fn">05</span><h4>Built-in Optimizations</h4><p>Automatic image, font, and script optimization — no extra tooling.</p></div>
+   850→      </div>
+   851→    </div>
+   852→  </section>
+   853→
+   854→  <!-- 10 · App Router -->
+   855→  <section class="slide" data-title="Deep Dive: The App Router" data-kick="App Router">
+   856→    <header class="s-head">
+   857→      <p class="kick rv">Deep Dive — 01</p>
+   858→      <h2 class="h2 mask" style="--d:.12s"><span>The App Router</span></h2>
+   859→      <p class="lead rv" style="--d:.3s">Replaces the old /pages directory with a powerful, nested structure — everything lives in <em>app</em>.</p>
+   860→    </header>
+   861→    <div class="s-body split">
+   862→      <div class="split-l rv" style="--d:.25s">
+   863→        <div class="code">
+   864→          <div class="code-bar"><span>file tree</span><span class="code-tag">app/</span></div>
+   865→          <pre><span class="d">app/</span>
+   866→├── <span class="f">page.tsx</span>            <span class="cm"># /</span>
+   867→└── <span class="d">dashboard/</span>
+   868→    └── <span class="f">page.tsx</span>        <span class="cm"># /dashboard</span></pre>
+   869→        </div>
+   870→      </div>
+   871→      <div class="split-r rows">
+   872→        <div class="row rv" style="--d:.32s">
+   873→          <span class="row-ic"><svg class="ic"><use href="#i-folder"/></svg></span>
+   874→          <div><h4>Routes = Folders</h4><p>Every folder under <em>app</em> maps to a URL segment — no manual route configuration.</p></div>
+   875→        </div>
+   876→        <div class="row rv" style="--d:.44s">
+   877→          <span class="row-ic"><svg class="ic"><use href="#i-layers"/></svg></span>
+   878→          <div><h4>Nested Layouts</h4><p>Layouts persist across their children — no remounting between pages.</p></div>
+   879→        </div>
+   880→        <div class="row rv" style="--d:.56s">
+   881→          <span class="row-ic"><svg class="ic"><use href="#i-file"/></svg></span>
+   882→          <div><h4>Special Files</h4><p>page · layout · loading · error. A folder only becomes a public route once it holds a page.</p></div>
+   883→        </div>
+   884→      </div>
+   885→    </div>
+   886→  </section>
+   887→
+   888→  <!-- 11 · Routing patterns -->
+   889→  <section class="slide" data-title="Folder-Based Routing Variants" data-kick="Routing">
+   890→    <header class="s-head">
+   891→      <p class="kick rv">Deep Dive — Routing Patterns</p>
+   892→      <h2 class="h2 mask" style="--d:.12s"><span>Three ways to shape a route.</span></h2>
+   893→    </header>
+   894→    <div class="s-body">
+   895→      <div class="rout rv" style="--d:.25s">
+   896→        <div class="rout-pat">
+   897→          <span class="pat">app/about/page.tsx</span>
+   898→          <span class="pat-tag">Standard · Static</span>
+   899→        </div>
+   900→        <div><h4>Static Routes</h4><p>A predictable, fixed path — nothing dynamic about it.</p></div>
+   901→        <span class="url-chip">→ /about</span>
+   902→      </div>
+   903→      <div class="rout rv" style="--d:.38s">
+   904→        <div class="rout-pat">
+   905→          <span class="pat">app/blog/[slug]/page.tsx</span>
+   906→          <span class="pat-tag">Dynamic Segment</span>
+   907→        </div>
+   908→        <div><h4>Dynamic Routes</h4><p>Captures dynamic data from the URL — matches any value.</p></div>
+   909→        <span class="url-chip">→ /blog/hello</span>
+   910→      </div>
+   911→      <div class="rout rv" style="--d:.51s">
+   912→        <div class="rout-pat">
+   913→          <span class="pat">app/(marketing)/page.tsx</span>
+   914→          <span class="pat-tag">Route Group</span>
+   915→        </div>
+   916→        <div><h4>Route Groups</h4><p>Organizes files logically — without affecting the URL path.</p></div>
+   917→        <span class="url-chip">→ /</span>
+   918→      </div>
+   919→    </div>
+   920→  </section>
+   921→
+   922→  <!-- 12 · Server Components -->
+   923→  <section class="slide" data-title="Deep Dive: Server Components" data-kick="RSC">
+   924→    <header class="s-head">
+   925→      <p class="kick rv">Deep Dive — 02</p>
+   926→      <h2 class="h2 mask" style="--d:.12s"><span>Server Components —<br>the new default.</span></h2>
+   927→      <p class="lead rv" style="--d:.3s">Every component in the App Router is a Server Component — unless you explicitly say otherwise.</p>
+   928→    </header>
+   929→    <div class="s-body">
+   930→      <div class="rows">
+   931→        <div class="row rv" style="--d:.28s">
+   932→          <span class="row-ic"><svg class="ic"><use href="#i-server"/></svg></span>
+   933→          <div><h4>Zero Client Bundle</h4><p>Server Components never ship to the browser — no impact on your JavaScript bundle size.</p></div>
+   934→        </div>
+   935→        <div class="row rv" style="--d:.38s">
+   936→          <span class="row-ic"><svg class="ic"><use href="#i-database"/></svg></span>
+   937→          <div><h4>Direct Backend Access</h4><p>Query databases and read secrets safely, right inside the component.</p></div>
+   938→        </div>
+   939→        <div class="row rv" style="--d:.48s">
+   940→          <span class="row-ic"><svg class="ic"><use href="#i-pointer"/></svg></span>
+   941→          <div><h4>Opt-in Interactivity</h4><p>Add the "use client" directive only where you need state and events.</p></div>
+   942→        </div>
+   943→      </div>
+   944→      <div class="boundary rv" style="--d:.6s">
+   945→        <div class="b-zone b-server">
+   946→          <h5>Server — the default</h5>
+   947→          <div class="b-list">
+   948→            <span class="b-item">page.tsx</span>
+   949→            <span class="b-item">layout.tsx</span>
+   950→            <span class="b-item">fetch data</span>
+   951→            <span class="b-item">db access</span>
+   952→            <span class="b-item">secrets</span>
+   953→          </div>
+   954→        </div>
+   955→        <div class="b-zone b-client">
+   956→          <h5>Client — the island</h5>
+   957→          <div class="b-list">
+   958→            <span class="b-item b-inv">"use client"</span>
+   959→            <span class="b-item">state</span>
+   960→            <span class="b-item">events</span>
+   961→            <span class="b-item">browser APIs</span>
+   962→          </div>
+   963→        </div>
+   964→      </div>
+   965→    </div>
+   966→  </section>
+   967→
+   968→  <!-- 13 · Data fetching -->
+   969→  <section class="slide" data-title="Deep Dive: Data Fetching" data-kick="Data">
+   970→    <header class="s-head">
+   971→      <p class="kick rv">Deep Dive — 03</p>
+   972→      <h2 class="h2 mask" style="--d:.12s"><span>Data fetching — before &amp; after.</span></h2>
+   973→    </header>
+   974→    <div class="s-body df-grid">
+   975→      <div class="df-col rv" style="--d:.22s">
+   976→        <div class="code">
+   977→          <div class="code-bar"><span>The Old Way</span><span class="code-tag">React · Client</span></div>
+   978→          <pre><span class="tk-k">useEffect</span>(() => {
+   979→  <span class="tk-k">fetch</span>(<span class="tk-str">'/api/data'</span>)
+   980→    .then(res => res.<span class="tk-k">json</span>())
+   981→    .then(setData)
+   982→}, [])</pre>
+   983→        </div>
+   984→        <p class="df-cap"><svg class="ic"><use href="#i-x"/></svg>Requires state, effects — and every fetch happens on the client.</p>
+   985→      </div>
+   986→      <div class="df-col rv" style="--d:.36s">
+   987→        <div class="code code-hi">
+   988→          <div class="code-bar"><span>The New Way</span><span class="code-tag">Next.js · RSC</span></div>
+   989→          <pre><span class="tk-k">export default async function</span> Page() {
+   990→  <span class="tk-k">const</span> res = <span class="tk-k">await</span> <span class="tk-k">fetch</span>(<span class="tk-str">'https://api.xyz/data'</span>)
+   991→  <span class="tk-k">const</span> data = <span class="tk-k">await</span> res.<span class="tk-k">json</span>()
+   992→
+   993→  <span class="tk-k">return</span> <span class="tk-tag">&lt;h1&gt;</span>{data.name}<span class="tk-tag">&lt;/h1&gt;</span>
+   994→}</pre>
+   995→        </div>
+   996→        <p class="df-cap"><svg class="ic"><use href="#i-check"/></svg>Async components — fetching directly on the server.</p>
+   997→      </div>
+   998→    </div>
+   999→  </section>
+  1000→
+  1001→  <!-- 14 · Creating a project -->
+  1002→  <section class="slide" data-title="Creating a Next.js Project" data-kick="CLI">
+  1003→    <header class="s-head">
+  1004→      <p class="kick rv">Hands On — Scaffold</p>
+  1005→      <h2 class="h2 mask" style="--d:.12s"><span>One command to start.</span></h2>
+  1006→      <p class="lead rv" style="--d:.3s">This single CLI command scaffolds a complete, production-ready environment — instantly.</p>
+  1007→    </header>
+  1008→    <div class="s-body">
+  1009→      <div class="term rv" style="--d:.25s">
+  1010→        <div class="term-bar">
+  1011→          <span class="term-dots"><i></i><i></i><i></i></span>
+  1012→          <span class="term-title">bash — create-next-app</span>
+  1013→        </div>
+  1014→        <div class="term-body">
+  1015→          <div class="tl"><span class="prompt">$</span> <span class="cmd" data-type="npx create-next-app@latest"></span><span class="caret"></span></div>
+  1016→          <div class="tl out"><span class="dim">√</span> What is your project named? <span class="dim">…</span> <span class="a">my-app</span></div>
+  1017→          <div class="tl out"><span class="dim">√</span> Would you like to use TypeScript? <span class="dim">…</span> <span class="a">Yes</span></div>
+  1018→          <div class="tl out"><span class="dim">√</span> Would you like to use ESLint? <span class="dim">…</span> <span class="a">Yes</span></div>
+  1019→          <div class="tl out"><span class="dim">√</span> Would you like to use Tailwind CSS? <span class="dim">…</span> <span class="a">No</span></div>
+  1020→          <div class="tl out"><span class="dim">√</span> Would you like to use App Router? <span class="dim">(recommended) …</span> <span class="a">Yes</span></div>
+  1021→          <div class="tl out" aria-hidden="true">&nbsp;</div>
+  1022→          <div class="tl out">Success! Created <span class="a">my-app</span> <span class="dim">— run</span> npm run dev <span class="dim">to start.</span></div>
+  1023→          <div class="tl out"><svg class="ic ic-fill"><use href="#i-tri"/></svg> Next.js <span class="dim">— ready when you are.</span></div>
+  1024→        </div>
+  1025→      </div>
+  1026→      <button class="copy-btn rv" style="--d:.5s" id="copyCmd" type="button">
+  1027→        <svg class="ic"><use href="#i-copy"/></svg>
+  1028→        <span class="c-cmd">npx create-next-app@latest</span>
+  1029→        <span class="c-hint">Click to copy</span>
+  1030→      </button>
+  1031→    </div>
+  1032→  </section>
+  1033→
+  1034→  <!-- 15 · File structure -->
+  1035→  <section class="slide" data-title="File Structure Overview" data-kick="Structure">
+  1036→    <header class="s-head">
+  1037→      <p class="kick rv">Hands On — Anatomy</p>
+  1038→      <h2 class="h2 mask" style="--d:.12s"><span>The file structure.</span></h2>
+  1039→      <p class="lead rv" style="--d:.3s">A fresh installation gives you a clean, predictable workspace — and <em>app</em> is the core of it all.</p>
+  1040→    </header>
+  1041→    <div class="s-body split">
+  1042→      <div class="split-l rv" style="--d:.25s">
+  1043→        <div class="code">
+  1044→          <div class="code-bar"><span>file tree</span><span class="code-tag">my-app/</span></div>
+  1045→          <pre>my-app/
+  1046→├── <span class="d">app/</span>
+  1047→│   ├── <span class="d">layout.tsx</span>
+  1048→│   ├── <span class="d">page.tsx</span>
+  1049→│   └── <span class="f">globals.css</span>
+  1050→├── <span class="f">public/</span>
+  1051→├── <span class="f">next.config.js</span>
+  1052→└── <span class="f">package.json</span></pre>
+  1053→        </div>
+  1054→      </div>
+  1055→      <div class="split-r rows">
+  1056→        <div class="row rv" style="--d:.32s">
+  1057→          <span class="row-ic"><svg class="ic"><use href="#i-folder"/></svg></span>
+  1058→          <div><h4>app/</h4><p>The root directory of the App Router — every route and every piece of UI lives here.</p></div>
+  1059→        </div>
+  1060→        <div class="row rv" style="--d:.44s">
+  1061→          <span class="row-ic"><svg class="ic"><use href="#i-layout"/></svg></span>
+  1062→          <div><h4>layout.tsx</h4><p>Shared UI for a segment and its children — persistent headers and footers that never remount.</p></div>
+  1063→        </div>
+  1064→        <div class="row rv" style="--d:.56s">
+  1065→          <span class="row-ic"><svg class="ic"><use href="#i-file"/></svg></span>
+  1066→          <div><h4>page.tsx</h4><p>The unique UI of a route segment — its presence is what makes a route public.</p></div>
+  1067→        </div>
+  1068→      </div>
+  1069→    </div>
+  1070→  </section>
+  1071→
+  1072→  <!-- 16 · Live demo -->
+  1073→  <section class="slide" data-title="Live Demo — Five Phases" data-kick="Demo">
+  1074→    <header class="s-head">
+  1075→      <p class="kick rv">Live Demo</p>
+  1076→      <h2 class="h2 mask" style="--d:.12s"><span>Watch it come together.</span></h2>
+  1077→      <p class="lead rv" style="--d:.3s">Five phases — from an empty folder to a fetching, full-stack app.</p>
+  1078→    </header>
+  1079→    <div class="s-body">
+  1080→      <div class="phases">
+  1081→        <div class="phase rv" style="--d:.22s">
+  1082→          <span class="pn">01</span>
+  1083→          <h4>Initialization</h4>
+  1084→          <p>Run <code>npm run dev</code> and explore the default setup.</p>
+  1085→          <span class="chip">Setup</span>
+  1086→        </div>
+  1087→        <div class="phase rv" style="--d:.32s">
+  1088→          <span class="pn">02</span>
+  1089→          <h4>Building Routes</h4>
+  1090→          <p>Create a folder and a <code>page.tsx</code> — a new view appears.</p>
+  1091→          <span class="chip">Frontend</span>
+  1092→        </div>
+  1093→        <div class="phase rv" style="--d:.42s">
+  1094→          <span class="pn">03</span>
+  1095→          <h4>Interactivity</h4>
+  1096→          <p>Wire up <code>onClick</code> events with the "use client" directive.</p>
+  1097→          <span class="chip">Frontend</span>
+  1098→        </div>
+  1099→        <div class="phase rv" style="--d:.52s">
+  1100→          <span class="pn">04</span>
+  1101→          <h4>API Route</h4>
+  1102→          <p>A <code>route.ts</code> file handles backend GET requests.</p>
+  1103→          <span class="chip">Backend</span>
+  1104→        </div>
+  1105→        <div class="phase rv" style="--d:.62s">
+  1106→          <span class="pn">05</span>
+  1107→          <h4>Fetching Data</h4>
+  1108→          <p>A Server Component pulls data from our new API.</p>
+  1109→          <span class="chip">Full-Stack</span>
+  1110→        </div>
+  1111→      </div>
+  1112→    </div>
+  1113→  </section>
+  1114→
+  1115→  <!-- 17 · End -->
+  1116→  <section class="slide s-end" data-title="Questions?" data-kick="Closing">
+  1117→    <div class="end-wrap">
+  1118→      <svg class="ic ic-fill end-tri rv" style="--d:.05s"><use href="#i-tri"/></svg>
+  1119→      <p class="kick rv" style="--d:.15s">Part 1 of 3 — Concepts · Complete</p>
+  1120→      <h2 class="end-title mask" style="--d:.25s"><span>Questions?</span></h2>
+  1121→      <p class="end-sub rv" style="--d:.45s">Thank you for your time.</p>
+  1122→      <div class="end-actions rv" style="--d:.6s">
+  1123→        <button class="btn" id="restart" type="button"><svg class="ic"><use href="#i-chev-l"/></svg> Restart presentation</button>
+  1124→      </div>
+  1125→      <p class="end-credit rv" style="--d:.75s">Adapted from "Next.js Unlocked" &amp; "Introduction to Next.js — Part 1: Concepts" · Microsoft Learn Student Ambassadors</p>
+  1126→    </div>
+  1127→  </section>
+  1128→
+  1129→</main>
+  1130→
+  1131→<!-- ============ Footer chrome ============ -->
+  1132→<footer class="chrome bottom">
+  1133→  <div class="foot-title" id="footTitle">Next.js Unlocked</div>
+  1134→  <div class="foot-mid"><span class="live-dot" aria-hidden="true"></span><span class="clock" id="clock">00:00:00</span></div>
+  1135→  <div class="foot-right">
+  1136→    <button class="icon-btn" id="btnPrev" title="Previous (←)" aria-label="Previous slide"><svg class="ic"><use href="#i-chev-l"/></svg></button>
+  1137→    <span class="counter" id="counter">01 / 17</span>
+  1138→    <button class="icon-btn" id="btnNext" title="Next (→)" aria-label="Next slide"><svg class="ic"><use href="#i-chev-r"/></svg></button>
+  1139→  </div>
+  1140→</footer>
+  1141→<div class="progress" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
+  1142→
+  1143→<!-- ============ Overview ============ -->
+  1144→<div class="ov" id="overview" hidden role="dialog" aria-label="Slide overview">
+  1145→  <div class="ov-head">
+  1146→    <span class="ov-title">Overview</span>
+  1147→    <span class="ov-hint">Click a slide to jump · Esc to close</span>
+  1148→    <button class="icon-btn" id="ovClose" title="Close (Esc)" aria-label="Close overview"><svg class="ic"><use href="#i-x"/></svg></button>
+  1149→  </div>
+  1150→  <div class="ov-grid" id="ovGrid"></div>
+  1151→</div>
+  1152→
+  1153→<div class="toast" id="toast" role="status"></div>
+  1154→
+  1155→<script>
+  1156→(function(){
+  1157→  'use strict';
+  1158→  var $ = function(s, c){ return (c || document).querySelector(s); };
+  1159→  var $$ = function(s, c){ return Array.prototype.slice.call((c || document).querySelectorAll(s)); };
+  1160→
+  1161→  /* ---------- Theme ---------- */
+  1162→  var root = document.documentElement;
+  1163→  try { var saved = localStorage.getItem('nx-theme'); if (saved) root.dataset.theme = saved; } catch(e){}
+  1164→  function toggleTheme(){
+  1165→    var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+  1166→    root.dataset.theme = next;
+  1167→    try { localStorage.setItem('nx-theme', next); } catch(e){}
+  1168→    toast(next === 'dark' ? 'Dark theme' : 'Light theme');
+  1169→  }
+  1170→
+  1171→  /* ---------- Slides ---------- */
+  1172→  var slides = $$('.slide');
+  1173→  var total = slides.length;
+  1174→  var cur = -1;
+  1175→  var counter = $('#counter'), footTitle = $('#footTitle'), bar = $('#progressBar');
+  1176→  function pad(n){ return String(n).padStart(2, '0'); }
+  1177→
+  1178→  function go(n){
+  1179→    n = Math.max(0, Math.min(total - 1, n));
+  1180→    if (n === cur) return;
+  1181→    if (cur > -1) slides[cur].classList.remove('active');
+  1182→    cur = n;
+  1183→    var s = slides[cur];
+  1184→    s.classList.add('active');
+  1185→    s.scrollTop = 0;
+  1186→    counter.textContent = pad(cur + 1) + ' / ' + pad(total);
+  1187→    footTitle.textContent = s.dataset.title || '';
+  1188→    bar.style.width = ((cur + 1) / total * 100) + '%';
+  1189→    try { history.replaceState(null, '', '#/' + (cur + 1)); } catch(e){}
+  1190→    $$('.ov-item').forEach(function(el, i){ el.classList.toggle('cur', i === cur); });
+  1191→    runTyping(s);
+  1192→  }
+  1193→  function next(){ go(cur + 1); }
+  1194→  function prev(){ go(cur - 1); }
+  1195→
+  1196→  /* ---------- Terminal typing ---------- */
+  1197→  var typeTimer = null, outTimers = [];
+  1198→  function runTyping(slide){
+  1199→    clearInterval(typeTimer);
+  1200→    outTimers.forEach(clearTimeout); outTimers = [];
+  1201→    var el = slide.querySelector('[data-type]');
+  1202→    if (!el) return;
+  1203→    var text = el.getAttribute('data-type');
+  1204→    var outs = $$('.tl.out', slide);
+  1205→    outs.forEach(function(o){ o.classList.remove('show'); });
+  1206→    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+  1207→      el.textContent = text;
+  1208→      outs.forEach(function(o){ o.classList.add('show'); });
+  1209→      return;
+  1210→    }
+  1211→    el.textContent = '';
+  1212→    var i = 0;
+  1213→    typeTimer = setInterval(function(){
+  1214→      i++;
+  1215→      el.textContent = text.slice(0, i);
+  1216→      if (i >= text.length){
+  1217→        clearInterval(typeTimer);
+  1218→        outs.forEach(function(o, idx){
+  1219→          outTimers.push(setTimeout(function(){ o.classList.add('show'); }, 300 + idx * 240));
+  1220→        });
+  1221→      }
+  1222→    }, 45);
+  1223→  }
+  1224→
+  1225→  /* ---------- Live clock ---------- */
+  1226→  var clock = $('#clock');
+  1227→  function tick(){
+  1228→    var d = new Date();
+  1229→    clock.textContent = [d.getHours(), d.getMinutes(), d.getSeconds()].map(function(v){
+  1230→      return String(v).padStart(2, '0');
+  1231→    }).join(':');
+  1232→  }
+  1233→  tick(); setInterval(tick, 1000);
+  1234→
+  1235→  /* ---------- Toast ---------- */
+  1236→  var toastEl = $('#toast'), toastT = null;
+  1237→  function toast(msg){
+  1238→    toastEl.textContent = msg;
+  1239→    toastEl.classList.add('show');
+  1240→    clearTimeout(toastT);
+  1241→    toastT = setTimeout(function(){ toastEl.classList.remove('show'); }, 1900);
+  1242→  }
+  1243→
+  1244→  /* ---------- Overview ---------- */
+  1245→  var ov = $('#overview'), ovGrid = $('#ovGrid'), ovClose = $('#ovClose');
+  1246→  slides.forEach(function(s, i){
+  1247→    var b = document.createElement('button');
+  1248→    b.type = 'button';
+  1249→    b.className = 'ov-item';
+  1250→    b.innerHTML = '<span class="ov-n">' + pad(i + 1) + '</span>' +
+  1251→                  '<span class="ov-t"></span>' +
+  1252→                  '<span class="ov-k"></span>';
+  1253→    b.querySelector('.ov-t').textContent = s.dataset.title || ('Slide ' + (i + 1));
+  1254→    b.querySelector('.ov-k').textContent = s.dataset.kick || '';
+  1255→    b.addEventListener('click', function(){ toggleOverview(false); go(i); });
+  1256→    ovGrid.appendChild(b);
+  1257→  });
+  1258→  function toggleOverview(force){
+  1259→    var show = (force !== undefined) ? force : ov.hidden;
+  1260→    ov.hidden = !show;
+  1261→    if (show) ovClose.focus();
+  1262→  }
+  1263→
+  1264→  /* ---------- Fullscreen ---------- */
+  1265→  function toggleFull(){
+  1266→    if (document.fullscreenElement) { document.exitFullscreen().catch(function(){}); }
+  1267→    else { root.requestFullscreen().catch(function(){}); }
+  1268→  }
+  1269→
+  1270→  /* ---------- Wiring ---------- */
+  1271→  $('#btnNext').addEventListener('click', next);
+  1272→  $('#btnPrev').addEventListener('click', prev);
+  1273→  $('#btnTheme').addEventListener('click', toggleTheme);
+  1274→  $('#btnFull').addEventListener('click', toggleFull);
+  1275→  $('#btnOverview').addEventListener('click', function(){ toggleOverview(); });
+  1276→  ovClose.addEventListener('click', function(){ toggleOverview(false); });
+  1277→  $('#restart').addEventListener('click', function(){ go(0); });
+  1278→
+  1279→  var copyBtn = $('#copyCmd');
+  1280→  if (copyBtn){
+  1281→    copyBtn.addEventListener('click', function(){
+  1282→      var cmd = 'npx create-next-app@latest';
+  1283→      if (navigator.clipboard && navigator.clipboard.writeText){
+  1284→        navigator.clipboard.writeText(cmd).then(
+  1285→          function(){ toast('Copied — ' + cmd); },
+  1286→          function(){ toast('Copy blocked by the browser'); }
+  1287→        );
+  1288→      } else {
+  1289→        toast('Copy not available in this browser');
+  1290→      }
+  1291→    });
+  1292→  }
+  1293→
+  1294→  document.addEventListener('keydown', function(e){
+  1295→    if (e.metaKey || e.ctrlKey || e.altKey) return;
+  1296→    var k = e.key;
+  1297→    var onBtn = e.target instanceof Element && e.target.closest('button, a, input, textarea');
+  1298→    if (k === 'Escape'){ if (!ov.hidden) toggleOverview(false); return; }
+  1299→    if (!ov.hidden){ if (k === 'o' || k === 'O') toggleOverview(false); return; }
+  1300→    if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown'){ e.preventDefault(); next(); }
+  1301→    else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp'){ e.preventDefault(); prev(); }
+  1302→    else if (k === 'Home'){ e.preventDefault(); go(0); }
+  1303→    else if (k === 'End'){ e.preventDefault(); go(total - 1); }
+  1304→    else if ((k === ' ' || k === 'Enter') && !onBtn){ e.preventDefault(); next(); }
+  1305→    else if (k === 'f' || k === 'F'){ toggleFull(); }
+  1306→    else if (k === 't' || k === 'T'){ toggleTheme(); }
+  1307→    else if (k === 'o' || k === 'O'){ toggleOverview(); }
+  1308→  });
+  1309→
+  1310→  /* Touch swipe */
+  1311→  var tx = 0, ty = 0;
+  1312→  document.addEventListener('touchstart', function(e){
+  1313→    tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+  1314→  }, { passive: true });
+  1315→  document.addEventListener('touchend', function(e){
+  1316→    var dx = e.changedTouches[0].clientX - tx;
+  1317→    var dy = e.changedTouches[0].clientY - ty;
+  1318→    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5){ (dx < 0) ? next() : prev(); }
+  1319→  }, { passive: true });
+  1320→
+  1321→  /* Init from hash (#/n survives refresh) */
+  1322→  var m = location.hash.match(/^#\/(\d+)/);
+  1323→  var start = m ? Math.min(total, Math.max(1, +m[1])) - 1 : 0;
+  1324→  go(start);
+  1325→
+  1326→  /* ---------- postMessage bridge (for iframe embedding) ---------- */
+  1327→  // Patch go() to also notify the parent frame on every slide change
+  1328→  var _origGo = go;
+  1329→  go = function(n) {
+  1330→    _origGo(n);
+  1331→    try {
+  1332→      if (window.parent !== window) {
+  1333→        window.parent.postMessage({ type: 'slide-change', index: cur }, '*');
+  1334→      }
+  1335→    } catch(e){}
+  1336→  };
+  1337→
+  1338→  // Listen for go-to-slide commands from the parent frame
+  1339→  window.addEventListener('message', function(e) {
+  1340→    if (e.data && e.data.type === 'go-to-slide' && typeof e.data.index === 'number') {
+  1341→      go(e.data.index);
+  1342→    }
+  1343→  });
+  1344→})();
+  1345→</script>
+  1346→</body>
+  1347→</html>
