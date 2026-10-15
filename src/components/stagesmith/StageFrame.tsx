@@ -63,7 +63,7 @@ export function imageSourceUrl(deckId: string, source: Extract<Source, { type: "
 export function useResolvedSources(
   deckId: string,
   version: string | number,
-  entries: Array<{ kind: "slide" | "bg" | "overlay"; source: Source | null | undefined }>,
+  entries: Array<{ kind: "slide" | "bg" | "overlay" | "commonOverlay"; source: Source | null | undefined }>,
 ) {
   const [metas, setMetas] = useState<Record<string, MetaInfo>>({});
   const sig = entries.map((e) => `${e.kind}:${e.source ? JSON.stringify(e.source) : "none"}`).join("|");
@@ -154,6 +154,8 @@ export function StageFrame(props: StageFrameProps) {
       scale,
       assetBase: `/api/assets/${deckId}`,
       slide: slideUrl || null,
+      // no last-good version to keep → the runtime shows the error card
+      slideError: slideId && !slideUrl && slideMeta?.error ? slideMeta.error : null,
       bg: bgUrl || null,
       bgImage,
       overlay: overlayUrl || null,
@@ -165,7 +167,7 @@ export function StageFrame(props: StageFrameProps) {
     });
   }, [
     frameId, themeCss, mode, staticMode, scale, deckId,
-    slideId, slideUrl, bgUrl, overlayUrl, commonOverlayUrl,
+    slideId, slideUrl, slideMeta?.error, bgUrl, overlayUrl, commonOverlayUrl,
     bgKey, overlayKey, showKey, slideIndex, slideTotal,
   ]);
 

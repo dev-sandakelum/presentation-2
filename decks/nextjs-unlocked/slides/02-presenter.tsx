@@ -1,8 +1,27 @@
 import { Ic } from "@/shared/icons";
 
+/**
+ * Presenter slide. It carries the light aurora background override, so the
+ * deck's dark-mode white ink would be nearly invisible — pin dark-ink
+ * tokens on the root section instead (same fix as the title slide).
+ */
+const INK_ON_LIGHT = {
+  "--fg": "#10141c",
+  "--fg-soft": "#232b38",
+  "--muted": "#4a5568",
+  "--faint": "#77839b",
+  "--border": "rgba(16, 20, 28, 0.16)",
+  "--border-strong": "rgba(16, 20, 28, 0.32)",
+  "--code-bg": "rgba(255, 255, 255, 0.72)",
+  "--inv-bg": "#10141c",
+  "--inv-fg": "#ffffff",
+  "--inv-fg-soft": "rgba(255, 255, 255, 0.72)",
+  "--hover": "#eef3fa",
+} as React.CSSProperties;
+
 export default function Slide() {
   return (
-    <section className="slide">
+    <section className="slide" style={INK_ON_LIGHT}>
       <header className="s-head">
         <p className="kick rv">Your Host</p>
         <h2 className="h2 mask" style={{ "--d": ".12s" } as React.CSSProperties}>

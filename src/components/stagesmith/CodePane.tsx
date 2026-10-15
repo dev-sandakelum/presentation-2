@@ -1,12 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { AlertTriangle, Copy, FilePlus2, Save, Trash2, Upload, WandSparkles } from "lucide-react";
+import { EditorView } from "@codemirror/view";
+import { EditorSelection } from "@codemirror/state";
+import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, Save, Trash2, Upload, WandSparkles } from "lucide-react";
 import type { DeckJson, FileRow, SlideEntry, Source } from "@/lib/stagesmith/types";
 import { api } from "@/lib/stagesmith/client";
+import { FORMATABLE_EXT, formatTsx } from "@/lib/stagesmith/format";
+import { useUiTheme } from "@/hooks/useUiTheme";
 import { copyText, fixPrompt, sourceLabel } from "./shared";
 import { resolveCode } from "./StageFrame";
 import { useToast } from "@/hooks/use-toast";
@@ -14,7 +18,47 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 
 export type CodeTab = "slide" | "bg" | "overlay" | "notes" | "assets" | "theme";
 
-const TSX_EXT = [javascript({ jsx: true, typescript: true })];
+/** cursor jump request from the filmstrip error badge (fix-list item 4) */
+export interface GotoError {
+  slideId: string;
+  line: number;
+  col: number;
+  nonce: number;
+}
+
+/* line wrapping everywhere (fix-list item 2) + TSX highlighting */
+const WRAP = EditorView.lineWrapping;
+const TSX_EXT = [javascript({ jsx: true, typescript: true }), WRAP];
+const PLAIN_EXT = [WRAP];
+
+/**
+ * Format a TSX buffer once, when it first appears in the editor
+ * (fix-list item 2). The result is applied through onBufferChange, so it
+ * is a single undoable edit that autosaves like any other change.
+ */
+function useFormatOnOpen(
+  path: string | null,
+  content: string | undefined,
+  apply: (formatted: string) => void,
+) {
+  const doneRef = useRef<Set<string>>(new Set());
+  const busyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!path || content === undefined) return;
+    if (!FORMATABLE_EXT.test(path) || doneRef.current.has(path) || busyRef.current === path) return;
+    busyRef.current = path;
+    let cancelled = false;
+    (async () => {
+      const formatted = await formatTsx(content);
+      if (formatted !== content) apply(formatted);
+      if (!cancelled) doneRef.current.add(path);
+      busyRef.current = null;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [path, content, apply]);
+}
 
 export function CodePane(props: {
   deckId: string;
@@ -31,13 +75,75 @@ export function CodePane(props: {
   onCommonSource: (layer: "bg" | "overlay", source: Source) => void;
   onOverride: (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => void;
   version: string;
+  /** fix-list item 1: minimized = tab bar only, preview grows */
+  minimized: boolean;
+  onToggleMinimize: () => void;
+  /** fix-list item 4: open this slide with the cursor on the error line */
+  gotoError: GotoError | null;
 }) {
   const { deckId, deck, sel, tab, buffers, onBufferChange, ensureBuffer } = props;
   const { toast } = useToast();
   const [slideError, setSlideError] = useState<string | null>(null);
+  const [uiTheme] = useUiTheme();
 
   const slidePath = sel ? `slides/${sel.id}.tsx` : "";
   const notesPath = sel ? `notes/${sel.id}.md` : "";
+
+  // mirrors for async handlers
+  const buffersRef = useRef(buffers);
+  buffersRef.current = buffers;
+  const changeRef = useRef(onBufferChange);
+  changeRef.current = onBufferChange;
+
+  /** the file currently shown in the editor (slide / bg / overlay) */
+  const activeFileRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (tab === "slide") activeFileRef.current = slidePath || null;
+    else if (tab === "notes") activeFileRef.current = notesPath || null;
+    else if (tab === "theme") activeFileRef.current = "theme.css";
+    // bg / overlay register themselves from SourceEditor
+  }, [tab, slidePath, notesPath]);
+
+  /** format one file — one undoable edit, skipped for non-TSX */
+  const formatFile = useCallback(
+    async (path: string | null) => {
+      if (!path) return;
+      if (!FORMATABLE_EXT.test(path)) {
+        toast({ title: "Formatting is TSX-only", description: `${path} is left as-is` });
+        return;
+      }
+      const content = buffersRef.current[path];
+      if (content === undefined) return;
+      const formatted = await formatTsx(content);
+      if (formatted !== content) {
+        changeRef.current(path, formatted);
+        toast({ title: "Formatted", description: path });
+      }
+    },
+    [toast],
+  );
+  const formatActive = useCallback(() => formatFile(activeFileRef.current), [formatFile]);
+
+  // Shift+Alt+F (fix-list item 2)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && e.shiftKey && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        formatActive();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [formatActive]);
+
+  // format-on-open for the slide file
+  const applySlideFormat = useCallback(
+    (formatted: string) => {
+      if (slidePath) changeRef.current(slidePath, formatted);
+    },
+    [slidePath],
+  );
+  useFormatOnOpen(tab === "slide" ? slidePath || null : null, tab === "slide" ? buffers[slidePath] : undefined, applySlideFormat);
 
   // load buffer for the active file
   useEffect(() => {
@@ -67,6 +173,41 @@ export function CodePane(props: {
     toast(ok ? { title: "Fix prompt copied — paste it into your AI tool" } : { title: "Clipboard blocked", variant: "destructive" });
   };
 
+  /* cursor jump to the first error line (fix-list item 4) */
+  const viewRef = useRef<EditorView | null>(null);
+  const goto = props.gotoError;
+  const slideBuffer = tab === "slide" ? buffers[slidePath] : undefined;
+  useEffect(() => {
+    if (props.minimized || !goto || !sel || goto.slideId !== sel.id || tab !== "slide") return;
+    if (slideBuffer === undefined) return; // still loading
+    const view = viewRef.current;
+    if (!view) return;
+    const line = Math.max(1, Math.min(goto.line, view.state.doc.lines));
+    const lineInfo = view.state.doc.line(line);
+    const pos = Math.min(lineInfo.to, lineInfo.from + Math.max(0, goto.col));
+    view.dispatch({
+      selection: EditorSelection.cursor(pos),
+      effects: EditorView.scrollIntoView(pos, { y: "center" }),
+    });
+    view.focus();
+  }, [goto, sel, tab, slideBuffer, props.minimized]);
+
+  /* multi-line paste → format (fix-list item 2) */
+  const formatActiveRef = useRef(formatActive);
+  formatActiveRef.current = formatActive;
+  const pasteFormatExt = useMemo(
+    () =>
+      EditorView.domEventHandlers({
+        paste: (e) => {
+          const text = e.clipboardData?.getData("text/plain") ?? "";
+          if (/\n/.test(text.trim())) {
+            setTimeout(() => formatActiveRef.current(), 60);
+          }
+        },
+      }),
+    [],
+  );
+
   const tabs: Array<{ key: CodeTab; label: string; badge?: boolean }> = [
     { key: "slide", label: "Slide", badge: Boolean(slideError) },
     { key: "bg", label: "BG" },
@@ -76,8 +217,10 @@ export function CodePane(props: {
     { key: "theme", label: "Theme" },
   ];
 
+  const cmTheme = uiTheme === "light" ? "light" : oneDark;
+
   return (
-    <section className="ss-codepane">
+    <section className={`ss-codepane ${props.minimized ? "min" : ""}`}>
       <div className="ss-codepane-head">
         <div className="ss-code-tabs">
           {tabs.map((t) => (
@@ -87,97 +230,130 @@ export function CodePane(props: {
             </button>
           ))}
         </div>
-        <div style={{ flex: 1 }} />
-        {tab === "slide" && sel && (
-          <span className="ss-label" style={{ letterSpacing: ".06em" }}>{slidePath}</span>
+        {!props.minimized && (
+          <>
+            <div style={{ flex: 1 }} />
+            {tab === "slide" && sel && (
+              <span className="ss-label" style={{ letterSpacing: ".06em" }}>{slidePath}</span>
+            )}
+            {tab === "notes" && sel && <span className="ss-label">{notesPath}</span>}
+            {tab === "theme" && <span className="ss-label">theme.css</span>}
+            {slideError && tab === "slide" && (
+              <button className="ss-btn" style={{ height: 26, padding: "0 10px", fontSize: 12 }} onClick={copyFix} title="Copy slide code + error as an AI fix prompt">
+                <WandSparkles size={13} /> Copy fix prompt
+              </button>
+            )}
+            {(tab === "slide" || tab === "bg" || tab === "overlay") && (
+              <button className="ss-btn" style={{ height: 26, padding: "0 10px", fontSize: 12 }} onClick={() => formatActive()} title="Format file (Shift+Alt+F)">
+                <Braces size={13} /> Format
+              </button>
+            )}
+            <button className="ss-btn" style={{ height: 26, padding: "0 10px", fontSize: 12 }} onClick={props.onFlushSave} title="Save now (Ctrl+S)">
+              <Save size={13} /> Save
+            </button>
+          </>
         )}
-        {tab === "notes" && sel && <span className="ss-label">{notesPath}</span>}
-        {tab === "theme" && <span className="ss-label">theme.css</span>}
-        {slideError && tab === "slide" && (
-          <button className="ss-btn" style={{ height: 26, padding: "0 10px", fontSize: 12 }} onClick={copyFix} title="Copy slide code + error as an AI fix prompt">
-            <WandSparkles size={13} /> Copy fix prompt
-          </button>
-        )}
-        <button className="ss-btn" style={{ height: 26, padding: "0 10px", fontSize: 12 }} onClick={props.onFlushSave} title="Save now (Ctrl+S)">
-          <Save size={13} /> Save
+        {props.minimized && <div style={{ flex: 1 }} />}
+        <button
+          className="ss-btn ss-btn-icon"
+          style={{ width: 28, height: 26, flex: "none" }}
+          onClick={props.onToggleMinimize}
+          title={props.minimized ? "Restore code pane (Ctrl+E)" : "Minimize code pane (Ctrl+E)"}
+        >
+          {props.minimized ? <ChevronsUp size={14} /> : <ChevronsDown size={14} />}
         </button>
       </div>
 
-      {slideError && (tab === "slide" || tab === "bg" || tab === "overlay") && (
-        <div className="ss-error-banner">
-          <span style={{ color: "#f26d6d", flex: "none", fontWeight: 600 }}>
-            <AlertTriangle size={12} style={{ verticalAlign: -1, marginRight: 6 }} />
-            Error
-          </span>
-          <span>{slideError}</span>
-        </div>
+      {!props.minimized && (
+        <>
+          {slideError && (tab === "slide" || tab === "bg" || tab === "overlay") && (
+            <div className="ss-error-banner">
+              <span style={{ color: "var(--ss-err)", flex: "none", fontWeight: 600 }}>
+                <AlertTriangle size={12} style={{ verticalAlign: -1, marginRight: 6 }} />
+                Error
+              </span>
+              <span>{slideError}</span>
+            </div>
+          )}
+
+          <div className="ss-codepane-body ss-cm">
+            {tab === "slide" && sel && (
+              <CodeMirror
+                value={buffers[slidePath] ?? ""}
+                theme={cmTheme}
+                extensions={[...TSX_EXT, pasteFormatExt]}
+                height="100%"
+                basicSetup={{ foldGutter: true, highlightActiveLine: true, autocompletion: false }}
+                onChange={(v) => onBufferChange(slidePath, v)}
+                onCreateEditor={(view) => {
+                  viewRef.current = view;
+                }}
+              />
+            )}
+            {tab === "slide" && !sel && <EmptyPane text="Select a slide in the filmstrip" />}
+
+            {tab === "bg" && (
+              <SourceEditor
+                layer="bg"
+                deckId={deckId}
+                deck={deck}
+                files={props.files}
+                sel={sel}
+                buffers={buffers}
+                onBufferChange={onBufferChange}
+                ensureBuffer={ensureBuffer}
+                onCommonSource={props.onCommonSource}
+                onOverride={props.onOverride}
+                activeFileRef={activeFileRef}
+                formatFile={formatFile}
+                cmTheme={cmTheme}
+                pasteFormatExt={pasteFormatExt}
+              />
+            )}
+            {tab === "overlay" && (
+              <SourceEditor
+                layer="overlay"
+                deckId={deckId}
+                deck={deck}
+                files={props.files}
+                sel={sel}
+                buffers={buffers}
+                onBufferChange={onBufferChange}
+                ensureBuffer={ensureBuffer}
+                onCommonSource={props.onCommonSource}
+                onOverride={props.onOverride}
+                activeFileRef={activeFileRef}
+                formatFile={formatFile}
+                cmTheme={cmTheme}
+                pasteFormatExt={pasteFormatExt}
+              />
+            )}
+
+            {tab === "notes" && sel && (
+              <CodeMirror
+                value={buffers[notesPath] ?? ""}
+                theme={cmTheme}
+                extensions={PLAIN_EXT}
+                height="100%"
+                onChange={(v) => onBufferChange(notesPath, v)}
+              />
+            )}
+            {tab === "notes" && !sel && <EmptyPane text="Select a slide to edit its notes" />}
+
+            {tab === "assets" && <AssetsTab deckId={deckId} version={props.version} />}
+
+            {tab === "theme" && (
+              <CodeMirror
+                value={buffers["theme.css"] ?? ""}
+                theme={cmTheme}
+                extensions={PLAIN_EXT}
+                height="100%"
+                onChange={(v) => onBufferChange("theme.css", v)}
+              />
+            )}
+          </div>
+        </>
       )}
-
-      <div className="ss-codepane-body ss-cm">
-        {tab === "slide" && sel && (
-          <CodeMirror
-            value={buffers[slidePath] ?? ""}
-            theme={oneDark}
-            extensions={TSX_EXT}
-            height="100%"
-            basicSetup={{ foldGutter: true, highlightActiveLine: true, autocompletion: false }}
-            onChange={(v) => onBufferChange(slidePath, v)}
-          />
-        )}
-        {tab === "slide" && !sel && <EmptyPane text="Select a slide in the filmstrip" />}
-
-        {tab === "bg" && (
-          <SourceEditor
-            layer="bg"
-            deckId={deckId}
-            deck={deck}
-            files={props.files}
-            sel={sel}
-            buffers={buffers}
-            onBufferChange={onBufferChange}
-            ensureBuffer={ensureBuffer}
-            onCommonSource={props.onCommonSource}
-            onOverride={props.onOverride}
-          />
-        )}
-        {tab === "overlay" && (
-          <SourceEditor
-            layer="overlay"
-            deckId={deckId}
-            deck={deck}
-            files={props.files}
-            sel={sel}
-            buffers={buffers}
-            onBufferChange={onBufferChange}
-            ensureBuffer={ensureBuffer}
-            onCommonSource={props.onCommonSource}
-            onOverride={props.onOverride}
-          />
-        )}
-
-        {tab === "notes" && sel && (
-          <CodeMirror
-            value={buffers[notesPath] ?? ""}
-            theme={oneDark}
-            extensions={[]}
-            height="100%"
-            onChange={(v) => onBufferChange(notesPath, v)}
-          />
-        )}
-        {tab === "notes" && !sel && <EmptyPane text="Select a slide to edit its notes" />}
-
-        {tab === "assets" && <AssetsTab deckId={deckId} version={props.version} />}
-
-        {tab === "theme" && (
-          <CodeMirror
-            value={buffers["theme.css"] ?? ""}
-            theme={oneDark}
-            extensions={[]}
-            height="100%"
-            onChange={(v) => onBufferChange("theme.css", v)}
-          />
-        )}
-      </div>
     </section>
   );
 }
@@ -205,6 +381,10 @@ function SourceEditor(props: {
   ensureBuffer: (path: string) => Promise<void>;
   onCommonSource: (layer: "bg" | "overlay", source: Source) => void;
   onOverride: (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => void;
+  activeFileRef: React.RefObject<string | null>;
+  formatFile: (path: string | null) => Promise<void>;
+  cmTheme: "light" | typeof oneDark;
+  pasteFormatExt: unknown;
 }) {
   const { layer, deckId, deck, files, sel } = props;
   const { toast } = useToast();
@@ -222,8 +402,24 @@ function SourceEditor(props: {
 
   useEffect(() => {
     if (codePath) props.ensureBuffer(codePath);
-     
   }, [codePath]);
+
+  // register the visible file with the pane-level formatter
+  const activeFileRef = props.activeFileRef;
+  useEffect(() => {
+    activeFileRef.current = codePath;
+    return () => {
+      if (activeFileRef.current === codePath) activeFileRef.current = null;
+    };
+  }, [codePath, activeFileRef]);
+
+  const applyFormat = useCallback(
+    (formatted: string) => {
+      if (codePath) props.onBufferChange(codePath, formatted);
+    },
+    [codePath],
+  );
+  useFormatOnOpen(codePath, codePath ? props.buffers[codePath] : undefined, applyFormat);
 
   const setSource = (source: Source | undefined) => {
     if (scope === "override" && sel) {
@@ -299,7 +495,7 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
           <SelectTrigger className="ss-input" style={{ height: 28, width: 150, fontSize: 12 }}>
             <SelectValue />
           </SelectTrigger>
-          <SelectContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+          <SelectContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
             <SelectItem value="none">None</SelectItem>
             <SelectItem value="code">Code (.tsx)</SelectItem>
             <SelectItem value="image" disabled={images.length === 0}>Image</SelectItem>
@@ -315,7 +511,7 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
               <SelectTrigger className="ss-input" style={{ height: 28, width: 210, fontSize: 12 }}>
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+              <SelectContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
                 {dirFiles.map((p) => (
                   <SelectItem key={p} value={p}>{p}</SelectItem>
                 ))}
@@ -333,7 +529,7 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
               <SelectTrigger className="ss-input" style={{ height: 28, width: 210, fontSize: 12 }}>
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+              <SelectContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
                 {images.map((p) => (
                   <SelectItem key={p} value={p}>{p}</SelectItem>
                 ))}
@@ -351,8 +547,8 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
         {effective?.type === "code" && codePath ? (
           <CodeMirror
             value={props.buffers[codePath] ?? ""}
-            theme={oneDark}
-            extensions={TSX_EXT}
+            theme={props.cmTheme}
+            extensions={[...TSX_EXT, props.pasteFormatExt as never]}
             height="100%"
             basicSetup={{ foldGutter: true, highlightActiveLine: true, autocompletion: false }}
             onChange={(v) => props.onBufferChange(codePath, v)}
@@ -392,7 +588,7 @@ function ImageBgFields({ source, onChange }: { source: Extract<Source, { type: "
         <SelectTrigger className="ss-input" style={{ height: 28, width: 110, fontSize: 12 }}>
           <SelectValue />
         </SelectTrigger>
-        <SelectContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+        <SelectContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
           <SelectItem value="cover">cover</SelectItem>
           <SelectItem value="contain">contain</SelectItem>
         </SelectContent>

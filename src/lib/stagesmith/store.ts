@@ -284,7 +284,13 @@ export async function updateSlideEntry(
   const deck = await readDeck(deckId);
   const idx = deck.slides.findIndex((s) => s.id === slideId);
   if (idx < 0) throw new Error("Slide not found");
-  deck.slides[idx] = { ...deck.slides[idx], ...patch };
+  const next = { ...deck.slides[idx], ...patch };
+  // explicit null = "remove this override" (fix-list item 5) — the filmstrip
+  // dot and the runtime then fall back to the deck-common layer
+  for (const key of ["bg", "overlay", "theme"] as const) {
+    if (next[key] === null) delete next[key];
+  }
+  deck.slides[idx] = next;
   await writeDeckJson(deckId, deck);
   return deck;
 }

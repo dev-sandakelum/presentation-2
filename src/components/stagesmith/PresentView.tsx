@@ -23,7 +23,9 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
   const [ui, setUi] = useState({ qr: false, overview: false });
   const [chromeHidden, setChromeHidden] = useState(false);
   const [freeze, setFreeze] = useState(false);
-  const [now, setNow] = useState(() => new Date());
+  // client-only clock — a server-rendered time would always differ from
+  // hydration time (hydration mismatch)
+  const [now, setNow] = useState<Date | null>(null);
   const [dir, setDir] = useState<"next" | "prev">("next");
 
   const deck: DeckJson | null = bundle?.deck ?? null;
@@ -58,6 +60,7 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
 
   // clock
   useEffect(() => {
+    setNow(new Date());
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
@@ -342,7 +345,9 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
             {sync.connected ? (sync.remotes ? `${sync.remotes} remote${sync.remotes > 1 ? "s" : ""}` : "sync") : "offline"}
           </span>
           <span className="ss-label" style={{ letterSpacing: ".1em", fontVariantNumeric: "tabular-nums" }}>
-            {now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            {now
+              ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+              : "--:--:--"}
           </span>
         </div>
         <div className="ss-chrome-panel">
@@ -367,7 +372,7 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
         {slides.map((s, i) => (
           <button
             key={s.id}
-            className={`ss-dot ${i === index ? "cur" : ""} ${s.bg || s.overlay || s.theme ? "has-override" : ""}`}
+            className={`ss-dot ${i === index ? "cur" : ""} ${s.bg && s.bg.type !== "none" ? "has-override" : ""}`}
             onClick={() => goSlide(s.id)}
             title={s.label}
           >
@@ -425,7 +430,7 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
 }
 
 function isOnButton(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest("button, a, input, textarea, [contenteditable]");
+  return Boolean(target instanceof Element && target.closest("button, a, input, textarea, [contenteditable]"));
 }
 
 function toggleFull() {
@@ -451,7 +456,7 @@ function OvItem(props: {
       <span className="ss-ov-n">{String(index + 1).padStart(2, "0")}</span>
       <span>
         <div className="ss-ov-t">{entry.label}</div>
-        <div className="ss-ov-k">{entry.theme ? `theme ${entry.theme}` : entry.bg || entry.overlay ? "has override" : "\u00A0"}</div>
+        <div className="ss-ov-k">{entry.bg ? "bg override" : entry.theme ? `theme ${entry.theme}` : "\u00A0"}</div>
       </span>
       <span style={{ width: 120, height: 68, borderRadius: 8, overflow: "hidden", background: "#000", border: "1px solid rgba(255,255,255,.12)", flex: "none" }}>
         {inView && deck ? (

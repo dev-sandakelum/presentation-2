@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { DeckJson, SlideEntry, Source } from "@/lib/stagesmith/types";
 import { StageFrame, resolveCode } from "./StageFrame";
@@ -13,6 +13,31 @@ const SHOW: Record<PreviewMode, { bg: boolean; content: boolean; overlay: boolea
   content: { bg: false, content: true, overlay: false },
   overlay: { bg: false, content: false, overlay: true },
 };
+
+/** Fit a 1280×720 stage into a box without cropping (fix-list item 1).
+ *  Recalculated by a ResizeObserver, so window resizes, filmstrip changes
+ *  and code-pane open / close / minimize all resize the preview cleanly. */
+function useFitStage(margin = 24) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0].contentRect;
+      if (r.width <= 0 || r.height <= 0) return;
+      const availW = Math.max(0, r.width - margin);
+      const availH = Math.max(0, r.height - margin);
+      const scale = Math.min(availW / 1280, availH / 720);
+      const w = Math.floor(1280 * scale);
+      const h = (w * 720) / 1280; // derive from width → exact 16:9
+      setSize((prev) => (prev && prev.w === w && prev.h === h ? prev : { w, h }));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [margin]);
+  return { ref, size };
+}
 
 export function PreviewPane(props: {
   deckId: string;
@@ -27,6 +52,7 @@ export function PreviewPane(props: {
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState(0);
   const [steps, setSteps] = useState(1);
+  const fit = useFitStage(24);
 
   useEffect(() => {
     setStep(0);
@@ -99,8 +125,15 @@ export function PreviewPane(props: {
           </span>
         )}
       </div>
-      <div className="ss-preview-stage">
-        <div className="ss-preview-frame">
+      <div className="ss-preview-stage" ref={fit.ref}>
+        <div
+          className="ss-preview-frame"
+          style={
+            fit.size
+              ? { width: fit.size.w, height: fit.size.h, aspectRatio: "16 / 9", maxWidth: "100%", maxHeight: "100%" }
+              : undefined
+          }
+        >
           {sel ? (
             <StageFrame
               deckId={deckId}
@@ -124,8 +157,8 @@ export function PreviewPane(props: {
         </div>
       </div>
       {error && (
-        <div className="ss-error-banner" style={{ borderTop: "1px solid #4a1f22", borderBottom: 0 }}>
-          <span style={{ color: "#f26d6d", fontWeight: 600 }}>Compile error</span>
+        <div className="ss-error-banner" style={{ borderTop: "1px solid var(--ss-errline)", borderBottom: 0 }}>
+          <span style={{ color: "var(--ss-err)", fontWeight: 600 }}>Compile error</span>
           <span>{error}</span>
         </div>
       )}

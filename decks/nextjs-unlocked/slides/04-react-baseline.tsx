@@ -1,5 +1,10 @@
 import { Ic } from "@/shared/icons";
 
+// ⚠ Deliberate error (fix-list item 4): this slide always fails to compile
+// so the filmstrip shows a red error-count badge — click the badge to open
+// this file with the cursor on the failing line. Remove this line to heal.
+const demoError = ;
+
 export default function Slide() {
   return (
     <section className="slide">

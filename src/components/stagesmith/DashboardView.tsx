@@ -4,10 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FileUp,
   Import,
+  Moon,
   Play,
   Presentation,
   QrCode,
   Redo2,
+  Sun,
   Undo2,
   BookOpen,
   Camera,
@@ -17,9 +19,10 @@ import type { DeckBundle } from "@/lib/stagesmith/client";
 import type { DeckJson, Source, ThemeMode } from "@/lib/stagesmith/types";
 import { Filmstrip } from "./Filmstrip";
 import { PreviewPane } from "./PreviewPane";
-import { CodePane, type CodeTab } from "./CodePane";
+import { CodePane, type CodeTab, type GotoError } from "./CodePane";
 import { QrPanel } from "./QrPanel";
 import { useSync } from "@/hooks/useSync";
+import { useUiTheme, hydrateUiTheme } from "@/hooks/useUiTheme";
 import { download, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -32,6 +35,15 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 const SAVE_DEBOUNCE = 320; // ms — plan: ~400 ms autosave
+const CODE_MIN_KEY = "ss-code-minimized"; // fix-list item 1: remembered between sessions
+
+function readCodeMinimized(): boolean {
+  try {
+    return window.localStorage.getItem(CODE_MIN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
   const { toast } = useToast();
@@ -43,10 +55,32 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
   const [buffers, setBuffers] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
   const [saveState, setSaveState] = useState<"saved" | "saving" | "idle">("idle");
-  const [codeOpen, setCodeOpen] = useState(true);
+  const [codeMinimized, setCodeMinimized] = useState(false);
   const [tab, setTab] = useState<CodeTab>("slide");
   const [qrOpen, setQrOpen] = useState(false);
   const [snapshots, setSnapshots] = useState<string[]>([]);
+  const [gotoError, setGotoError] = useState<GotoError | null>(null);
+
+  // app chrome theme (fix-list item 8) — hydrate once per mount
+  const [uiTheme, setUiTheme] = useUiTheme();
+  useEffect(() => {
+    hydrateUiTheme();
+  }, []);
+  // code pane minimize state — persisted (fix-list item 1)
+  useEffect(() => {
+    setCodeMinimized(readCodeMinimized());
+  }, []);
+  const toggleCodeMin = useCallback(() => {
+    setCodeMinimized((m) => {
+      const next = !m;
+      try {
+        window.localStorage.setItem(CODE_MIN_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
 
   // undo/redo of file buffers (plan: 200-step undo)
   const undoRef = useRef<Array<{ path: string; content: string }>>([]);
@@ -193,7 +227,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
         }
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
           e.preventDefault();
-          setCodeOpen((o) => !o);
+          toggleCodeMin();
         }
         return;
       }
@@ -204,7 +238,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [flushSave, undo, redo, nav, deckId]);
+  }, [flushSave, undo, redo, nav, deckId, toggleCodeMin]);
 
   /* ---------- sync (presence + token for QR) ---------- */
   const sync = useSync(deckId, "editor", null, deck?.slides);
@@ -282,13 +316,28 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
   const setSlideOverride = useCallback(
     async (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => {
       try {
-        applyDeck(await api.patchSlide(deckId, slideId, { [layer]: source } as never));
+        // null (not undefined) so JSON keeps the key → the store removes it
+        // and the filmstrip dot disappears (fix-list item 5)
+        applyDeck(await api.patchSlide(deckId, slideId, { [layer]: source ?? null } as never));
       } catch (e) {
         toast({ title: "Could not set override", description: (e as Error).message, variant: "destructive" });
       }
     },
     [deckId, applyDeck, toast],
   );
+
+  /* filmstrip error badge → open the slide on the first error line (item 4) */
+  const jumpToError = useCallback((slideId: string, line: number, col: number) => {
+    setSelId(slideId);
+    setTab("slide");
+    setCodeMinimized(false);
+    try {
+      window.localStorage.setItem(CODE_MIN_KEY, "0");
+    } catch {
+      /* ignore */
+    }
+    setGotoError({ slideId, line, col, nonce: Date.now() });
+  }, []);
 
   const addSlideFrom = useCallback(
     async (opts: { template?: string; label?: string; code?: string; position?: number }) => {
@@ -321,8 +370,8 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
   /** single-flight file loader — never caches a failed fetch as "" */
   const inflightRef = useRef<Map<string, Promise<void>>>(new Map());
   const ensureBuffer = useCallback(
-    (path: string) => {
-      if (buffersRef.current[path] !== undefined || dirtyRef.current[path]) return;
+    (path: string): Promise<void> => {
+      if (buffersRef.current[path] !== undefined || dirtyRef.current[path]) return Promise.resolve();
       const existing = inflightRef.current.get(path);
       if (existing) return existing;
       const p = (async () => {
@@ -396,6 +445,13 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
           {sync.remotes > 0 ? `${sync.remotes} phone${sync.remotes > 1 ? "s" : ""} connected` : "sync idle"}
         </span>
         <div style={{ flex: 1 }} />
+        <button
+          className="ss-btn ss-btn-icon"
+          onClick={() => setUiTheme()}
+          title={uiTheme === "dark" ? "Switch app to light theme" : "Switch app to dark theme"}
+        >
+          {uiTheme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+        </button>
         <button className="ss-btn ss-btn-icon" title="Undo (Ctrl+Z)" onClick={undo}>
           <Undo2 size={15} />
         </button>
@@ -409,7 +465,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
               <FileUp size={15} /> Import
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+          <DropdownMenuContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
             <ImportSlideItems onAdd={addSlideFrom} />
           </DropdownMenuContent>
         </DropdownMenu>
@@ -420,7 +476,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
               <Import size={15} /> Export
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+          <DropdownMenuContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
             <DropdownMenuItem onClick={() => download(api.exportUrl(deckId, "smdeck"), `${deckId}.smdeck`)}>
               .smdeck (zip with manifest)
             </DropdownMenuItem>
@@ -436,7 +492,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
               <Camera size={15} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea", maxHeight: 320, overflowY: "auto" }}>
+          <DropdownMenuContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)", maxHeight: 320, overflowY: "auto" }}>
             <DropdownMenuLabel className="ss-label">Snapshots — restore a point</DropdownMenuLabel>
             {snapshots.length === 0 && (
               <div style={{ padding: "8px 12px", font: "400 12px var(--ss-sans)", color: "var(--ss-mut)" }}>
@@ -474,7 +530,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
               <Play size={13} style={{ transform: "rotate(90deg)" }} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+          <DropdownMenuContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
             <DropdownMenuItem onClick={() => nav.present(deckId, 0)}>
               <Play size={13} /> From start
             </DropdownMenuItem>
@@ -505,6 +561,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
           onRename={rename}
           onSetTheme={setSlideTheme}
           onAdd={addSlideFrom}
+          onJumpToError={jumpToError}
         />
         <div className="ss-preview-wrap">
           <PreviewPane
@@ -515,24 +572,25 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
             version={version}
             onOverride={setSlideOverride}
           />
-          {codeOpen && (
-            <CodePane
-              deckId={deckId}
-              deck={deck}
-              files={bundle?.files ?? []}
-              sel={sel}
-              tab={tab}
-              onTab={setTab}
-              buffers={buffers}
-              dirty={dirty}
-              onBufferChange={onBufferChange}
-              ensureBuffer={ensureBuffer}
-              onFlushSave={() => flushSave()}
-              onCommonSource={setCommonSource}
-              onOverride={setSlideOverride}
-              version={version}
-            />
-          )}
+          <CodePane
+            deckId={deckId}
+            deck={deck}
+            files={bundle?.files ?? []}
+            sel={sel}
+            tab={tab}
+            onTab={setTab}
+            buffers={buffers}
+            dirty={dirty}
+            onBufferChange={onBufferChange}
+            ensureBuffer={ensureBuffer}
+            onFlushSave={() => flushSave()}
+            onCommonSource={setCommonSource}
+            onOverride={setSlideOverride}
+            version={version}
+            minimized={codeMinimized}
+            onToggleMinimize={toggleCodeMin}
+            gotoError={gotoError}
+          />
         </div>
       </div>
 

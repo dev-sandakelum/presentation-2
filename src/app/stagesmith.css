@@ -1,8 +1,11 @@
 /* ============ Stagesmith app chrome ============ */
 /* Tool UI — dark-first monochrome with an amber accent. Slides carry
-   their own theme via theme.css inside the sandboxed runtime. */
+   their own theme via theme.css inside the sandboxed runtime.
+   The chrome variables live on :root (not just .ss-app) so Radix portal
+   menus rendered in <body> also resolve them; the light palette is
+   selected by html[data-ss-theme="light"] (fix-list item 8). */
 
-.ss-app {
+:root {
   --ss-bg: #0b0b0c;
   --ss-panel: #101012;
   --ss-panel2: #141417;
@@ -17,9 +20,34 @@
   --ss-ok: #4ec27a;
   --ss-err: #f26d6d;
   --ss-warn: #e0a83c;
+  --ss-errbg: #1c1112;
+  --ss-errline: #4a1f22;
+  --ss-errink: #f3a6a6;
   --ss-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Consolas, monospace;
   --ss-sans: var(--font-geist-sans), -apple-system, "Segoe UI", Roboto, sans-serif;
+}
 
+html[data-ss-theme="light"] {
+  --ss-bg: #f2f2f5;
+  --ss-panel: #ffffff;
+  --ss-panel2: #f6f6f9;
+  --ss-line: #e5e5ec;
+  --ss-line-strong: #d5d5df;
+  --ss-ink: #17171c;
+  --ss-ink2: #3c3c46;
+  --ss-mut: #71717e;
+  --ss-faint: #a3a3af;
+  --ss-acc: #c9880f;
+  --ss-acc-ink: #fffdf7;
+  --ss-ok: #177e4d;
+  --ss-err: #d64545;
+  --ss-warn: #a86e0d;
+  --ss-errbg: #fbf0f0;
+  --ss-errline: #ecc8c8;
+  --ss-errink: #a33636;
+}
+
+.ss-app {
   position: fixed;
   inset: 0;
   display: flex;
@@ -149,8 +177,6 @@
   flex-direction: column;
   gap: 10px;
 }
-.ss-filmstrip-list::-webkit-scrollbar { width: 8px; }
-.ss-filmstrip-list::-webkit-scrollbar-thumb { background: var(--ss-line-strong); border-radius: 4px; }
 
 .ss-thumb {
   position: relative;
@@ -183,16 +209,28 @@
 .ss-thumb-err {
   position: absolute;
   top: 6px;
-  right: 6px;
-  z-index: 3;
-  width: 18px;
+  z-index: 4;
+  min-width: 18px;
   height: 18px;
+  padding: 0 5px;
   border-radius: 6px;
   display: grid;
   place-items: center;
-  background: #7f1d1d;
-  color: #fecaca;
-  font: 700 11px var(--ss-mono);
+  background: #b91c1c;
+  border: 1px solid #7f1d1d;
+  color: #fee2e2;
+  font: 700 10px var(--ss-mono);
+  cursor: pointer;
+}
+.ss-thumb-err:hover { background: #dc2626; }
+.ss-thumb-dot {
+  position: absolute;
+  top: 6px;
+  z-index: 3;
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--ss-acc);
 }
 .ss-thumb-acts {
   position: absolute;
@@ -285,8 +323,11 @@
 }
 .ss-preview-frame {
   position: relative;
-  width: min(100%, 960px);
+  /* fallback until the ResizeObserver measures the pane — the observer
+     then pins the exact 16:9 size in px (fix-list item 1) */
+  width: min(100%, 640px);
   aspect-ratio: 16 / 9;
+  max-height: 100%;
   border: 1px solid var(--ss-line-strong);
   border-radius: 12px;
   overflow: hidden;
@@ -301,7 +342,7 @@
   background: var(--ss-panel);
   display: flex;
   flex-direction: column;
-  min-height: 60px;
+  min-height: 40px;
 }
 .ss-codepane-head {
   flex: none;
@@ -351,9 +392,9 @@
   align-items: flex-start;
   gap: 10px;
   padding: 9px 12px;
-  background: #1c1112;
-  border-bottom: 1px solid #4a1f22;
-  color: #f3a6a6;
+  background: var(--ss-errbg);
+  border-bottom: 1px solid var(--ss-errline);
+  color: var(--ss-errink);
   font: 400 12px/1.55 var(--font-geist-mono), monospace;
   white-space: pre-wrap;
   word-break: break-word;
@@ -686,8 +727,8 @@
   gap: 14px;
   padding: 26px 30px 22px;
   border-radius: 18px;
-  background: #101012;
-  border: 1px solid #2a2a2e;
+  background: var(--ss-panel);
+  border: 1px solid var(--ss-line-strong);
   box-shadow: 0 30px 80px rgba(0, 0, 0, .6);
 }
 .ss-qr-card img { width: 220px; height: 220px; border-radius: 10px; background: #fff; padding: 8px; }
@@ -697,11 +738,11 @@
   gap: 8px;
   max-width: 340px;
   padding: 8px 12px;
-  border: 1px solid #2a2a2e;
+  border: 1px solid var(--ss-line-strong);
   border-radius: 9px;
-  background: #0c0c0e;
+  background: var(--ss-bg);
   font: 400 11.5px var(--ss-mono);
-  color: #c9c9cd;
+  color: var(--ss-ink2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -709,8 +750,28 @@
 .ss-qr-count { font: 500 11px var(--ss-mono); letter-spacing: .14em; text-transform: uppercase; color: #8a8a90; }
 
 /* ---------- misc ---------- */
-.ss-scroll::-webkit-scrollbar { width: 8px; }
-.ss-scroll::-webkit-scrollbar-thumb { background: #2a2a2e; border-radius: 4px; }
+
+/* Hidden-but-scrollable scrollbars (fix-list item 7): wheel, trackpad and
+   touch scrolling keep working, only the gutters are invisible. */
+.ss-app, .ss-library, .ss-display, .ss-remote,
+.ss-app *, .ss-library *, .ss-display *, .ss-remote * {
+  scrollbar-width: none;
+}
+.ss-app ::-webkit-scrollbar, .ss-library ::-webkit-scrollbar,
+.ss-display ::-webkit-scrollbar, .ss-remote ::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+/* Radix portal menus live in <body>, outside the app roots */
+[data-radix-popper-content-layer], [data-radix-popper-content-layer] * {
+  scrollbar-width: none;
+}
+[data-radix-popper-content-layer] ::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
 
 .ss-assets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .ss-asset {

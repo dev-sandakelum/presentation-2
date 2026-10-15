@@ -114,7 +114,7 @@ async function buildModule(
         };
       });
 
-      const intern = async (target: string): Promise<{ path: string; external: boolean } | { errors: unknown[] }> => {
+      const intern = async (target: string): Promise<esbuild.OnResolveResult> => {
         const rel = path.relative(root, target).split(path.sep).join("/");
         if (rel.startsWith("..") || path.isAbsolute(rel)) {
           return { errors: [{ text: `Import escapes the deck folder: ${rel}` }] };

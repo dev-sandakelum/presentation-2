@@ -236,7 +236,10 @@ async function applyConfig(next) {
     next.overlay && next.overlay !== next.commonOverlay ? modules.commonOverlay : null,
   );
 
-  clearError();
+  // compile error with no last-good module → error card (fix-list item 4);
+  // reported back with phase "compile" so the filmstrip does not double-count
+  if (next.slideError) showError("compile", next.slideError);
+  else clearError();
   renderTree();
 
   // report literal step count after paint

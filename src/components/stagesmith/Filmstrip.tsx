@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -32,6 +32,21 @@ import {
 } from "@/components/ui/context-menu";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
+/* ---- error string helpers (fix-list item 4) ---- */
+
+/** first "file:line:col" location in an esbuild-style message */
+function errorLineCol(msg: string): { line: number; col: number } {
+  const m = msg.match(/:(\d+):(\d+)/);
+  return { line: m ? parseInt(m[1], 10) : 1, col: m ? parseInt(m[2], 10) : 0 };
+}
+
+/** how many distinct errors a message carries (located lines win) */
+function errorCount(msg: string): number {
+  const lines = msg.split("\n").map((l) => l.trim()).filter(Boolean);
+  const located = lines.filter((l) => /:\d+:\d+/.test(l)).length;
+  return Math.max(1, located || lines.length);
+}
+
 export function Filmstrip(props: {
   deckId: string;
   deck: DeckJson;
@@ -45,9 +60,23 @@ export function Filmstrip(props: {
   onRename: (id: string, label: string) => void;
   onSetTheme: (id: string, theme: ThemeMode | null) => void;
   onAdd: (opts: { template?: string; label?: string; position?: number }) => void;
+  /** fix-list item 4: badge click → open slide on first error line */
+  onJumpToError: (id: string, line: number, col: number) => void;
 }) {
   const { deck, deckId, selId } = props;
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [rtErrors, setRtErrors] = useState<Record<string, string>>({});
+
+  // runtime errors reported by the sandboxed thumbnails (item 4).
+  // "compile" phase errors are already counted from resolveCode — skip them.
+  const onSlideRuntimeError = useCallback((slideId: string, err: { phase: string; message: string }) => {
+    if (err.phase === "compile") return;
+    const msg = `${err.phase} error — ${err.message}`;
+    setRtErrors((prev) => (prev[slideId] === msg ? prev : { ...prev, [slideId]: msg }));
+  }, []);
+  useEffect(() => {
+    setRtErrors({}); // fresh compile → stale runtime errors are dropped
+  }, [props.version]);
 
   // fetch compile meta for all slides (filmstrip badges — plan §6)
   useEffect(() => {
@@ -65,8 +94,12 @@ export function Filmstrip(props: {
     return () => {
       cancelled = true;
     };
-     
   }, [deckId, props.version, deck.slides.map((s) => s.id).join(",")]);
+
+  const mergedError = (id: string): string | undefined => {
+    const parts = [errors[id], rtErrors[id]].filter(Boolean) as string[];
+    return parts.length ? parts.join("\n") : undefined;
+  };
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const ids = (deck.slides ?? []).map((s) => s.id);
@@ -101,12 +134,14 @@ export function Filmstrip(props: {
                 themeCss={props.themeCss}
                 version={props.version}
                 selected={s.id === selId}
-                error={errors[s.id]}
+                error={mergedError(s.id)}
                 onSelect={props.onSelect}
                 onDuplicate={props.onDuplicate}
                 onDelete={props.onDelete}
                 onRename={props.onRename}
                 onSetTheme={props.onSetTheme}
+                onJumpToError={props.onJumpToError}
+                onRuntimeError={(err) => onSlideRuntimeError(s.id, err)}
               />
             ))}
           </SortableContext>
@@ -135,7 +170,7 @@ function AddSlideButton({
           <Plus size={13} />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }} side="right" align="start">
+      <DropdownMenuContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }} side="right" align="start">
         {[
           ["title", "Title"],
           ["section", "Section"],
@@ -167,6 +202,8 @@ function SortableThumb(props: {
   onDelete: (id: string) => void;
   onRename: (id: string, label: string) => void;
   onSetTheme: (id: string, theme: ThemeMode | null) => void;
+  onJumpToError: (id: string, line: number, col: number) => void;
+  onRuntimeError: (err: { phase: string; message: string }) => void;
 }) {
   const { entry, deckId, deck, index, selected, error } = props;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
@@ -174,7 +211,9 @@ function SortableThumb(props: {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(entry.label);
 
-  const hasOverride = Boolean(entry.bg || entry.overlay || entry.theme);
+  // fix-list item 5: the dot means a *background* override — nothing else
+  const hasBgOverride = Boolean(entry.bg && entry.bg.type !== "none");
+  const count = error ? errorCount(error) : 0;
 
   return (
     <div
@@ -201,6 +240,7 @@ function SortableThumb(props: {
                 version={props.version}
                 slideIndex={index}
                 slideTotal={deck.slides.length}
+                onRuntimeError={props.onRuntimeError}
               />
             ) : (
               <div style={{ aspectRatio: "16/9", display: "grid", placeItems: "center" }}>
@@ -208,23 +248,21 @@ function SortableThumb(props: {
               </div>
             )}
             <span className="ss-thumb-num">{String(index + 1).padStart(2, "0")}</span>
-            {error && <span className="ss-thumb-err" title={error}>!</span>}
-            {hasOverride && (
-              <span
-                style={{
-                  position: "absolute",
-                  top: 6,
-                  right: error ? 30 : 6,
-                  zIndex: 3,
-                  width: 8,
-                  height: 8,
-                  borderRadius: 3,
-                  background: "var(--ss-acc)",
-                  display: hasOverride ? "block" : "none",
+            {error && (
+              <button
+                className="ss-thumb-err"
+                style={{ right: hasBgOverride ? 30 : 6 }}
+                title={`${error}\n— click to open the first error line`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const { line, col } = errorLineCol(error);
+                  props.onJumpToError(entry.id, line, col);
                 }}
-                title="Has bg / overlay / theme override"
-              />
+              >
+                {count}
+              </button>
             )}
+            {hasBgOverride && <span className="ss-thumb-dot" style={{ right: 6 }} title="Background override" />}
             <span className="ss-thumb-label">{renaming ? "" : entry.label}</span>
             <div className="ss-thumb-acts">
               <span

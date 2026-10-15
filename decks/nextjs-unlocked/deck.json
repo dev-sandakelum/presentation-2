@@ -4,7 +4,7 @@
   "id": "nextjs-unlocked",
   "title": "Next.js Unlocked",
   "created": "2026-10-15T00:00:00.000Z",
-  "modified": "2026-10-15T02:03:33.312Z",
+  "modified": "2026-10-15T02:32:22.549Z",
   "settings": {
     "size": [
       1280,
@@ -24,7 +24,19 @@
   "slides": [
     {
       "id": "01-title",
-      "label": "Next.js Unlocked"
+      "label": "Next.js Unlocked",
+      "bg": {
+        "type": "code",
+        "path": "bg/aurora.tsx"
+      }
+    },
+    {
+      "id": "01-title-copy",
+      "label": "Next.js Unlocked (copy)",
+      "bg": {
+        "type": "code",
+        "path": "bg/01-title-copy.tsx"
+      }
     },
     {
       "id": "02-presenter",

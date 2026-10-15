@@ -108,10 +108,12 @@ export interface RuntimeConfig {
 
 export type RuntimeMessage =
   | { type: "ready"; frameId: string }
+  | { type: "boot-ok"; frameId: string }
+  | { type: "boot-error"; frameId: string; message: string }
   | {
       type: "error";
       frameId: string;
-      phase: "import" | "render";
+      phase: "import" | "render" | "compile";
       message: string;
       stack?: string;
     }

@@ -85,7 +85,6 @@ export function RemoteView({ deckId, token }: { deckId: string; token: string | 
             <span className="n">{String(i + 1).padStart(2, "0")}</span>
             <span>
               <div className="t">{s.label}</div>
-              {s.theme ? <div className="k">theme {s.theme}</div> : s.bg || s.overlay ? <div className="k">override</div> : null}
             </span>
           </button>
         ))}

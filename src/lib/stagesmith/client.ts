@@ -44,7 +44,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title, duplicateOf }),
     });
-    return j<{ deck: DeckJson }>(res).deck;
+    return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   deleteDeck: async (deckId: string): Promise<void> => {
@@ -65,7 +65,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, content }),
     });
-    return j<{ signature: string }>(res).signature;
+    return (await j<{ signature: string }>(res)).signature;
   },
 
   deleteFile: async (deckId: string, path: string): Promise<void> => {
@@ -82,30 +82,35 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(opts),
     });
-    return j<{ deck: DeckJson }>(res).deck;
+    return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   patchSlide: async (
     deckId: string,
     slideId: string,
-    patch: { label?: string; theme?: ThemeMode | null; bg?: Source; overlay?: Source },
+    patch: {
+      label?: string;
+      theme?: ThemeMode | null;
+      bg?: Source | null;
+      overlay?: Source | null;
+    },
   ): Promise<DeckJson> => {
     const res = await fetch(`/api/decks/${deckId}/slides/${slideId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-    return j<{ deck: DeckJson }>(res).deck;
+    return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   deleteSlide: async (deckId: string, slideId: string): Promise<DeckJson> => {
     const res = await fetch(`/api/decks/${deckId}/slides/${slideId}`, { method: "DELETE" });
-    return j<{ deck: DeckJson }>(res).deck;
+    return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   duplicateSlide: async (deckId: string, slideId: string): Promise<DeckJson> => {
     const res = await fetch(`/api/decks/${deckId}/slides/${slideId}/duplicate`, { method: "POST" });
-    return j<{ deck: DeckJson }>(res).deck;
+    return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   reorder: async (deckId: string, order: string[]): Promise<DeckJson> => {
@@ -114,7 +119,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ order }),
     });
-    return j<{ deck: DeckJson }>(res).deck;
+    return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   patchDeck: async (
@@ -126,7 +131,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
-    return j<{ deck: DeckJson }>(res).deck;
+    return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   poll: async (deckId: string): Promise<string> => {
@@ -143,7 +148,7 @@ export const api = {
     const form = new FormData();
     for (const f of files) form.append("file", f);
     const res = await fetch(`/api/decks/${deckId}/assets`, { method: "POST", body: form });
-    return j<{ uploaded: Array<{ path: string }> }>(res).uploaded;
+    return (await j<{ uploaded: Array<{ path: string }> }>(res)).uploaded;
   },
 
   listSnapshots: async (deckId: string): Promise<string[]> => {
@@ -157,7 +162,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "create", tag }),
     });
-    return j<{ name: string }>(res).name;
+    return (await j<{ name: string }>(res)).name;
   },
 
   restoreSnapshot: async (deckId: string, name: string): Promise<void> => {
