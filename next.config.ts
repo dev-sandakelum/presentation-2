@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
   },
   reactStrictMode: false,
   serverExternalPackages: ["esbuild"],
+  allowedDevOrigins: ["10.161.79.82"],
 };
 
 export default nextConfig;

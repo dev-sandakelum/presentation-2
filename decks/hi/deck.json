@@ -1,0 +1,35 @@
+{
+  "format": "smdeck",
+  "format_version": 1,
+  "id": "hi",
+  "title": "hi",
+  "created": "2026-10-15T05:21:01.856Z",
+  "modified": "2026-10-15T05:42:28.435Z",
+  "settings": {
+    "size": [
+      1280,
+      720
+    ],
+    "defaultMode": "dark",
+    "transitionMs": 220,
+    "bgCrossfadeMs": 1600
+  },
+  "bg": {
+    "type": "code",
+    "path": "bg/MSA.tsx"
+  },
+  "overlay": {
+    "type": "code",
+    "path": "overlay/MSA.tsx"
+  },
+  "slides": [
+    {
+      "id": "title",
+      "label": "Title"
+    },
+    {
+      "id": "end",
+      "label": "End"
+    }
+  ]
+}

@@ -15,6 +15,11 @@ import { useSync } from "@/hooks/useSync";
 export function RemoteView({ deckId, token }: { deckId: string; token: string | null }) {
   const [deck, setDeck] = useState<DeckJson | null>(null);
   const [notes, setNotes] = useState<string>("");
+  const [host, setHost] = useState<string>("stagesmith");
+
+  useEffect(() => {
+    setHost(window.location.host);
+  }, []);
   const sync = useSync(deckId, "remote", token, undefined);
   const state = sync.state;
   const slides = useMemo(() => deck?.slides ?? state?.order ?? [], [deck, state?.order]);
@@ -107,7 +112,7 @@ export function RemoteView({ deckId, token }: { deckId: string; token: string | 
           All decks
         </a>
         <span>
-          {typeof window !== "undefined" ? window.location.host : "stagesmith"} · {deckId}
+          {host} · {deckId}
         </span>
       </footer>
     </div>

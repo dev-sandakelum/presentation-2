@@ -1,0 +1,28 @@
+/* Stagesmith deck theme — tokens, light and dark values (plan §5.2).
+   Dark lives on :root, light overrides on [data-theme="light"]. */
+:root {
+  --acc: #ededed;
+  --acc2: #9c9c9c;
+  --ink: #f2f2f2;
+  --ink2: #c4c4c4;
+  --mut: #8f8f8f;
+  --line: #2b2b2b;
+  --card: #121212;
+  --bg: #0a0a0a;
+  --grid: rgba(255,255,255,.055);
+  --fd: -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --fb: var(--fd);
+  --fm: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+}
+[data-theme="light"] {
+  --acc: #101010;
+  --acc2: #5c5c5c;
+  --ink: #161616;
+  --ink2: #454545;
+  --mut: #6b6b6b;
+  --line: #e3e3e3;
+  --card: #fafafa;
+  --bg: #ffffff;
+  --grid: rgba(0,0,0,.05);
+}
+#root { background: var(--bg); color: var(--ink); font-family: var(--fb); }

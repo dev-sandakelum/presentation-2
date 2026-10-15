@@ -245,6 +245,7 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
   }, [current?.id]);
 
   const themeCss = bundle?.themeCss ?? "";
+  const themeCssTransparent = themeCss + "\n#root { background: transparent !important; }";
   const total = slides.length;
   const progress = total ? ((index + 1) / total) * 100 : 0;
 
@@ -278,13 +279,13 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
           )}
 
           {/* content + overlay — single mounted slide (plan §7) */}
-          <div ref={frameWrapRef} style={{ position: "absolute", inset: 0, zIndex: 2 }}>
+          <div ref={frameWrapRef} style={{ position: "absolute", inset: 0, zIndex: 2, isolation: "isolate" }}>
             <StageFrame
               deckId={deckId}
               slide={current}
               deckBg={{ type: "none" }}
               deckOverlay={current?.overlay !== undefined ? current.overlay : deck?.overlay}
-              themeCss={themeCss}
+              themeCss={themeCssTransparent}
               mode={effectiveMode}
               version={version}
               step={step}

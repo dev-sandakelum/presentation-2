@@ -387,7 +387,7 @@ function syncExternalWatchers() {
 setInterval(syncExternalWatchers, 3000);
 syncExternalWatchers();
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`Stagesmith sync service running on port ${PORT}`);
 });
 
