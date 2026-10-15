@@ -195,14 +195,20 @@ export function CodePane(props: {
   /* multi-line paste → format (fix-list item 2) */
   const formatActiveRef = useRef(formatActive);
   formatActiveRef.current = formatActive;
+  // track the pending paste-format timer so unmount cannot leave it firing
+  const pasteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (pasteTimerRef.current) clearTimeout(pasteTimerRef.current);
+  }, []);
   const pasteFormatExt = useMemo(
     () =>
       EditorView.domEventHandlers({
-        paste: (e) => {
-          const text = e.clipboardData?.getData("text/plain") ?? "";
-          if (/\n/.test(text.trim())) {
-            setTimeout(() => formatActiveRef.current(), 60);
-          }
+        paste: () => {
+          if (pasteTimerRef.current) clearTimeout(pasteTimerRef.current);
+          pasteTimerRef.current = setTimeout(() => {
+            pasteTimerRef.current = null;
+            formatActiveRef.current();
+          }, 60);
         },
       }),
     [],

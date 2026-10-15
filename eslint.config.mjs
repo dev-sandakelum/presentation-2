@@ -46,7 +46,8 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
 }, {
   // Stagesmith: runtime modules + view components manage imperative iframe
   // and socket lifecycles by design; deck folders are user content.
-  files: ["src/vendor-src/**", "src/components/stagesmith/**", "src/hooks/**", "src/app/api/**"],
+  // ui/ is vendored shadcn boilerplate.
+  files: ["src/vendor-src/**", "src/components/stagesmith/**", "src/components/ui/**", "src/hooks/**", "src/app/api/**"],
   rules: {
     "react-hooks/set-state-in-effect": "off",
     "react-hooks/refs": "off",

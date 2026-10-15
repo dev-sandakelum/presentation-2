@@ -65,7 +65,10 @@ function subscribe(l: () => void) {
 
 /** called by the runtime bootstrap before rendering */
 export function initRuntime(cfg: Partial<StageRuntimeState>) {
-  listeners = new Set();
+  // Do NOT recreate `listeners`: initRuntime runs on every config apply
+  // (i.e. on every slide change). Long-lived layers — the persistent
+  // present-mode overlay — must keep receiving store updates instead of
+  // being orphaned and rescued only by accidental re-renders.
   state = { ...state, ...cfg, declaredSteps: 1 };
   emit();
 }

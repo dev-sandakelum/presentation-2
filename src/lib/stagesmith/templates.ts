@@ -143,9 +143,11 @@ export default function Slide() {
       <h2 style={{ font: "600 48px/1.1 var(--fd)", letterSpacing: "-.03em", color: "var(--ink)", margin: "0 0 30px" }}>
         A code slide
       </h2>
-      <div style={{ border: "1px solid var(--line)", borderRadius: 14, background: "var(--card)", overflow: "hidden" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 18px", borderBottom: "1px solid var(--line)", font: "500 11px var(--fm)", letterSpacing: ".16em", textTransform: "uppercase", color: "var(--mut)" }}>
-          <span>example.tsx</span><span>tsx</span>
+      {/* .code / .code-bar / .code-tag — the runtime adds the vertical
+          scroll cap and the fullscreen expand button to these */}
+      <div className="code" style={{ border: "1px solid var(--line)", borderRadius: 14, background: "var(--card)", overflow: "hidden" }}>
+        <div className="code-bar" style={{ display: "flex", justifyContent: "space-between", padding: "12px 18px", borderBottom: "1px solid var(--line)", font: "500 11px var(--fm)", letterSpacing: ".16em", textTransform: "uppercase", color: "var(--mut)" }}>
+          <span>example.tsx</span><span className="code-tag">tsx</span>
         </div>
         <pre style={{ margin: 0, padding: "18px 20px", font: "400 16px/1.7 var(--fm)", color: "var(--ink2)" }}>
           {snippet}

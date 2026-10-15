@@ -29,28 +29,36 @@ export default function Slide() {
         </div>
         <div className="split-r rows">
           <div className="row rv" style={{ "--d": ".28s" } as React.CSSProperties}>
-            <span className="row-ic"><Ic name="code" /></span>
+            <span className="row-ic">
+              <Ic name="code" />
+            </span>
             <div>
               <h4>Component-Based</h4>
               <p>Build UIs from small, reusable, declarative pieces.</p>
             </div>
           </div>
           <div className="row rv" style={{ "--d": ".38s" } as React.CSSProperties}>
-            <span className="row-ic"><Ic name="swap" /></span>
+            <span className="row-ic">
+              <Ic name="swap" />
+            </span>
             <div>
               <h4>No Built-in Routing</h4>
               <p>You pick and install your own router — React Router, TanStack, and friends.</p>
             </div>
           </div>
           <div className="row rv" style={{ "--d": ".48s" } as React.CSSProperties}>
-            <span className="row-ic"><Ic name="search" /></span>
+            <span className="row-ic">
+              <Ic name="search" />
+            </span>
             <div>
               <h4>SEO Challenges</h4>
               <p>Client-side rendering makes search indexing harder.</p>
             </div>
           </div>
           <div className="row rv" style={{ "--d": ".58s" } as React.CSSProperties}>
-            <span className="row-ic"><Ic name="plug" /></span>
+            <span className="row-ic">
+              <Ic name="plug" />
+            </span>
             <div>
               <h4>External Tools Required</h4>
               <p>Routing and data fetching must be wired up by you.</p>

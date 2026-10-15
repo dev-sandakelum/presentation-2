@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -18,7 +18,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { Copy, GripVertical, Moon, Plus, Sun, Trash2 } from "lucide-react";
 import type { DeckJson, ThemeMode } from "@/lib/stagesmith/types";
 import { StageFrame } from "./StageFrame";
-import { useInView } from "./LibraryView";
+import { useInViewLive } from "./LibraryView";
 import { resolveCode } from "./StageFrame";
 import {
   ContextMenu,
@@ -47,7 +47,7 @@ function errorCount(msg: string): number {
   return Math.max(1, located || lines.length);
 }
 
-export function Filmstrip(props: {
+export const Filmstrip = memo(function Filmstrip(props: {
   deckId: string;
   deck: DeckJson;
   themeCss: string;
@@ -96,10 +96,16 @@ export function Filmstrip(props: {
     };
   }, [deckId, props.version, deck.slides.map((s) => s.id).join(",")]);
 
-  const mergedError = (id: string): string | undefined => {
-    const parts = [errors[id], rtErrors[id]].filter(Boolean) as string[];
-    return parts.length ? parts.join("\n") : undefined;
-  };
+  // merged per-slide error strings — computed once so memoized thumbs get
+  // stable props (a fresh lookup closure would defeat React.memo)
+  const errorById = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const s of deck.slides) {
+      const parts = [errors[s.id], rtErrors[s.id]].filter(Boolean) as string[];
+      if (parts.length) out[s.id] = parts.join("\n");
+    }
+    return out;
+  }, [errors, rtErrors, deck.slides]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const ids = (deck.slides ?? []).map((s) => s.id);
@@ -134,14 +140,14 @@ export function Filmstrip(props: {
                 themeCss={props.themeCss}
                 version={props.version}
                 selected={s.id === selId}
-                error={mergedError(s.id)}
+                error={errorById[s.id]}
                 onSelect={props.onSelect}
                 onDuplicate={props.onDuplicate}
                 onDelete={props.onDelete}
                 onRename={props.onRename}
                 onSetTheme={props.onSetTheme}
                 onJumpToError={props.onJumpToError}
-                onRuntimeError={(err) => onSlideRuntimeError(s.id, err)}
+                onRuntimeError={onSlideRuntimeError}
               />
             ))}
           </SortableContext>
@@ -154,7 +160,7 @@ export function Filmstrip(props: {
       </div>
     </aside>
   );
-}
+});
 
 function AddSlideButton({
   onAdd,
@@ -188,7 +194,7 @@ function AddSlideButton({
   );
 }
 
-function SortableThumb(props: {
+const SortableThumb = memo(function SortableThumb(props: {
   index: number;
   deck: DeckJson;
   deckId: string;
@@ -203,11 +209,14 @@ function SortableThumb(props: {
   onRename: (id: string, label: string) => void;
   onSetTheme: (id: string, theme: ThemeMode | null) => void;
   onJumpToError: (id: string, line: number, col: number) => void;
-  onRuntimeError: (err: { phase: string; message: string }) => void;
+  onRuntimeError: (slideId: string, err: { phase: string; message: string }) => void;
 }) {
   const { entry, deckId, deck, index, selected, error } = props;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
-  const { ref, inView } = useInView<HTMLDivElement>();
+  // live tracking: the static stage mounts near the viewport and UNMOUNTS
+  // when scrolled away (fix: no sandboxed runtimes linger off-screen; the
+  // placeholder keeps the slot, dnd operates on the wrapper either way)
+  const { ref, inView } = useInViewLive<HTMLDivElement>();
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(entry.label);
 
@@ -240,7 +249,7 @@ function SortableThumb(props: {
                 version={props.version}
                 slideIndex={index}
                 slideTotal={deck.slides.length}
-                onRuntimeError={props.onRuntimeError}
+                onRuntimeError={(err) => props.onRuntimeError(entry.id, err)}
               />
             ) : (
               <div style={{ aspectRatio: "16/9", display: "grid", placeItems: "center" }}>
@@ -362,4 +371,4 @@ function SortableThumb(props: {
       </ContextMenu>
     </div>
   );
-}
+});

@@ -1,14 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 import { ChevronLeft, ChevronRight, Grid2X2, Maximize2, Moon, QrCode, Sun, X } from "lucide-react";
 import type { DeckBundle } from "@/lib/stagesmith/client";
 import { api } from "@/lib/stagesmith/client";
 import type { DeckJson, Source, ThemeMode } from "@/lib/stagesmith/types";
-import { StageFrame } from "./StageFrame";
+import { StageFrame, resolveCode } from "./StageFrame";
 import { QrPanel } from "./QrPanel";
 import { useDeckUpdated, useSync } from "@/hooks/useSync";
-import { useInView } from "./LibraryView";
+import { useInViewLive } from "./LibraryView";
 import type { SsNav } from "./shared";
 
 /**
@@ -27,6 +27,8 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
   // hydration time (hydration mismatch)
   const [now, setNow] = useState<Date | null>(null);
   const [dir, setDir] = useState<"next" | "prev">("next");
+  // fullscreen code viewer open on the stage (click zones stand down)
+  const [codeModalOpen, setCodeModalOpen] = useState(false);
 
   const deck: DeckJson | null = bundle?.deck ?? null;
   const slides = useMemo(() => deck?.slides ?? [], [deck]);
@@ -239,6 +241,34 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
     [sync, current],
   );
 
+  /* ---------- preload only the adjacent slides (memory-conscious) ----------
+     The stage keeps exactly one live content frame; the neighbors' compiled
+     modules are warmed through the (immutable, content-hashed) HTTP cache so
+     the next transition imports instantly. Nothing further is mounted. */
+  useEffect(() => {
+    if (!deckId) return;
+    let cancelled = false;
+    for (const delta of [-1, 1]) {
+      const neighbor = slides[index + delta];
+      if (!neighbor) continue;
+      resolveCode(deckId, `slides/${neighbor.id}.tsx`, version)
+        .then((meta) => {
+          if (!cancelled && meta.url) fetch(meta.url, { cache: "force-cache" }).catch(() => {});
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [deckId, index, version, slides]);
+
+  // effective overlay source: per-slide override ?? deck common. Rendered in
+  // its own persistent frame OUTSIDE the animated wrapper (fix: the overlay
+  // must not re-animate / remount / flicker on slide changes — only the
+  // slide content transitions)
+  const overlaySource: Source | undefined = current?.overlay !== undefined ? current.overlay : deck?.overlay;
+  const hasOverlay = Boolean(overlaySource && overlaySource.type !== "none");
+
   const onRuntimeError = useCallback((err: { phase: string; message: string }) => {
     // error card is shown inside the runtime; log for the presenter
     console.warn(`[stagesmith] runtime ${err.phase} error on ${current?.id}:`, err.message);
@@ -278,29 +308,61 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
             <div style={{ position: "absolute", inset: 0, zIndex: 1 }}>{bgLayer(fade.src, `bg-old-${fade.key}`, fadeOutRef)}</div>
           )}
 
-          {/* content + overlay — single mounted slide (plan §7) */}
+          {/* slide content only — single mounted slide, animated on change.
+              The 220ms WAAPI transition runs on this wrapper, so anything
+              that must persist across slides lives outside it (below). */}
           <div ref={frameWrapRef} style={{ position: "absolute", inset: 0, zIndex: 2, isolation: "isolate" }}>
             <StageFrame
               deckId={deckId}
               slide={current}
               deckBg={{ type: "none" }}
-              deckOverlay={current?.overlay !== undefined ? current.overlay : deck?.overlay}
+              deckOverlay={{ type: "none" }}
               themeCss={themeCssTransparent}
               mode={effectiveMode}
+              show={{ bg: false, content: true, overlay: false }}
               version={version}
               step={step}
               slideIndex={index}
               slideTotal={total}
               onSteps={onSteps}
               onRuntimeError={onRuntimeError}
+              onCodeModalChange={setCodeModalOpen}
             />
           </div>
+
+          {/* persistent overlay — mounted once for the whole session, never
+              inside the slide-animated wrapper. Slide changes only update its
+              slideIndex/step config (reconciled in place, no remount, no
+              entrance-animation replay). Per-slide overrides and <Common/> keep
+              working exactly as before. */}
+          {hasOverlay && (
+            <div style={{ position: "absolute", inset: 0, zIndex: 3, pointerEvents: "none" }}>
+              <StageFrame
+                deckId={deckId}
+                slide={current}
+                overlayOnly
+                deckBg={{ type: "none" }}
+                deckOverlay={deck?.overlay}
+                themeCss={themeCssTransparent}
+                mode={effectiveMode}
+                show={{ bg: false, content: false, overlay: true }}
+                version={version}
+                step={step}
+                slideIndex={index}
+                slideTotal={total}
+              />
+            </div>
+          )}
         </div>
       </div>
 
-      {/* click zones (12%) */}
-      <div className="ss-clickzone left" onClick={navPrev} title="Previous" />
-      <div className="ss-clickzone right" onClick={navNext} title="Next" />
+      {/* click zones (12%) — disabled while the code viewer owns the stage */}
+      {!codeModalOpen && (
+        <>
+          <div className="ss-clickzone left" onClick={navPrev} title="Previous" />
+          <div className="ss-clickzone right" onClick={navNext} title="Next" />
+        </>
+      )}
 
       {/* chrome — top */}
       <div className="ss-chrome top">
@@ -409,7 +471,7 @@ export function PresentView({ deckId, fromParam, nav }: { deckId: string; fromPa
                 themeCss={themeCss}
                 version={version}
                 mode={s.theme ?? effectiveMode}
-                onJump={() => goSlide(s.id)}
+                onJump={goSlide}
               />
             ))}
           </div>
@@ -439,7 +501,7 @@ function toggleFull() {
   else document.documentElement.requestFullscreen().catch(() => {});
 }
 
-function OvItem(props: {
+const OvItem = memo(function OvItem(props: {
   deckId: string;
   deck: DeckJson | null;
   entry: DeckJson["slides"][number];
@@ -448,12 +510,14 @@ function OvItem(props: {
   themeCss: string;
   version: string;
   mode: ThemeMode;
-  onJump: () => void;
+  onJump: (slideId: string) => void;
 }) {
   const { deckId, deck, entry, index, themeCss, version, mode } = props;
-  const { ref, inView } = useInView<HTMLButtonElement>();
+  // live tracking: overview items unmount when scrolled far away — the grid
+  // can hold dozens of sandboxed stages otherwise
+  const { ref, inView } = useInViewLive<HTMLButtonElement>();
   return (
-    <button ref={ref} className={`ss-ov-item ${props.current ? "cur" : ""}`} onClick={props.onJump}>
+    <button ref={ref} className={`ss-ov-item ${props.current ? "cur" : ""}`} onClick={() => props.onJump(entry.id)}>
       <span className="ss-ov-n">{String(index + 1).padStart(2, "0")}</span>
       <span>
         <div className="ss-ov-t">{entry.label}</div>
@@ -477,4 +541,4 @@ function OvItem(props: {
       </span>
     </button>
   );
-}
+});

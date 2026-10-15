@@ -24,6 +24,112 @@
   .ss-content{z-index:1}
   .ss-overlay{z-index:2;pointer-events:none}
   .ss-static *{animation:none !important;transition:none !important}
+  /* code panels — cap height + themed scrollbars (fix: long code scrolls
+     vertically inside the block instead of stretching the slide). Deck
+     themes can override; horizontal scroll keeps working. */
+  .code pre {
+    max-height: 440px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong, rgba(128,128,128,.5)) transparent;
+  }
+  .code pre::-webkit-scrollbar { width: 10px; height: 10px; }
+  .code pre::-webkit-scrollbar-track { background: transparent; }
+  .code pre::-webkit-scrollbar-thumb {
+    background: var(--border-strong, rgba(128,128,128,.45));
+    border-radius: 999px;
+    border: 3px solid var(--code-bg, transparent);
+    background-clip: content-box;
+  }
+  .code pre::-webkit-scrollbar-thumb:hover {
+    background: var(--muted, rgba(128,128,128,.85));
+    border: 2px solid var(--code-bg, transparent);
+    background-clip: content-box;
+  }
+  /* thumbnails: faithful unclipped static render, no scroll chrome */
+  .ss-static .code pre { max-height: none; scrollbar-width: none; }
+  .ss-static .code pre::-webkit-scrollbar { display: none; }
+
+  /* ---- code panels: fullscreen viewer ---- */
+  .code.has-x { position: relative; }
+  .code.has-x .code-bar { padding-right: 50px; }
+  .ss-code-x {
+    position: absolute; top: 7px; right: 9px;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 27px; height: 27px; border-radius: 8px; padding: 0;
+    border: 1px solid var(--border-strong, rgba(128,128,128,.4));
+    background: transparent; color: var(--muted, rgba(128,128,128,.9));
+    cursor: pointer; flex: none;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .ss-code-x:hover, .ss-code-x.hover {
+    color: var(--fg, #fff); border-color: var(--fg, #fff);
+    background: rgba(128,128,128,.14);
+    background: color-mix(in srgb, var(--fg, #fff) 9%, transparent);
+  }
+  .ss-code-x svg { width: 13px; height: 13px; display: block; }
+  .ss-code-x::after {
+    content: attr(data-tip); position: absolute; top: calc(100% + 7px); right: 0;
+    white-space: nowrap; pointer-events: none; z-index: 60;
+    background: var(--inv-bg, #222); color: var(--inv-fg, #fff);
+    font: 500 9px/1 var(--font-mono, ui-monospace); letter-spacing: .14em; text-transform: uppercase;
+    padding: 6px 9px; border-radius: 6px;
+    opacity: 0; transform: translateY(-2px);
+    transition: opacity .15s, transform .15s;
+  }
+  .ss-code-x:hover::after, .ss-code-x.hover::after { opacity: 1; transform: none; }
+  .ss-static .ss-code-x { display: none; }
+
+  /* the viewer — rendered inside the scaled stage so it inherits the deck
+     theme tokens and the .tk-* token colors of the code markup */
+  .ss-code-modal {
+    position: fixed; inset: 0; z-index: 90;
+    display: flex; align-items: center; justify-content: center;
+    padding: 44px;
+    background: rgba(0,0,0,.78);
+    background: color-mix(in srgb, var(--bg, #000) 78%, transparent);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  }
+  .ss-code-modal-card {
+    width: min(1120px, 100%); max-height: 100%;
+    display: flex; flex-direction: column;
+    border: 1px solid var(--border-strong, #3d3d3d); border-radius: 16px;
+    background: var(--code-bg, #0a0a0a);
+    box-shadow: 0 30px 90px rgba(0,0,0,.6);
+    overflow: hidden;
+  }
+  .ss-code-modal-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 14px;
+    padding: 13px 18px; border-bottom: 1px solid var(--border, #242424);
+  }
+  .ss-code-modal-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .ss-code-modal-name {
+    font: 500 11px var(--font-mono, ui-monospace); letter-spacing: .16em; text-transform: uppercase;
+    color: var(--fg, #fff); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ss-code-modal-tag { font: 400 10px var(--font-mono, ui-monospace); letter-spacing: .14em; text-transform: uppercase; color: var(--faint, #777); }
+  .ss-code-modal-close {
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+    width: 30px; height: 30px; border-radius: 8px; cursor: pointer; padding: 0;
+    border: 1px solid var(--border-strong, #3d3d3d); background: transparent; color: var(--muted, #aaa);
+    transition: color .15s, border-color .15s;
+  }
+  .ss-code-modal-close:hover { color: var(--fg, #fff); border-color: var(--fg, #fff); }
+  .ss-code-modal-close svg { width: 13px; height: 13px; display: block; }
+  .ss-code-modal-pre {
+    flex: 1; min-height: 0; margin: 0; padding: 26px 30px;
+    overflow: auto; overscroll-behavior: contain;
+    font: 400 21px/1.75 var(--font-mono, ui-monospace); color: var(--muted, #a5a5a5);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong, rgba(128,128,128,.5)) transparent;
+  }
+  .ss-code-modal-pre::-webkit-scrollbar { width: 10px; height: 10px; }
+  .ss-code-modal-pre::-webkit-scrollbar-track { background: transparent; }
+  .ss-code-modal-pre::-webkit-scrollbar-thumb {
+    background: var(--border-strong, rgba(128,128,128,.45));
+    border-radius: 999px; border: 3px solid var(--code-bg, transparent); background-clip: content-box;
+  }
   #errcard{
     position:absolute;left:40px;top:40px;right:40px;z-index:50;
     background:#14100e;color:#fca5a5;border:1px solid #7f1d1d;border-radius:12px;
@@ -58,7 +164,8 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import * as stagesmith from "stagesmith";
 
-try { parent.postMessage({ type: "boot-ok", frameId: new URLSearchParams(location.search).get("f") || "boot" }, "*"); } catch (e) {}
+
+try { parent.postMessage({ type: "boot-ok", frameId: new URLSearchParams(location.search).get("f") || "boot" }, "*"); } catch (e) { /* ignore */ }
 
 // guard against double module execution in the same document
 if (window.__ssInstance) {
@@ -198,6 +305,9 @@ async function applyConfig(next) {
   rootEl.classList.toggle("ss-static", !!next.static);
   rootEl.style.transform = `scale(${next.scale || 1})`;
 
+  // a slide swap invalidates an open code viewer (stale markup) — close it
+  if (next.slide !== moduleUrls.slide) closeCodeModal();
+
   stagesmith.initRuntime({
     staticMode: !!next.static,
     mode: next.mode,
@@ -253,6 +363,152 @@ async function applyConfig(next) {
   });
 }
 
+/* ---------------- code panels: expand button + fullscreen viewer ----------------
+   Progressive enhancement of every .code block: an expand button is
+   injected top-right; clicking opens the code in a fullscreen viewer inside
+   the same sandbox document (deck theme + token colors preserved). The
+   app relays clicks/hover for non-interactive stages via postMessage
+   (see StageFrame) because pointer-events:none on the iframe blocks
+   direct interaction. Skipped entirely in static/thumbnail mode. */
+
+const EXP_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>';
+const X_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>';
+
+const codeBlocks = new Map(); // id → { name, tag, html }
+let codeScanTimer = 0;
+let codeModalEl = null;
+let codeModalKey = null;
+let lastBlocksMsg = "";
+
+/** layout position in unscaled stage coords (transform-independent) */
+function stagePos(el) {
+  let x = 0, y = 0, node = el;
+  while (node && node !== rootEl) { x += node.offsetLeft; y += node.offsetTop; node = node.offsetParent; }
+  return { x, y };
+}
+
+function enhanceCodeBlocks() {
+  if (!cfg || cfg.static) return;
+  document.querySelectorAll(".code").forEach((block, i) => {
+    const pre = block.querySelector("pre");
+    if (!pre) return;
+    let id = block.getAttribute("data-ss-code");
+    if (!id) {
+      id = "cb" + (i + 1) + "-" + Math.random().toString(36).slice(2, 7);
+      block.setAttribute("data-ss-code", id);
+    }
+    if (!block.classList.contains("has-x")) {
+      block.classList.add("has-x");
+      const btn = document.createElement("button");
+      btn.className = "ss-code-x";
+      btn.type = "button";
+      btn.dataset.id = id;
+      btn.setAttribute("data-tip", "Fullscreen");
+      btn.setAttribute("aria-label", "Open code fullscreen");
+      btn.innerHTML = EXP_SVG;
+      btn.addEventListener("click", (e) => { e.stopPropagation(); openCodeModal(id); });
+      block.appendChild(btn);
+    }
+    const bar = block.querySelector(".code-bar");
+    const nameEl = bar ? bar.querySelector("span") : null;
+    const tagEl = bar ? bar.querySelector(".code-tag") : null;
+    codeBlocks.set(id, {
+      name: nameEl ? nameEl.textContent.trim() : "Code",
+      tag: tagEl ? tagEl.textContent.trim() : "",
+      html: pre.innerHTML,
+    });
+  });
+  for (const id of Array.from(codeBlocks.keys())) {
+    if (!document.querySelector('[data-ss-code="' + id + '"]')) codeBlocks.delete(id);
+  }
+  postCodeBlocks();
+}
+
+function postCodeBlocks() {
+  if (!cfg || cfg.static) { lastBlocksMsg = ""; return; }
+  const blocks = [];
+  for (const [id] of codeBlocks) {
+    const btn = document.querySelector('.ss-code-x[data-id="' + id + '"]');
+    if (!btn) continue;
+    const pos = stagePos(btn);
+    blocks.push({ id, x: pos.x, y: pos.y, w: btn.offsetWidth, h: btn.offsetHeight });
+  }
+  const msg = JSON.stringify(blocks);
+  if (msg === lastBlocksMsg) return; // stable → no spam on every mutation
+  lastBlocksMsg = msg;
+  post({ type: "code-blocks", blocks });
+}
+
+function openCodeModal(id) {
+  const b = codeBlocks.get(id);
+  if (!b) return;
+  closeCodeModal();
+  const overlay = document.createElement("div");
+  overlay.className = "ss-code-modal";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-label", "Code viewer \u2014 Esc to close");
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeCodeModal(); });
+
+  const card = document.createElement("div");
+  card.className = "ss-code-modal-card";
+
+  const bar = document.createElement("div");
+  bar.className = "ss-code-modal-bar";
+  const title = document.createElement("div");
+  title.className = "ss-code-modal-title";
+  const name = document.createElement("span");
+  name.className = "ss-code-modal-name";
+  name.textContent = b.name;
+  title.appendChild(name);
+  if (b.tag) {
+    const tag = document.createElement("span");
+    tag.className = "ss-code-modal-tag";
+    tag.textContent = b.tag;
+    title.appendChild(tag);
+  }
+  const close = document.createElement("button");
+  close.className = "ss-code-modal-close";
+  close.type = "button";
+  close.title = "Close (Esc)";
+  close.setAttribute("aria-label", "Close code viewer");
+  close.innerHTML = X_SVG;
+  close.addEventListener("click", closeCodeModal);
+  bar.appendChild(title);
+  bar.appendChild(close);
+
+  const pre = document.createElement("pre");
+  pre.className = "ss-code-modal-pre";
+  pre.innerHTML = b.html; // tokenized spans → highlighting preserved
+  pre.tabIndex = 0;
+
+  card.appendChild(bar);
+  card.appendChild(pre);
+  overlay.appendChild(card);
+  rootEl.appendChild(overlay); // inside the scaled stage → themed + scaled
+  codeModalEl = overlay;
+
+  codeModalKey = (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); closeCodeModal(); }
+  };
+  document.addEventListener("keydown", codeModalKey, true);
+  post({ type: "code-modal", open: true });
+}
+
+function closeCodeModal() {
+  if (codeModalKey) { document.removeEventListener("keydown", codeModalKey, true); codeModalKey = null; }
+  if (!codeModalEl) return;
+  codeModalEl.remove();
+  codeModalEl = null;
+  post({ type: "code-modal", open: false });
+}
+
+/* re-scan when the React tree mutates (slide swaps, Step reveals, hot edits) */
+new MutationObserver(() => {
+  clearTimeout(codeScanTimer);
+  codeScanTimer = setTimeout(enhanceCodeBlocks, 120);
+}).observe(rootEl, { childList: true, subtree: true });
+enhanceCodeBlocks();
+
 /* ---------------- messages from parent ---------------- */
 
 window.addEventListener("message", (ev) => {
@@ -260,7 +516,14 @@ window.addEventListener("message", (ev) => {
   if (!m || typeof m !== "object") return;
   if (m.type === "render") applyConfig(m);
   else if (m.type === "set-step") stagesmith.__setStep(m.step);
-  else if (m.type === "set-mode") {
+  else if (m.type === "open-code") openCodeModal(m.id);
+  else if (m.type === "close-code") closeCodeModal();
+  else if (m.type === "code-hover") {
+    // relayed hover from the app (non-interactive stages): keep the
+    // deck-themed button visuals in sync with the parent-side hotspot
+    const btn = m.id && document.querySelector('.ss-code-x[data-id="' + m.id + '"]');
+    if (btn) btn.classList.toggle("hover", !!m.on);
+  } else if (m.type === "set-mode") {
     document.documentElement.dataset.theme = m.mode;
     if (rootEl) rootEl.dataset.theme = m.mode;
     stagesmith.__setMode(m.mode);
@@ -276,11 +539,21 @@ window.addEventListener("unhandledrejection", (e) => {
   if (r && (r.message || r instanceof Error)) showError("runtime", r.message || String(r), r.stack);
 });
 
-/* ready */
+/* ready — RETRIED until the parent sends the first render config.
+   Iframes present in the server-rendered HTML boot during parsing and can
+   fire ready BEFORE hydration attaches the app's message listener; without
+   the retry the handshake is lost and the stage stays blank forever. */
 const frameParam = new URLSearchParams(location.search).get("f") || "boot";
-try {
-  parent.postMessage({ type: "ready", frameId: frameParam }, "*");
-} catch (e) { /* ignore */ }
+function postReady() {
+  try { parent.postMessage({ type: "ready", frameId: frameParam }, "*"); } catch (e) { /* ignore */ }
+}
+postReady();
+// retry until the first config arrives — see the comment above
+let readyTries = 0;
+const readyTimer = setInterval(() => {
+  if (cfg || ++readyTries > 40) { clearInterval(readyTimer); return; }
+  postReady();
+}, 250);
 
 } // end __ssInstance guard
 </script>

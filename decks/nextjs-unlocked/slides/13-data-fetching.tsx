@@ -18,7 +18,8 @@ export default function Slide() {
             </div>
             <pre>
               <span className="tk-k">useEffect</span>(() =&gt; {"{"}
-              {"\n  "}<span className="tk-k">fetch</span>(<span className="tk-str">'/api/data'</span>)
+              {"\n  "}
+              <span className="tk-k">fetch</span>(<span className="tk-str">'/api/data'</span>)
               {"\n    "}.then(res =&gt; res.<span className="tk-k">json</span>())
               {"\n    "}.then(setData)
               {"\n"}){"}"}
@@ -37,10 +38,17 @@ export default function Slide() {
             </div>
             <pre>
               <span className="tk-k">export default async function</span> Page() {"{"}
-              {"\n  "}<span className="tk-k">const</span> res = <span className="tk-k">await</span> <span className="tk-k">fetch</span>(<span className="tk-str">'https://api.xyz/data'</span>)
-              {"\n  "}<span className="tk-k">const</span> data = <span className="tk-k">await</span> res.<span className="tk-k">json</span>()
+              {"\n  "}
+              <span className="tk-k">const</span> res = <span className="tk-k">await</span>{" "}
+              <span className="tk-k">fetch</span>(
+              <span className="tk-str">'https://api.xyz/data'</span>){"\n  "}
+              <span className="tk-k">const</span> data = <span className="tk-k">await</span> res.
+              <span className="tk-k">json</span>()
               {"\n"}
-              {"\n  "}<span className="tk-k">return</span> <span className="tk-tag">&lt;h1&gt;</span>{data.name}<span className="tk-tag">&lt;/h1&gt;</span>
+              {"\n  "}
+              <span className="tk-k">return</span> <span className="tk-tag">&lt;h1&gt;</span>
+              {"data.name"}
+              <span className="tk-tag">&lt;/h1&gt;</span>
               {"\n"}){"}"}
             </pre>
           </div>

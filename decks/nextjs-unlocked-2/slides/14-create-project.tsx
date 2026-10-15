@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStatic } from "stagesmith";
 import { Ic } from "@/shared/icons";
 
@@ -20,34 +20,37 @@ export default function Slide() {
   const [shown, setShown] = useState(staticMode ? OUTPUT.length : 0);
   const [copied, setCopied] = useState(false);
 
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+  }, []);
+
   useEffect(() => {
     if (staticMode) return;
     let i = 0;
-    let interval: ReturnType<typeof setInterval> | undefined;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) {
-      setTyped(CMD.length);
-      setShown(OUTPUT.length);
-      return;
-    }
-    interval = setInterval(() => {
+    const outTimers: Array<ReturnType<typeof setTimeout>> = [];
+    const interval: ReturnType<typeof setInterval> | undefined = setInterval(() => {
       i += 1;
       setTyped(i);
       if (i >= CMD.length) {
         clearInterval(interval);
         OUTPUT.forEach((_, idx) => {
-          setTimeout(() => setShown(idx + 1), 300 + idx * 240);
+          outTimers.push(setTimeout(() => setShown(idx + 1), 300 + idx * 240));
         });
       }
     }, 45);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      outTimers.forEach(clearTimeout); // no reveal timers outlive the slide
+    };
   }, [staticMode]);
 
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(CMD);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1800);
     } catch {
       /* clipboard blocked */
     }

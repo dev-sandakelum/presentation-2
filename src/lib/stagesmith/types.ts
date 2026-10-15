@@ -120,4 +120,8 @@ export type RuntimeMessage =
       stack?: string;
     }
   | { type: "rendered"; frameId: string; steps?: number }
-  | { type: "steps"; frameId: string; steps: number };
+  | { type: "steps"; frameId: string; steps: number }
+  /** runtime → app: code-panel expand buttons (stage coords, 1280×720 space) */
+  | { type: "code-blocks"; frameId: string; blocks: Array<{ id: string; x: number; y: number; w: number; h: number }> }
+  /** runtime → app: fullscreen code viewer opened / closed */
+  | { type: "code-modal"; frameId: string; open: boolean };

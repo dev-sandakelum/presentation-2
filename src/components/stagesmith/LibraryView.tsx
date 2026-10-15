@@ -46,6 +46,26 @@ export function useInView<T extends HTMLElement>(rootMargin = "120px") {
   return { ref, inView };
 }
 
+/**
+ * Continuous in-view tracking — virtualization for iframe-heavy lists
+ * (fix: the filmstrip must not keep live sandboxed stages mounted once
+ * scrolled past). Mounts when within `rootMargin` of the viewport and
+ * UNMOUNTS when it leaves that band, so off-screen thumbnails release
+ * their iframe memory; only the band around the viewport is ever alive.
+ */
+export function useInViewLive<T extends HTMLElement>(rootMargin = "260px") {
+  const ref = useRef<T | null>(null);
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new IntersectionObserver((entries) => setInView(entries[0].isIntersecting), { rootMargin });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [rootMargin]);
+  return { ref, inView };
+}
+
 export function LibraryView({ nav }: { nav: SsNav }) {
   const { toast } = useToast();
   const [decks, setDecks] = useState<DeckSummary[] | null>(null);
@@ -363,6 +383,11 @@ function DeckCard({
   const { toast } = useToast();
   const { ref, inView } = useInView<HTMLDivElement>();
   const [confirming, setConfirming] = useState(false);
+  // clear the un-confirm timer on unmount so it cannot setState afterwards
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+  }, []);
 
   return (
     <div className="ss-card">
@@ -460,7 +485,8 @@ function DeckCard({
               onClick={() => {
                 if (!confirming) {
                   setConfirming(true);
-                  setTimeout(() => setConfirming(false), 2500);
+                  if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+                  confirmTimerRef.current = setTimeout(() => setConfirming(false), 2500);
                   return;
                 }
                 api.deleteDeck(deck.id).then((r) => {

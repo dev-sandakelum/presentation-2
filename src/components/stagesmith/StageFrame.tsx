@@ -18,6 +18,10 @@ export interface StageFrameProps {
   mode: ThemeMode;
   show?: { bg: boolean; content: boolean; overlay: boolean };
   staticMode?: boolean;
+  /** overlay-only frame: render just the overlay layer, never load slide
+   *  modules (used by the persistent present-mode overlay — fix: overlay
+   *  stays mounted across slide transitions) */
+  overlayOnly?: boolean;
   /** bump to force re-resolution (folder poll signature or explicit flush) */
   version: string | number;
   step?: number;
@@ -27,6 +31,18 @@ export interface StageFrameProps {
   interactive?: boolean;
   onSteps?: (steps: number) => void;
   onRuntimeError?: (err: { phase: string; message: string }) => void;
+  /** notified when the runtime's fullscreen code viewer opens / closes
+   *  (present mode hides click zones while it is open) */
+  onCodeModalChange?: (open: boolean) => void;
+}
+
+/** a code-panel expand button, positioned in 1280×720 stage coords */
+interface CodeBlockRect {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 interface MetaInfo {
@@ -92,8 +108,8 @@ export function StageFrame(props: StageFrameProps) {
   const {
     deckId, slide, deckBg, deckOverlay, themeCss, mode,
     show = { bg: true, content: true, overlay: true },
-    staticMode = false, version, step, slideIndex, slideTotal,
-    className, interactive = false, onSteps, onRuntimeError,
+    staticMode = false, overlayOnly = false, version, step, slideIndex, slideTotal,
+    className, interactive = false, onSteps, onRuntimeError, onCodeModalChange,
   } = props;
 
   const frameId = useId().replace(/[^a-zA-Z0-9-]/g, "");
@@ -112,7 +128,8 @@ export function StageFrame(props: StageFrameProps) {
   const commonOverlaySource = deckOverlay;
 
   const metas = useResolvedSources(deckId, version, [
-    { kind: "slide", source: slide ? { type: "code", path: `slides/${slide.id}.tsx` } : null },
+    // overlayOnly frames skip slide compilation entirely — nothing else changes
+    { kind: "slide", source: !overlayOnly && slide ? { type: "code", path: `slides/${slide.id}.tsx` } : null },
     { kind: "bg", source: bgSource && bgSource.type === "code" ? bgSource : null },
     { kind: "overlay", source: overlaySource && overlaySource.type === "code" ? overlaySource : null },
     { kind: "commonOverlay", source: commonOverlaySource && commonOverlaySource.type === "code" ? commonOverlaySource : null },
@@ -153,7 +170,7 @@ export function StageFrame(props: StageFrameProps) {
       static: staticMode,
       scale,
       assetBase: `/api/assets/${deckId}`,
-      slide: slideUrl || null,
+      slide: overlayOnly ? null : (slideUrl || null),
       // no last-good version to keep → the runtime shows the error card
       slideError: slideId && !slideUrl && slideMeta?.error ? slideMeta.error : null,
       bg: bgUrl || null,
@@ -204,12 +221,19 @@ export function StageFrame(props: StageFrameProps) {
   }, [configJson, postLatest]);
 
   // iframe onLoad: module may have registered before we attached; re-post
+  const healTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const onIframeLoad = useCallback(() => {
     loadedRef.current = true;
     // the runtime's own 'ready' may beat onLoad; posting twice is idempotent
-    setTimeout(postLatest, 60);
-    setTimeout(postLatest, 350);
+    healTimersRef.current.forEach(clearTimeout);
+    healTimersRef.current = [setTimeout(postLatest, 60), setTimeout(postLatest, 350)];
   }, [postLatest]);
+  // never leave heal timers pending after unmount (memory: timers hold the
+  // config closure alive past the frame's life)
+  useEffect(() => () => {
+    healTimersRef.current.forEach(clearTimeout);
+    healTimersRef.current = [];
+  }, []);
 
   // step updates
   useEffect(() => {
@@ -220,6 +244,16 @@ export function StageFrame(props: StageFrameProps) {
   }, [step, configJson]);
 
   // messages from the runtime
+  const [codeBlocks, setCodeBlocks] = useState<CodeBlockRect[]>([]);
+  const [codeModalOpen, setCodeModalOpen] = useState(false);
+  const onCodeModalChangeRef = useRef(onCodeModalChange);
+  onCodeModalChangeRef.current = onCodeModalChange;
+
+  // post a command into the runtime (open/close the code viewer, relay hover)
+  const postRuntime = useCallback((msg: Record<string, unknown>) => {
+    iframeRef.current?.contentWindow?.postMessage(msg, "*");
+  }, []);
+
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
       const m = ev.data as RuntimeMessage & { frameId?: string };
@@ -227,8 +261,22 @@ export function StageFrame(props: StageFrameProps) {
       if (m.type === "ready" || m.type === "boot-ok") {
         loadedRef.current = true;
         postLatest();
-      } else if (m.type === "rendered" && onSteps) {
-        onSteps(m.steps ?? 1);
+      } else if (m.type === "rendered") {
+        // a rendered ack also proves the runtime is live and fed (belt and
+        // braces for handshakes the mount-time listeners might have missed)
+        loadedRef.current = true;
+        if (onSteps) onSteps(m.steps ?? 1);
+      } else if (m.type === "code-blocks") {
+        setCodeBlocks((prev) => {
+          const next = m.blocks ?? [];
+          const same =
+            prev.length === next.length &&
+            prev.every((b, i) => b.id === next[i].id && b.x === next[i].x && b.y === next[i].y && b.w === next[i].w && b.h === next[i].h);
+          return same ? prev : next;
+        });
+      } else if (m.type === "code-modal") {
+        setCodeModalOpen((prev) => (prev === m.open ? prev : m.open));
+        onCodeModalChangeRef.current?.(m.open);
       } else if (m.type === "error" && onRuntimeError) {
         onRuntimeError({ phase: m.phase, message: m.message });
       }
@@ -237,13 +285,45 @@ export function StageFrame(props: StageFrameProps) {
     return () => window.removeEventListener("message", onMessage);
   }, [frameId, onSteps, onRuntimeError, postLatest]);
 
+  // slide changed → rects from the previous slide are stale; the runtime
+  // re-posts fresh rects after its next scan
+  useEffect(() => {
+    setCodeBlocks((prev) => (prev.length ? [] : prev));
+  }, [slide?.id]);
+
+  // while the fullscreen code viewer is open on a NON-interactive stage, the
+  // viewer owns the keyboard: Esc closes it and nav keys must not leak into
+  // the app (capture phase beats the views' bubble-phase listeners)
+  useEffect(() => {
+    if (!codeModalOpen || interactive) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.key === "Escape") postRuntime({ type: "close-code" });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [codeModalOpen, interactive, postRuntime]);
+
   const src = useMemo(() => `/runtime?f=${frameId}`, [frameId]);
+
+  // Non-interactive stages (present / preview) cannot receive clicks inside
+  // the sandbox — relay hotspots are rendered exactly over each expand button
+  // (stage coords × scale) and forward click + hover into the runtime.
+  const relayCodeBlocks = !interactive && !staticMode ? codeBlocks : [];
 
   return (
     <div
       ref={containerRef}
       className={className}
-      style={{ position: "relative", width: "100%", height: "100%", overflow: "hidden", ...(!interactive ? { pointerEvents: "none" } : {}) }}
+      style={{
+        position: "relative",
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        // the stage stays click-through except while the code viewer is open
+        ...(interactive || codeModalOpen ? { pointerEvents: "auto" } : { pointerEvents: "none" }),
+      }}
     >
       <iframe
         ref={iframeRef}
@@ -253,6 +333,29 @@ export function StageFrame(props: StageFrameProps) {
         onLoad={onIframeLoad}
         style={{ width: "100%", height: "100%", border: 0, display: "block", background: "transparent" }}
       />
+      {relayCodeBlocks.map((b) => (
+        <button
+          key={b.id}
+          type="button"
+          aria-label="Open code fullscreen"
+          onClick={() => postRuntime({ type: "open-code", id: b.id })}
+          onMouseEnter={() => postRuntime({ type: "code-hover", id: b.id, on: true })}
+          onMouseLeave={() => postRuntime({ type: "code-hover", id: b.id, on: false })}
+          style={{
+            position: "absolute",
+            left: b.x * scale,
+            top: b.y * scale,
+            width: Math.max(14, b.w * scale),
+            height: Math.max(14, b.h * scale),
+            zIndex: 5,
+            padding: 0,
+            border: 0,
+            background: "transparent",
+            cursor: "zoom-in",
+            borderRadius: 6,
+          }}
+        />
+      ))}
     </div>
   );
 }

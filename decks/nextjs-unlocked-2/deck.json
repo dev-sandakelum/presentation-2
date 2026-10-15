@@ -4,7 +4,7 @@
   "id": "nextjs-unlocked-2",
   "title": "Next.js Unlocked",
   "created": "2026-10-15T05:40:08.283Z",
-  "modified": "2026-10-15T02:25:49.034Z",
+  "modified": "2026-10-15T14:16:36.028Z",
   "settings": {
     "size": [
       1280,
@@ -15,12 +15,12 @@
     "bgCrossfadeMs": 1600
   },
   "bg": {
-    "type": "code",
-    "path": "bg/custom-bg.tsx"
+    "type": "image",
+    "path": "assets/bg.png"
   },
   "overlay": {
     "type": "code",
-    "path": "overlay/common.tsx"
+    "path": "overlay/MSA.tsx"
   },
   "slides": [
     {
@@ -32,24 +32,8 @@
       }
     },
     {
-      "id": "01-title-copy",
-      "label": "Next.js Unlocked (copy)",
-      "bg": {
-        "type": "code",
-        "path": "bg/01-title-copy.tsx"
-      }
-    },
-    {
       "id": "02-presenter",
-      "label": "Your Presenter",
-      "bg": {
-        "type": "code",
-        "path": "bg/aurora.tsx"
-      }
-    },
-    {
-      "id": "03-what-is-nextjs",
-      "label": "What is Next.js?"
+      "label": "Your Presenter"
     },
     {
       "id": "04-react-baseline",

@@ -86,6 +86,14 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
   const undoRef = useRef<Array<{ path: string; content: string }>>([]);
   const redoRef = useRef<Array<{ path: string; content: string }>>([]);
   const undoTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // sweep any pending per-file undo debounce timers on unmount (memory)
+  useEffect(
+    () => () => {
+      for (const t of Object.values(undoTimers.current)) clearTimeout(t);
+      undoTimers.current = {};
+    },
+    [],
+  );
 
   const refreshSnapshots = useCallback(async () => {
     try {
@@ -367,6 +375,12 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
 
   const sel = useMemo(() => slides.find((s) => s.id === selId) ?? null, [slides, selId]);
 
+  // stable selection callback — keeps the memoized Filmstrip from
+  // re-rendering on every DashboardView state change (buffers, save state…)
+  const selectSlide = useCallback((id: string) => {
+    setSelId((prev) => (prev === id ? prev : id));
+  }, []);
+
   /** single-flight file loader — never caches a failed fetch as "" */
   const inflightRef = useRef<Map<string, Promise<void>>>(new Map());
   const ensureBuffer = useCallback(
@@ -554,7 +568,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
           themeCss={themeCss}
           version={version}
           selId={selId}
-          onSelect={(id) => setSelId(id)}
+          onSelect={selectSlide}
           onReorder={reorder}
           onDuplicate={duplicate}
           onDelete={remove}
