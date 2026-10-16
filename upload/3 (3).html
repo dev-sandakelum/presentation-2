@@ -1,0 +1,2637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark light">
+<title>Slidesmith</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<!-- ============ EDITOR CHROME STYLES (not exported) ============ -->
+<style id="app-css">
+:root{
+  --ink:#e9eefb; --mut:#8a94ac; --tx2:#c9d4ee; --tx3:#aab6cf;
+  --panel:#0d1322; --panel2:#0b101d; --line:rgba(148,180,255,.13);
+  --hov:rgba(160,190,255,.08); --hovline:rgba(148,180,255,.45);
+  --pop:#111a2e; --chipbg:rgba(10,17,30,.85); --thumbbg:#070b16;
+  --bg0:#070c17; --txarea:#c6d0e8; --scr:rgba(148,180,255,.16);
+  --danger:#ff9d9d; --veil:rgba(3,7,15,.74);
+  --frame-sh:0 30px 90px -30px rgba(0,0,0,.75),0 0 0 1px rgba(148,180,255,.14);
+  --acc:#3fe0c0; --acc2:#4da8ff;
+  --fd:'Space Grotesk',sans-serif; --fb:'Instrument Sans',sans-serif; --fm:'JetBrains Mono',monospace;
+  --ease:cubic-bezier(.22,1,.36,1);
+}
+/* ---- LIGHT EDITOR THEME ---- */
+body.lite{
+  --ink:#1b2437; --mut:#5c6884; --tx2:#33405c; --tx3:#5a6780;
+  --panel:#ffffff; --panel2:#f2f4fa; --line:rgba(28,55,120,.14);
+  --hov:rgba(35,80,190,.07); --hovline:rgba(35,80,190,.4);
+  --pop:#ffffff; --chipbg:rgba(255,255,255,.92); --thumbbg:#e9edf6;
+  --bg0:#e6eaf3; --txarea:#2c3a57; --scr:rgba(28,55,120,.22);
+  --danger:#d64545; --veil:rgba(25,40,75,.38);
+  --frame-sh:0 24px 70px -28px rgba(30,50,100,.35),0 0 0 1px rgba(28,55,120,.12);
+}
+body.lite{background:var(--bg0);color:var(--ink)}
+*,*::before,*::after{box-sizing:border-box}
+html,body{height:100%}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+#app{position:fixed;inset:0;display:flex;flex-direction:column;min-width:1024px}
+
+/* ---- top bar ---- */
+.bar{height:54px;flex:none;display:flex;align-items:center;gap:14px;padding:0 16px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;font:700 15px var(--fd);letter-spacing:-.01em}
+.brand small{font:500 9px var(--fm);letter-spacing:.24em;text-transform:uppercase;color:var(--mut);margin-top:4px}
+.divi{width:1px;height:20px;background:var(--line);flex:none}
+.b-mid{display:flex;align-items:center;gap:10px;min-width:0}
+#deckTitle{background:none;border:0;border-bottom:1px dashed transparent;color:var(--ink);
+  font:600 14px var(--fd);padding:5px 2px;width:280px;transition:border-color .2s}
+#deckTitle:hover{border-bottom-color:var(--hovline)}
+#deckTitle:focus{outline:0;border-bottom-color:var(--acc)}
+.saved{display:inline-flex;align-items:center;gap:6px;font:500 9.5px var(--fm);letter-spacing:.2em;
+  text-transform:uppercase;color:var(--mut);flex:none}
+.saved i{width:6px;height:6px;border-radius:50%;background:var(--mut);transition:.3s}
+.saved.go i{background:var(--acc);box-shadow:0 0 10px var(--acc);animation:sv .9s ease}
+.saved.go{color:var(--ink)}
+@keyframes sv{30%{transform:scale(1.7)}}
+.b-acts{margin-left:auto;display:flex;align-items:center;gap:6px}
+.ib{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:9px;
+  border:1px solid transparent;background:none;color:var(--tx3);cursor:pointer;transition:.18s;flex:none}
+.ib:hover{background:var(--hov);color:var(--ink)}
+.ib:disabled{opacity:.3;pointer-events:none}
+.ib.on{color:var(--acc);background:rgba(63,224,192,.09);border-color:rgba(63,224,192,.3)}
+.ib.danger:hover{color:var(--danger);background:rgba(255,120,120,.09)}
+#btnPresent{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 15px;margin-left:6px;border:0;
+  border-radius:9px;background:var(--acc);color:#052b23;font:600 13px var(--fd);cursor:pointer;transition:.18s}
+#btnPresent:hover{filter:brightness(1.1)}
+#btnPresent:active{transform:scale(.97)}
+
+/* ---- body layout ---- */
+.main{flex:1;display:flex;min-height:0}
+
+/* ---- filmstrip ---- */
+#strip{width:246px;flex:none;display:flex;flex-direction:column;background:var(--panel2);
+  border-right:1px solid var(--line);user-select:none}
+.s-head{flex:none;display:flex;align-items:baseline;gap:8px;padding:12px 16px 8px;
+  font:600 9.5px var(--fm);letter-spacing:.26em;text-transform:uppercase;color:var(--mut)}
+.s-head b{font:500 10px var(--fm);color:var(--tx2)}
+.s-list{flex:1;overflow-y:auto;position:relative;padding:2px 14px 14px;display:flex;flex-direction:column;gap:12px}
+.s-list::-webkit-scrollbar{width:8px}
+.s-list::-webkit-scrollbar-thumb{background:var(--scr);border-radius:8px}
+.t-item{position:relative;flex:none}
+.t-thumb{position:relative;display:block;width:218px;height:123px;border-radius:10px;overflow:hidden;
+  border:1px solid var(--line);background:var(--thumbbg);cursor:grab;transition:border-color .2s,box-shadow .2s}
+.t-item:hover .t-thumb{border-color:var(--hovline)}
+.t-item.sel .t-thumb{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc),0 8px 26px -10px rgba(63,224,192,.5)}
+.t-item.lift{opacity:.25}
+.mini{position:absolute;inset:0}
+.mini .stage{transform:scale(.1703125);transform-origin:0 0;position:absolute;top:0;left:0}
+.t-num{position:absolute;top:6px;left:6px;z-index:3;min-width:20px;height:20px;display:grid;place-items:center;
+  padding:0 5px;border-radius:7px;background:var(--chipbg);font:600 10px var(--fm);color:var(--mut)}
+.t-item.sel .t-num{background:var(--acc);color:#052b23}
+.t-acts{position:absolute;top:6px;right:6px;z-index:3;display:flex;gap:4px;opacity:0;transition:.18s}
+.t-item:hover .t-acts{opacity:1}
+.ta{width:24px;height:24px;display:grid;place-items:center;border-radius:7px;border:1px solid var(--line);
+  background:var(--chipbg);color:var(--tx2);cursor:pointer;transition:.15s}
+.ta:hover{color:var(--ink);border-color:var(--hovline)}
+.ta.del:hover{color:var(--danger);border-color:var(--danger)}
+#addBtn{flex:none;margin:10px 14px 14px;height:42px;display:flex;align-items:center;justify-content:center;gap:9px;
+  border:1.5px dashed rgba(148,180,255,.3);border-radius:11px;background:none;color:var(--mut);
+  font:600 13px var(--fd);cursor:pointer;transition:.2s}
+body.lite #addBtn{border-color:rgba(28,55,120,.3)}
+#addBtn:hover{border-color:var(--acc);color:var(--ink);background:rgba(63,224,192,.05)}
+.dropline{position:absolute;left:12px;right:12px;height:3px;border-radius:3px;background:var(--acc);
+  box-shadow:0 0 14px rgba(63,224,192,.75);z-index:6;pointer-events:none}
+.drag-ghost{position:fixed;z-index:600;width:218px;height:123px;pointer-events:none;border-radius:10px;overflow:hidden;
+  border:1px solid rgba(63,224,192,.65);box-shadow:0 26px 55px -14px rgba(0,0,0,.7);transform:rotate(2.5deg);background:var(--thumbbg)}
+.drag-ghost .mini{background:var(--thumbbg)}
+body.noselect{user-select:none}
+
+/* ---- context strip ---- */
+#center{flex:1;display:flex;flex-direction:column;min-width:0}
+#ctx{flex:none;height:46px;display:flex;align-items:center;gap:14px;padding:0 16px;
+  background:var(--panel);border-bottom:1px solid var(--line);user-select:none}
+.c-num{font:500 11px var(--fm);color:var(--mut);letter-spacing:.08em;white-space:nowrap}
+.c-num b{color:var(--acc);font-weight:600}
+#cLayout,#btnLayers{display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-radius:9px;
+  border:1px solid var(--line);background:none;color:var(--tx2);font:600 12px var(--fd);cursor:pointer;transition:.18s}
+#cLayout:hover,#btnLayers:hover{border-color:var(--hovline);color:var(--ink)}
+#cLayout .ic,#btnLayers .ic{color:var(--mut)}
+.seg{display:inline-flex;height:30px;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{height:100%;padding:0 12px;border:0;background:none;color:var(--mut);font:600 11.5px var(--fd);cursor:pointer;transition:.15s}
+.seg button:hover{color:var(--tx2)}
+.seg button.on{background:var(--hov);color:var(--acc)}
+.c-accents{display:flex;align-items:center;gap:8px}
+.sw{width:18px;height:18px;border-radius:50%;border:1px solid rgba(255,255,255,.16);cursor:pointer;padding:0;transition:.15s}
+body.lite .sw{border-color:rgba(0,0,0,.18)}
+.sw:hover{transform:scale(1.15)}
+.sw.on{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--acc)}
+.ctx-acts{margin-left:auto;display:flex;gap:6px}
+#center.no-notes #notesPane{display:none}
+
+/* ---- canvas ---- */
+#canvas{flex:1;position:relative;overflow:hidden;min-height:0;background:var(--bg0)}
+.e-frame{position:absolute;border-radius:16px;overflow:hidden;background:var(--thumbbg);box-shadow:var(--frame-sh)}
+#stageHost{position:absolute;top:0;left:0;width:1280px;height:720px;transform-origin:0 0}
+.zoom{position:absolute;right:14px;bottom:12px;z-index:2;font:500 10.5px var(--fm);color:var(--mut);
+  letter-spacing:.1em;padding:5px 9px;border:1px solid var(--line);border-radius:99px;background:var(--chipbg)}
+.ehint{position:absolute;left:14px;bottom:12px;z-index:2;display:flex;align-items:center;gap:10px;
+  font:500 10.5px var(--fm);letter-spacing:.08em;color:var(--mut);padding:6px 8px 6px 13px;border-radius:99px;
+  border:1px solid var(--line);background:var(--chipbg);max-width:min(640px,66%)}
+.ehint button{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;border:0;background:none;
+  color:var(--mut);cursor:pointer;flex:none}
+.ehint button:hover{color:var(--ink);background:var(--hov)}
+
+/* ---- bottom pane: notes + code editors ---- */
+#notesPane{flex:none;height:118px;display:flex;flex-direction:column;border-top:1px solid var(--line);
+  background:var(--panel2);transition:height .25s var(--ease)}
+#notesPane.mode-code,#notesPane.mode-bg,#notesPane.mode-so{height:242px}
+.n-head{flex:none;display:flex;align-items:center;gap:12px;padding:7px 16px 3px}
+.n-tabs{display:flex;gap:2px}
+.n-tab{height:24px;padding:0 11px;border-radius:8px;border:0;background:none;color:var(--mut);cursor:pointer;
+  font:600 9.5px var(--fm);letter-spacing:.22em;text-transform:uppercase;transition:.15s}
+.n-tab:hover{color:var(--tx2)}
+.n-tab.on{color:var(--acc);background:var(--hov)}
+#notesPane:not(.has-code) .n-tab[data-p="code"]{display:none}
+#notesPane:not(.has-bg) .n-tab[data-p="bg"]{display:none}
+/* one Overlay tab — always visible; scope (this slide / all slides) is switched inside it */
+.so-scope{display:none;gap:3px;padding:3px;border:1px solid var(--line);border-radius:9px;background:var(--hov)}
+#notesPane.mode-so .so-scope{display:flex}
+.so-scope button{height:22px;padding:0 11px;border:0;border-radius:6px;background:none;color:var(--mut);cursor:pointer;
+  font:600 9px var(--fm);letter-spacing:.14em;text-transform:uppercase;transition:.15s}
+.so-scope button:hover{color:var(--tx2)}
+.so-scope button.on{background:var(--panel);color:var(--acc);box-shadow:0 0 0 1px var(--line)}
+.n-head em{font:500 9.5px var(--fm);font-style:normal;letter-spacing:.1em;color:var(--mut);margin-left:auto;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.n-mini{flex:none;height:22px;padding:0 10px;border-radius:99px;border:1px solid var(--line);background:none;
+  color:var(--mut);font:500 9.5px var(--fm);letter-spacing:.12em;text-transform:uppercase;cursor:pointer;transition:.15s}
+.n-mini:hover{color:var(--acc);border-color:var(--acc)}
+#notesPane:not(.mode-code):not(.mode-bg):not(.mode-so) .n-mini{display:none}
+#notesTa,#codeTa,#ovTa,#bgTa,#soTa{flex:1;resize:none;border:0;background:none;color:var(--txarea);padding:5px 16px 12px;
+  font:400 13px/1.6 var(--fb)}
+#notesTa:focus,#codeTa:focus,#ovTa:focus,#bgTa:focus,#soTa:focus{outline:0}
+#codeTa,#ovTa,#bgTa,#soTa{display:none;font:400 12.5px/1.7 var(--fm);tab-size:2;white-space:pre-wrap;caret-color:var(--acc)}
+#notesPane.mode-code #codeTa{display:block}
+#notesPane.mode-bg #bgTa{display:block}
+#notesPane.mode-so #soTa{display:block}
+#notesPane.mode-so.so-deck #soTa{display:none}
+#notesPane.mode-so.so-deck #ovTa{display:block}
+#notesPane.mode-code #notesTa,#notesPane.mode-bg #notesTa,#notesPane.mode-so #notesTa{display:none}
+
+/* ---- toasts ---- */
+#toasts{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);z-index:700;display:flex;
+  flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{display:flex;gap:10px;align-items:center;background:var(--pop);border:1px solid var(--line);
+  padding:10px 16px;border-radius:12px;color:var(--ink);font:500 13px var(--fb);
+  box-shadow:0 18px 44px -14px rgba(0,0,0,.7);animation:tin .32s var(--ease)}
+body.lite .toast{box-shadow:0 18px 44px -14px rgba(30,50,100,.35)}
+.toast .ic{color:var(--acc);flex:none}
+.toast.out{opacity:0;transform:translateY(8px);transition:.3s}
+@keyframes tin{from{opacity:0;transform:translateY(12px)}}
+
+/* ---- popover ---- */
+#pop{position:fixed;z-index:650;background:var(--pop);border:1px solid var(--line);
+  border-radius:14px;box-shadow:0 30px 70px -20px rgba(0,0,0,.7);animation:poin .18s var(--ease)}
+body.lite #pop{box-shadow:0 30px 70px -20px rgba(30,50,100,.4)}
+@keyframes poin{from{opacity:0;transform:scale(.96) translateY(-4px)}}
+.pk-grid{display:grid;grid-template-columns:repeat(2,150px);gap:6px;padding:8px}
+.pk{display:flex;flex-direction:column;align-items:center;gap:9px;padding:13px 8px 11px;border-radius:12px;
+  border:1px solid transparent;background:none;cursor:pointer;text-align:center}
+.pk:hover{background:var(--hov);border-color:var(--line)}
+.pk b{font:600 12.5px var(--fd);color:var(--ink)}
+.pk small{font:400 10px var(--fb);color:var(--mut);margin-top:-4px}
+.sch{width:104px;height:62px;background:var(--thumbbg);border:1px solid var(--line);border-radius:9px;
+  display:flex;flex-direction:column;justify-content:center;gap:5px;padding:10px;align-items:flex-start}
+.sch.c{align-items:center}
+.sch u{display:block;width:30px;height:4px;border-radius:2px;background:var(--hovline)}
+.sch u.sa{width:18px;height:3px;background:linear-gradient(90deg,#4da8ff,#9b8cff)}
+.sch .row{display:flex;align-items:center;gap:5px}
+.sch .row b{width:5px;height:5px;border-radius:50%;background:#4da8ff;flex:none}
+.sch .g{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;width:100%}
+.sch .g u{height:13px;border:1px solid var(--hovline);background:none;width:auto}
+.sch .qm{font:700 17px var(--fd);color:#4da8ff;line-height:1;height:17px}
+.lm-list{display:flex;flex-direction:column;gap:2px;padding:7px;min-width:236px}
+.lm{display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;border-radius:10px;border:0;
+  background:none;color:var(--tx2);font:500 13px var(--fd);cursor:pointer;text-align:left}
+.lm:hover{background:var(--hov);color:var(--ink)}
+.lm .chk{margin-left:auto;color:var(--acc)}
+.lm.cur{color:var(--ink)}
+.mx{display:flex;align-items:center;gap:13px;width:290px;padding:11px 13px;border-radius:11px;border:0;
+  background:none;cursor:pointer;text-align:left}
+.mx:hover{background:var(--hov)}
+.mx .ic{color:var(--acc);flex:none}
+.mx b{display:block;font:600 13px var(--fd);color:var(--ink)}
+.mx small{display:block;font:400 11px var(--fb);color:var(--mut);margin-top:2px}
+
+/* ---- overlay settings panel ---- */
+.ovp{width:316px;padding:14px}
+.ovp-top{display:flex;align-items:flex-start;gap:12px}
+.ovp-top b{font:600 13.5px var(--fd);color:var(--ink);display:block}
+.ovp-top small{display:block;font:400 11px/1.5 var(--fb);color:var(--mut);margin-top:3px}
+.sw-tgl{position:relative;width:38px;height:22px;flex:none;margin-top:2px;border-radius:99px;
+  border:1px solid var(--line);background:var(--hov);cursor:pointer;padding:0;transition:.2s}
+.sw-tgl::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;
+  background:var(--mut);transition:.22s var(--ease)}
+.sw-tgl.on{background:rgba(63,224,192,.22);border-color:var(--acc)}
+.sw-tgl.on::after{left:19px;background:var(--acc)}
+#ovBody.off *{opacity:.45;pointer-events:none}
+.ovp label{display:block;font:600 9.5px var(--fm);letter-spacing:.22em;text-transform:uppercase;
+  color:var(--mut);margin:13px 0 7px}
+.ovp label em{font:500 9px var(--fm);font-style:normal;letter-spacing:.08em;text-transform:none;opacity:.85}
+.ovp .ovp-inp{width:100%;height:34px;border-radius:9px;border:1px solid var(--line);background:none;color:var(--ink);
+  font:500 12.5px var(--fb);padding:0 11px;transition:border-color .15s}
+.ovp .ovp-inp:focus{outline:0;border-color:var(--acc)}
+.ovp-styles{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.ovst{display:flex;flex-direction:column;align-items:center;gap:7px;padding:9px 4px 8px;border-radius:10px;
+  border:1px solid transparent;background:none;cursor:pointer;transition:.15s}
+.ovst:hover{background:var(--hov)}
+.ovst.on{border-color:var(--acc);background:rgba(63,224,192,.07)}
+.ovst b{font:600 11.5px var(--fd);color:var(--ink)}
+.ov-prev{width:64px;height:40px;border:1px solid var(--line);border-radius:7px;position:relative;
+  background:var(--thumbbg);overflow:hidden}
+.ov-prev i{position:absolute;background:var(--acc);opacity:.85}
+.ov-prev .c{width:24px;height:6px;right:5px;bottom:5px;border-radius:3px}
+.ov-prev .bb{left:0;right:0;bottom:0;height:9px}
+.ov-prev .w{left:-14px;right:-14px;top:16px;height:5px;transform:rotate(-18deg);border-radius:3px}
+.ov-prev .ip{position:absolute;inset:9px;border:1px dashed rgba(120,170,255,.5);border-radius:6px;opacity:1;
+  background:linear-gradient(135deg,rgba(77,168,255,.16),rgba(155,140,255,.1))}
+.ov-prev .hp{position:absolute;inset:9px;border:1px solid rgba(120,170,255,.45);border-radius:6px;opacity:1;background:none}
+.ov-prev .hp::after{content:"</>";position:absolute;inset:0;display:grid;place-items:center;
+  font:600 10px var(--fm);color:var(--acc)}
+.ovp-pos{display:grid;grid-template-columns:repeat(2,60px);grid-auto-rows:34px;gap:6px}
+.ovpos{border:1px solid var(--line);border-radius:9px;background:none;cursor:pointer;position:relative;transition:.15s}
+.ovpos:hover{background:var(--hov)}
+.ovpos::after{content:"";position:absolute;width:10px;height:10px;border-radius:3px;background:var(--hovline)}
+.ovpos[data-p="tl"]::after{top:6px;left:6px}
+.ovpos[data-p="tr"]::after{top:6px;right:6px}
+.ovpos[data-p="bl"]::after{bottom:6px;left:6px}
+.ovpos[data-p="br"]::after{bottom:6px;right:6px}
+.ovpos.on{border-color:var(--acc)}
+.ovpos.on::after{background:var(--acc)}
+.ovp-row{display:flex;gap:6px;margin-top:2px}
+.ovp-row .n-mini{height:26px}
+.ovp input[type=range]{width:100%;height:4px;-webkit-appearance:none;appearance:none;border-radius:4px;
+  background:var(--scr);outline:none;margin:4px 0 2px;cursor:pointer}
+.ovp input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;border-radius:50%;
+  background:var(--acc);cursor:pointer;border:2px solid var(--panel2);box-shadow:0 0 8px rgba(63,224,192,.5)}
+.ovp input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--acc);border:0;cursor:pointer}
+.ovp-foot{margin-top:12px;font:400 10.5px/1.5 var(--fb);color:var(--mut)}
+.sec-off{display:none!important}
+
+/* ---- modal ---- */
+.mo-back{position:fixed;inset:0;z-index:800;background:var(--veil);display:flex;align-items:center;
+  justify-content:center;animation:fin .2s}
+@keyframes fin{from{opacity:0}}
+.mo{width:440px;max-width:92vw;background:var(--pop);border:1px solid var(--line);border-radius:18px;
+  padding:26px;animation:moin .24s var(--ease)}
+@keyframes moin{from{opacity:0;transform:scale(.95) translateY(10px)}}
+.mo h3{margin:0 0 10px;font:700 17px var(--fd);letter-spacing:-.01em}
+.mo p{margin:0 0 22px;font:400 13.5px/1.65 var(--fb);color:var(--mut)}
+.mo-acts{display:flex;justify-content:flex-end;gap:10px}
+.btn{height:34px;padding:0 16px;border-radius:9px;border:1px solid var(--line);background:none;color:var(--tx2);
+  font:600 13px var(--fd);cursor:pointer;transition:.18s}
+.btn:hover{border-color:var(--hovline);color:var(--ink)}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#052b23}
+.btn.pri:hover{filter:brightness(1.1)}
+
+/* ---- per-slide layers panel ---- */
+.lyp{width:322px;padding:14px;max-height:80vh;overflow-y:auto}
+.lyp::-webkit-scrollbar{width:8px}
+.lyp::-webkit-scrollbar-thumb{background:var(--scr);border-radius:8px}
+.lyp-top b{font:600 13.5px var(--fd);color:var(--ink);display:block}
+.lyp-top small{display:block;font:400 11px/1.5 var(--fb);color:var(--mut);margin-top:3px}
+.lyp-view{width:100%;height:36px;margin-top:12px;display:flex;align-items:center;justify-content:center;gap:9px;
+  border:1px solid var(--acc);border-radius:10px;background:rgba(63,224,192,.08);color:var(--acc);
+  font:600 12px var(--fd);cursor:pointer;transition:.15s}
+.lyp-view:hover{background:rgba(63,224,192,.16);filter:brightness(1.05)}
+.lyp-view kbd{font:600 9px var(--fm);letter-spacing:.1em;border:1px solid rgba(63,224,192,.45);border-radius:5px;
+  padding:2px 6px}
+.lyp label{display:block;font:600 9.5px var(--fm);letter-spacing:.22em;text-transform:uppercase;
+  color:var(--mut);margin:14px 0 7px}
+.lyp label em{font:500 9px var(--fm);font-style:normal;letter-spacing:.08em;text-transform:none;opacity:.85}
+.lyp .ovp-inp{width:100%;height:34px;border-radius:9px;border:1px solid var(--line);background:none;color:var(--ink);
+  font:500 12.5px var(--fb);padding:0 11px;transition:border-color .15s;margin-top:6px}
+.lyp .ovp-inp:focus{outline:0;border-color:var(--acc)}
+.lyp input[type=range]{width:100%;height:4px;-webkit-appearance:none;appearance:none;border-radius:4px;
+  background:var(--scr);outline:none;margin:4px 0 2px;cursor:pointer}
+.lyp input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;border-radius:50%;
+  background:var(--acc);cursor:pointer;border:2px solid var(--panel2);box-shadow:0 0 8px rgba(63,224,192,.5)}
+.lyp input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--acc);border:0;cursor:pointer}
+.lyp .ovp-row{margin-top:6px}
+.lyp .ovp-foot{margin-top:9px;font:400 10.5px/1.5 var(--fb);color:var(--mut)}
+.lyp-seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.lyp-seg.two{grid-template-columns:repeat(2,1fr)}
+.lyp-seg button{height:32px;border-radius:9px;border:1px solid var(--line);background:none;color:var(--mut);
+  font:600 11.5px var(--fd);cursor:pointer;transition:.15s}
+.lyp-seg button:hover{background:var(--hov);color:var(--ink)}
+.lyp-seg button.on{border-color:var(--acc);background:rgba(63,224,192,.09);color:var(--acc)}
+.lyp-stat{font:500 12px/1.5 var(--fb);color:var(--tx2);padding:9px 12px;border:1px solid var(--line);
+  border-radius:9px;background:var(--hov)}
+
+/* ---- 3-screen layer view ---- */
+#layerView{position:fixed;inset:0;z-index:390;display:none;flex-direction:column;background:var(--veil);
+  backdrop-filter:blur(5px)}
+#layerView.on{display:flex;animation:fin .2s}
+.lv-top{flex:none;display:flex;align-items:center;gap:14px;padding:14px 18px 10px}
+.lv-top b{font:700 16px var(--fd);color:var(--ink);display:block;letter-spacing:-.01em}
+.lv-top small{display:block;font:500 10.5px var(--fm);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--mut);margin-top:3px}
+.lv-top .ib{margin-left:auto;background:var(--chipbg);border:1px solid var(--line)}
+.lv-grid{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:14px;
+  padding:6px 18px 18px}
+@media(max-width:860px){.lv-grid{grid-template-columns:1fr;overflow-y:auto}}
+.lv-tile{position:relative;display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--panel);
+  border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.lv-head{flex:none;display:flex;align-items:center;gap:9px;padding:9px 13px;border-bottom:1px solid var(--line)}
+.lv-idx{display:grid;place-items:center;min-width:22px;height:22px;border-radius:7px;background:var(--hov);
+  color:var(--acc);font:700 11px var(--fm);padding:0 5px}
+.lv-head b{font:600 12.5px var(--fd);color:var(--ink)}
+.lv-chip{margin-left:auto;font:500 9px var(--fm);letter-spacing:.12em;text-transform:uppercase;color:var(--mut);
+  border:1px solid var(--line);border-radius:99px;padding:4px 9px;white-space:nowrap}
+.lv-chip.on{color:var(--acc);border-color:rgba(63,224,192,.4)}
+.lv-body{flex:1;position:relative;min-height:0;background:var(--thumbbg)}
+.lv-tile[data-check] .lv-body{
+  background-image:linear-gradient(45deg,rgba(148,180,255,.08) 25%,transparent 25% 75%,rgba(148,180,255,.08) 75%),
+    linear-gradient(45deg,rgba(148,180,255,.08) 25%,transparent 25% 75%,rgba(148,180,255,.08) 75%);
+  background-size:26px 26px;background-position:0 0,13px 13px}
+.lv-tile[data-final] .lv-body{background:#04070f}
+body.lite .lv-tile[data-final] .lv-body{background:#dfe5f2}
+.lv-body .stage{background:transparent!important}
+.lv-frame{position:absolute}
+.lv-frame>.stage{position:absolute;top:0;left:0;transform-origin:0 0}
+.lv-note{flex:none;font:500 9.5px var(--fm);letter-spacing:.12em;text-transform:uppercase;color:var(--mut);
+  padding:7px 13px;border-top:1px solid var(--line)}
+.lv-empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:20px;
+  font:500 11px var(--fm);letter-spacing:.18em;text-transform:uppercase;color:var(--mut);line-height:2}
+
+/* ---- present overlay shell (slide visuals live in slide-css) ---- */
+#present{position:fixed;inset:0;z-index:400;display:none;background:#04070f}
+#present.plight{background:#dfe5f2}
+#present.on{display:block;animation:pin .25s ease}
+@keyframes pin{from{opacity:0}}
+</style>
+
+<!-- ============ SHARED SLIDE / PRESENT STYLES (this block is exported verbatim) ============ -->
+<style id="slide-css">
+/* base */
+html,body{height:100%}
+body{margin:0;overflow:hidden;background:#04070f;color:#e9eefb;font-family:'Instrument Sans',sans-serif;
+  -webkit-font-smoothing:antialiased}
+body.plight{background:#dfe5f2}
+::selection{background:rgba(77,168,255,.3)}
+*,*::before,*::after{box-sizing:border-box}
+
+/* page-level ambience colors (fallbacks) — .plight overrides for light shows */
+.plight{--bg1:rgba(37,99,235,.12);--bg2:rgba(124,93,250,.10);--bg3:rgba(45,212,191,.08);
+  --grid:rgba(40,80,160,.06);--vig:rgba(95,115,165,.18)}
+
+/* ambient background */
+.bgfx{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+.bgfx .b{position:absolute;border-radius:50%}
+.b1{width:64vmax;height:64vmax;top:-24vmax;right:-18vmax;background:radial-gradient(circle,var(--bg1,rgba(37,99,235,.3)),transparent 62%);animation:dr1 26s ease-in-out infinite alternate}
+.b2{width:56vmax;height:56vmax;bottom:-26vmax;left:-20vmax;background:radial-gradient(circle,var(--bg2,rgba(124,93,250,.24)),transparent 62%);animation:dr2 32s ease-in-out infinite alternate}
+.b3{width:38vmax;height:38vmax;bottom:8vmax;right:12vmax;background:radial-gradient(circle,var(--bg3,rgba(45,212,191,.13)),transparent 60%);animation:dr3 22s ease-in-out infinite alternate}
+@keyframes dr1{to{transform:translate(-8vmax,10vmax) scale(1.15)}}
+@keyframes dr2{to{transform:translate(10vmax,-8vmax) scale(1.1)}}
+@keyframes dr3{to{transform:translate(-6vmax,-10vmax) scale(1.25)}}
+.glines{position:absolute;inset:0;background-image:linear-gradient(var(--grid,rgba(130,170,255,.05)) 1px,transparent 1px),linear-gradient(90deg,var(--grid,rgba(130,170,255,.05)) 1px,transparent 1px);
+  background-size:52px 52px;animation:gm 60s linear infinite;
+  -webkit-mask-image:radial-gradient(ellipse 100% 85% at 50% 42%,#000 25%,transparent 72%);
+  mask-image:radial-gradient(ellipse 100% 85% at 50% 42%,#000 25%,transparent 72%)}
+@keyframes gm{to{background-position:52px 52px}}
+.vig{position:absolute;inset:0;background:radial-gradient(120% 90% at 50% 40%,transparent 55%,var(--vig,rgba(2,5,12,.55)) 100%)}
+
+/* stage (1280×720 design surface) — dark tokens */
+.stage{width:1280px;height:720px;position:relative;overflow:hidden;color:#e9eefb;
+  --acc:#4da8ff;--acc2:#9b8cff;--fd:'Space Grotesk',sans-serif;--fb:'Instrument Sans',sans-serif;--fm:'JetBrains Mono',monospace;
+  --mut:#96a2bd;--ink:#e9eefb;--ink2:#eef2ff;--line:rgba(150,180,255,.17);
+  --card:rgba(255,255,255,.05);--card2:rgba(255,255,255,.015);
+  --tsh:0 0 90px rgba(77,168,255,.16);
+  --bgb:#04070f;--bg1:rgba(37,99,235,.3);--bg2:rgba(124,93,250,.24);--bg3:rgba(45,212,191,.13);
+  --grid:rgba(130,170,255,.05);--vig:rgba(2,5,12,.55);
+  --ph:rgba(170,190,230,.32);--edln:rgba(160,190,255,.4);
+  --addl:rgba(160,190,255,.32);--addt:#93a0b8;--addbg:rgba(160,190,255,.03);
+  --ovbg:rgba(7,12,24,.55);
+  background:var(--bgb)}
+/* light slide theme */
+.stage.light{
+  --mut:#55627e;--ink:#18213a;--ink2:#0e1730;--line:rgba(28,55,120,.16);
+  --card:rgba(255,255,255,.72);--card2:rgba(255,255,255,.35);
+  --tsh:none;
+  --bgb:#f4f7fd;--bg1:rgba(37,99,235,.13);--bg2:rgba(124,93,250,.11);--bg3:rgba(45,212,191,.09);
+  --grid:rgba(40,80,160,.07);--vig:rgba(95,115,165,.2);
+  --ph:rgba(50,80,150,.35);--edln:rgba(40,80,170,.45);
+  --addl:rgba(40,80,170,.3);--addt:#5c6884;--addbg:rgba(40,80,170,.03);
+  --ovbg:rgba(255,255,255,.66)}
+.sc{position:absolute;inset:86px 104px 92px;display:flex;flex-direction:column;justify-content:center;gap:26px;z-index:1}
+.sc>*{margin:0}
+.lay-title .sc,.lay-section .sc,.lay-quote .sc{align-items:center;text-align:center;gap:30px}
+
+/* typography */
+.s-kick{display:flex;align-items:center;gap:15px;font:600 13px var(--fm);letter-spacing:.26em;
+  text-transform:uppercase;color:var(--acc)}
+.s-kick::before{content:"";width:30px;height:2px;flex:none;background:linear-gradient(90deg,transparent,var(--acc))}
+.lay-title .s-kick::after,.lay-section .s-kick::after,.lay-quote .s-kick::after{content:"";width:30px;height:2px;flex:none;background:linear-gradient(90deg,var(--acc),transparent)}
+.grad{background:linear-gradient(90deg,var(--acc),var(--acc2) 55%,var(--acc));background-size:200% 100%;
+  -webkit-background-clip:text;background-clip:text;color:transparent;animation:gsh 8s linear infinite}
+@keyframes gsh{to{background-position:200% 0}}
+.s-title{text-shadow:var(--tsh)}
+.lay-title .s-title{font:700 84px/1.02 var(--fd);letter-spacing:-.035em}
+.lay-section .s-title{font:700 96px/1.01 var(--fd);letter-spacing:-.04em}
+.lay-content .s-title,.lay-bullets .s-title,.lay-cards .s-title{font:700 62px/1.06 var(--fd);letter-spacing:-.03em;max-width:1010px}
+.s-body{font:400 22px/1.65 var(--fb);color:var(--mut);max-width:880px}
+.s-body b,.b-txt b,.c-txt b{color:var(--ink2);font-weight:600}
+.lay-title .s-body{font-size:23px;max-width:780px}
+.lay-section .s-body{font-size:22px;max-width:780px}
+.lay-cards .s-body{font-size:19px;max-width:920px}
+.lay-bullets .s-body{font:600 32px/1.25 var(--fd);color:var(--ink);max-width:920px}
+
+/* quote */
+.qmark{font:700 130px/.55 var(--fd);color:var(--acc);height:54px;opacity:.9}
+.s-quote{font:600 50px/1.22 var(--fd);letter-spacing:-.02em;max-width:940px}
+
+/* bullets */
+.b-list{display:flex;flex-direction:column;gap:17px;width:100%;max-width:980px}
+.b-row{position:relative;display:flex;align-items:baseline;gap:22px}
+.b-num{font:600 15px/1 var(--fm);color:var(--acc);min-width:32px;letter-spacing:.06em}
+.b-txt{font:500 25px/1.45 var(--fb);color:var(--ink);max-width:920px}
+
+/* cards */
+.c-grid{display:grid;gap:22px;width:100%}
+.c-card{position:relative;border:1px solid var(--line);border-radius:18px;padding:26px 26px 24px;
+  background:linear-gradient(180deg,var(--card),var(--card2))}
+.c-head{font:600 22px/1.2 var(--fd);letter-spacing:-.015em;color:var(--ink2)}
+.c-head::before{content:"";display:block;width:28px;height:3px;border-radius:2px;margin-bottom:14px;
+  background:linear-gradient(90deg,var(--acc),var(--acc2))}
+.c-txt{font:400 16.5px/1.55 var(--fb);color:var(--mut);margin-top:10px}
+
+/* ---- custom HTML slides ---- */
+.cust-hold{position:absolute;inset:0;z-index:1;display:grid;place-items:center;pointer-events:none}
+.cust-hold::before{content:"</>";font:700 84px var(--fd);color:rgba(140,170,255,.13);letter-spacing:-.04em}
+.stage.light .cust-hold::before{color:rgba(35,70,150,.1)}
+.cust-on .cust-hold{display:none}
+iframe.cust{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;
+  pointer-events:none;z-index:2}
+/* full-page pure HTML: the app renders NOTHING except the user's document */
+.stage.lay-html{background:transparent}
+.stage.lay-html .bgfx{display:none}
+.cust-flag{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:3;pointer-events:none;
+  font:500 11px var(--fm);letter-spacing:.12em;color:#93a0b8;padding:6px 12px;border-radius:99px;
+  border:1px solid rgba(148,180,255,.2);background:rgba(8,13,26,.6);backdrop-filter:blur(6px)}
+.stage.light .cust-flag{color:#55627e;background:rgba(255,255,255,.72);border-color:rgba(28,55,120,.16)}
+
+/* ---- per-slide background layer (image · html) — bottom of the stack ---- */
+.bg-lay{position:absolute;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+.bg-lay.bg-img{background-position:center;background-repeat:no-repeat}
+iframe.bg-frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;pointer-events:none}
+
+/* ---- per-slide transparent overlay layer — above the content, below the deck © overlay ---- */
+.sov-lay{position:absolute;inset:0;z-index:5;pointer-events:none}
+iframe.sov-frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;pointer-events:none}
+
+/* ---- persistent overlay (text · image · fullscreen HTML) ---- */
+.ov{position:absolute;z-index:6;pointer-events:none}
+.ov .wm-ph{font:500 15px var(--fm);letter-spacing:.22em;text-transform:uppercase;color:var(--ph)}
+.ov-corner{display:flex;align-items:center}
+.ov-corner.tl{top:34px;left:44px}
+.ov-corner.tr{top:34px;right:44px}
+.ov-corner.bl{bottom:36px;left:44px}
+.ov-corner.br{bottom:36px;right:44px}
+.ov-txt{font:500 14px var(--fm);letter-spacing:.07em;color:var(--mut);padding:8px 15px;border-radius:99px;
+  border:1px solid var(--line);background:var(--ovbg);backdrop-filter:blur(6px);white-space:nowrap;
+  max-width:560px;overflow:hidden;text-overflow:ellipsis}
+.ov-bar{left:0;right:0;bottom:0;height:52px;display:flex;align-items:center;justify-content:center;
+  border-top:1px solid var(--line);background:var(--ovbg);backdrop-filter:blur(10px)}
+.ov-bar .ov-txt{border:0;background:none;backdrop-filter:none;padding:0;max-width:1100px}
+.ov-wm{inset:0;display:grid;place-items:center;overflow:hidden}
+.ov-wm .wm-grid{transform:rotate(-22deg);display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(4,1fr);
+  width:230%;height:76%;color:var(--ink);opacity:.065}
+.ov-wm .wm-grid span{font:700 42px var(--fd);letter-spacing:.12em;text-transform:uppercase;white-space:nowrap;
+  display:flex;align-items:center;justify-content:center;max-width:100%;overflow:hidden}
+/* fullscreen image layer */
+.ov-img{inset:0;overflow:hidden;display:grid;place-items:center}
+.ov-img img{position:absolute;left:50%;top:50%;max-width:none;user-select:none;
+  -webkit-user-drag:none;touch-action:none}
+.stage.editing .ov-img img{pointer-events:auto;cursor:grab}
+.stage.editing .ov-img img:active{cursor:grabbing}
+.stage.editing .ov-img img:hover{outline:1.5px dashed var(--edln);outline-offset:6px}
+/* fullscreen HTML layer */
+.ov-html{inset:0;display:grid;place-items:center}
+iframe.ov-frame{position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;pointer-events:none}
+/* inline text editing of corner/bar overlays */
+.stage.editing .ov .ed{pointer-events:auto;cursor:text;outline:1.5px dashed transparent;outline-offset:3px;
+  transition:outline-color .18s}
+.stage.editing .ov .ed:hover{outline-color:var(--edln)}
+.stage.editing .ov .ed:focus{outline-color:var(--acc);outline-style:solid}
+.stage.editing .ov .ed:empty::before{content:attr(data-ph);color:var(--ph)}
+
+/* editing affordances */
+.stage.editing .ed{cursor:text;border-radius:7px;outline:1.5px dashed transparent;outline-offset:6px;
+  transition:outline-color .18s,background .18s}
+.stage.editing .ed:hover{outline-color:var(--edln)}
+.stage.editing .ed:focus{outline:1.5px solid var(--acc);outline-offset:7px;background:rgba(120,170,255,.06)}
+.stage.editing .ed:empty::before{content:attr(data-ph);color:var(--ph)}
+.row-x,.card-x,.b-add,.c-add{display:none}
+.stage.editing .row-x,.stage.editing .card-x{display:flex;opacity:0;transition:.15s}
+.b-row:hover .row-x,.c-card:hover .card-x{opacity:1}
+.row-x{position:absolute;left:calc(100% + 14px);top:-1px;align-items:center;justify-content:center;width:25px;height:25px;
+  border-radius:8px;border:1px solid rgba(148,180,255,.22);background:#101a2e;color:#ff9d9d;cursor:pointer}
+.card-x{position:absolute;top:12px;right:12px;align-items:center;justify-content:center;width:25px;height:25px;
+  border-radius:8px;border:1px solid rgba(148,180,255,.22);background:#101a2e;color:#ff9d9d;cursor:pointer}
+.stage.editing .b-add{display:flex;align-items:center;gap:9px;width:max-content;margin-top:6px;padding:12px 18px;
+  border:1.5px dashed var(--addl);border-radius:12px;background:var(--addbg);color:var(--addt);
+  font:600 14px var(--fd);cursor:pointer;transition:.2s}
+.stage.editing .b-add:hover{border-color:var(--acc);color:var(--ink2);background:rgba(63,224,192,.06)}
+.stage.editing .c-add{flex-direction:column;align-items:center;justify-content:center;gap:9px;min-height:150px;
+  border:1.5px dashed var(--addl);border-radius:18px;background:var(--addbg);color:var(--addt);
+  font:600 15px var(--fd);cursor:pointer;transition:.2s}
+.stage.editing .c-add:hover{border-color:var(--acc);color:var(--ink2);background:rgba(63,224,192,.06)}
+
+/* deck + slide transitions */
+.p-wrap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.p-frame{position:relative}
+.deck{width:1280px;height:720px;position:relative;transform-origin:0 0}
+.slide{position:absolute;inset:0}
+.slide .stage{width:1280px;height:720px}
+body.fwd .slide,body.back .slide{opacity:0;pointer-events:none;filter:blur(12px);
+  transition:opacity .55s ease,transform .75s cubic-bezier(.22,1,.36,1),filter .55s ease;will-change:transform,opacity,filter}
+body.fwd .slide{transform:translateY(40px) scale(.985)}
+body.back .slide{transform:translateY(-40px) scale(.985)}
+body.fwd .slide.leaving{opacity:0;transform:translateY(-46px) scale(.98);filter:blur(12px)}
+body.back .slide.leaving{opacity:0;transform:translateY(46px) scale(.98);filter:blur(12px)}
+body.fwd .slide.active,body.back .slide.active{opacity:1;transform:none;filter:none;pointer-events:auto;z-index:2}
+.slide.active .a{animation:prise .9s cubic-bezier(.22,1,.36,1) backwards;animation-delay:calc(var(--d,0)*90ms + .12s)}
+body.back .slide.active .a{animation-name:prb}
+@keyframes prise{from{opacity:0;transform:translateY(34px) scale(.985)}}
+@keyframes prb{from{opacity:0;transform:translateY(-34px) scale(.985)}}
+/* non-active slides don't burn CPU on animations */
+.slide:not(.active) iframe{visibility:hidden}
+
+/* present chrome */
+.p-dots{position:absolute;right:20px;top:50%;translate:0 -50%;display:flex;flex-direction:column;gap:9px;z-index:5}
+.p-dots button{width:7px;height:7px;border:0;border-radius:99px;background:rgba(233,238,251,.18);cursor:pointer;
+  padding:0;position:relative;transition:height .35s,background .25s}
+.p-dots button:hover{background:rgba(233,238,251,.5)}
+.p-dots button.on{height:26px;background:linear-gradient(180deg,#4da8ff,#9b8cff);box-shadow:0 0 12px rgba(77,168,255,.55)}
+.p-dots button::after{content:attr(data-label);position:absolute;right:16px;top:50%;transform:translateY(-50%) translateX(6px);
+  font:500 10.5px var(--fm);letter-spacing:.14em;text-transform:uppercase;color:#e9eefb;background:rgba(10,16,30,.94);
+  border:1px solid rgba(148,180,255,.16);padding:5px 9px;border-radius:8px;white-space:nowrap;opacity:0;pointer-events:none;transition:.22s}
+.p-dots button:hover::after{opacity:1;transform:translateY(-50%)}
+.p-hint{position:absolute;top:18px;right:20px;z-index:5;font:500 10.5px var(--fm);letter-spacing:.16em;
+  text-transform:uppercase;color:rgba(233,238,251,.45);padding:7px 12px;border:1px solid rgba(148,180,255,.15);
+  border-radius:99px;background:rgba(10,16,30,.5)}
+.p-bottom{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:14px;
+  z-index:5;width:min(560px,86vw)}
+.p-nav{width:34px;height:34px;border-radius:10px;border:1px solid rgba(148,180,255,.16);background:rgba(10,16,30,.55);
+  color:#c9d4ee;display:grid;place-items:center;cursor:pointer;transition:.2s;flex:none}
+.p-nav:hover{border-color:rgba(148,180,255,.45);color:#fff;background:rgba(20,30,55,.85)}
+.p-count{font:500 12px var(--fm);color:#93a0b8;display:flex;gap:5px;align-items:baseline;font-variant-numeric:tabular-nums;flex:none}
+.p-count #pCur{color:#e9eefb}.p-count i{font-style:normal;opacity:.4}
+.p-prog{flex:1;height:2px;background:rgba(148,180,255,.15);border-radius:2px;overflow:hidden}
+#pBar{display:block;height:100%;background:linear-gradient(90deg,#4da8ff,#9b8cff,#3fe0c0);transform-origin:0 50%;
+  transform:scaleX(0);transition:transform .6s cubic-bezier(.22,1,.36,1);box-shadow:0 0 14px rgba(77,168,255,.6)}
+.p-notes{position:absolute;right:22px;bottom:66px;width:min(380px,88vw);background:rgba(8,14,28,.93);
+  border:1px solid rgba(148,180,255,.16);border-radius:14px;padding:14px 16px;transform:translateY(12px);
+  opacity:0;pointer-events:none;transition:.3s;z-index:6}
+.p-notes.open{opacity:1;transform:none;pointer-events:auto}
+.p-nh{font:600 10px var(--fm);letter-spacing:.22em;text-transform:uppercase;color:#4da8ff;margin-bottom:7px}
+.p-notes p{font-size:13.5px;line-height:1.6;color:#c6d0e8;margin:0}
+
+/* light present chrome */
+.plight .p-dots button{background:rgba(25,45,90,.22)}
+.plight .p-dots button:hover{background:rgba(25,45,90,.45)}
+.plight .p-dots button::after{color:#1b2540;background:rgba(255,255,255,.96);border-color:rgba(30,60,130,.15)}
+.plight .p-hint{color:rgba(30,45,80,.55);border-color:rgba(30,60,130,.18);background:rgba(255,255,255,.55)}
+.plight .p-nav{border-color:rgba(30,60,130,.16);background:rgba(255,255,255,.6);color:#33405c}
+.plight .p-nav:hover{color:#0e1730;background:rgba(255,255,255,.95)}
+.plight .p-count{color:#5c6884}
+.plight .p-count #pCur{color:#16203a}
+.plight .p-prog{background:rgba(30,60,130,.15)}
+.plight .p-notes{background:rgba(255,255,255,.96);border-color:rgba(30,60,130,.14)}
+.plight .p-notes p{color:#33405c}
+
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header class="bar">
+    <div class="brand">
+      <svg width="23" height="23" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="8.5" y="3.5" width="12" height="12" rx="3" stroke="#3fe0c0" stroke-width="1.8"/>
+        <rect x="3.5" y="8.5" width="12" height="12" rx="3" stroke="#4da8ff" stroke-width="1.8" style="fill:var(--panel)"/>
+      </svg>
+      <span>Slidesmith</span><small>studio</small>
+    </div>
+    <div class="divi"></div>
+    <div class="b-mid">
+      <input id="deckTitle" placeholder="Untitled presentation" spellcheck="false" autocomplete="off">
+      <span class="saved" id="savedChip"><i></i>saved</span>
+    </div>
+    <div class="b-acts">
+      <button class="ib" id="btnTheme" title="Toggle editor theme"></button>
+      <button class="ib" id="btnOverlay" title="Deck overlay — every slide: © text, image or transparent HTML"></button>
+      <div class="divi"></div>
+      <button class="ib" id="btnUndo" title="Undo (Ctrl+Z)"></button>
+      <button class="ib" id="btnRedo" title="Redo (Ctrl+Y)"></button>
+      <div class="divi"></div>
+      <button class="ib" id="btnImport" title="Import deck (.json or exported .html)"></button>
+      <button class="ib" id="btnExport" title="Export"></button>
+      <button class="ib" id="btnNew" title="New presentation"></button>
+      <div class="divi"></div>
+      <button id="btnPresent" title="Present from this slide (Shift+F5 · F5 from start)"></button>
+    </div>
+  </header>
+
+  <div class="main">
+    <aside id="strip">
+      <div class="s-head"><span>Slides</span><b id="stripCount"></b></div>
+      <div class="s-list" id="stripList"></div>
+      <button id="addBtn" type="button"></button>
+    </aside>
+
+    <section id="center">
+      <div id="ctx">
+        <span class="c-num" id="cNum"></span>
+        <button id="cLayout" type="button"><span id="cLayoutName">Content</span><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+        <button id="btnLayers" type="button" title="Layers — background · content · overlay (L for 3-screen view)"><span>Layers</span></button>
+        <div class="seg" id="cTheme" title="Slide theme — applies to canvas, thumbnails, presenting and export">
+          <button type="button" data-th="dark">Dark</button>
+          <button type="button" data-th="light">Light</button>
+        </div>
+        <div class="c-accents" id="cAccents"></div>
+        <div class="ctx-acts">
+          <button class="ib" id="cNotes" title="Speaker notes (N)"></button>
+          <button class="ib" id="cDup" title="Duplicate slide (Ctrl+D)"></button>
+          <button class="ib danger" id="cDel" title="Delete slide (Del)"></button>
+        </div>
+      </div>
+      <div id="canvas">
+        <div class="e-frame" id="eFrame"><div id="stageHost"></div></div>
+        <div class="zoom" id="zoomChip">—</div>
+        <div class="ehint" id="ehint">
+          <span>Click text to edit · Ctrl+M new slide · Layers: bg + page + transparent overlay · L 3-screen view · F5 present</span>
+          <button id="ehintX" type="button" aria-label="Dismiss"></button>
+        </div>
+      </div>
+      <div id="notesPane">
+        <div class="n-head">
+          <div class="n-tabs">
+            <button class="n-tab on" data-p="notes" type="button">Notes</button>
+            <button class="n-tab" data-p="code" type="button" title="Full-page HTML for this slide — the app adds nothing">Slide</button>
+            <button class="n-tab" data-p="bg" type="button" title="Background layer HTML">BG</button>
+            <button class="n-tab" data-p="so" type="button" title="Transparent overlay — this slide or the whole deck">Overlay</button>
+          </div>
+          <div class="so-scope" id="soScope">
+            <button type="button" data-s="slide">This slide</button>
+            <button type="button" data-s="deck">All slides</button>
+          </div>
+          <button class="n-mini" id="tplBtn" type="button">starter template</button>
+          <em id="paneTip">· only you see these when presenting (N)</em>
+        </div>
+        <textarea id="codeTa" placeholder="Full-page HTML — you design everything at 1280×720; the app adds nothing (no background, no styling). Deck tokens: --acc --acc2 --fd --fb --fm --mut --ink" spellcheck="false"></textarea>
+        <textarea id="bgTa" placeholder="Background layer HTML — a 1280×720 sandbox behind the content. Gradients, grids, animated scenes…" spellcheck="false"></textarea>
+        <textarea id="soTa" placeholder="Transparent overlay HTML — floats above this slide. Opaque backgrounds are stripped so the slide stays visible underneath…" spellcheck="false"></textarea>
+        <textarea id="ovTa" placeholder="Deck-wide transparent overlay HTML — one overlay on every slide, above the slide overlays. Opaque backgrounds are stripped so slides stay visible. Tokens: --acc --acc2 --fd --fb --fm --mut --ink" spellcheck="false"></textarea>
+        <textarea id="notesTa" placeholder="Notes for this slide…" spellcheck="false"></textarea>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div id="present"></div>
+<div id="layerView"></div>
+<div id="toasts"></div>
+<div id="pop" hidden></div>
+<div id="modalRoot"></div>
+<input type="file" id="fileInput" accept=".json,.html" hidden>
+<input type="file" id="ovFileInput" accept="image/*" hidden>
+<input type="file" id="bgFileInput" accept="image/*" hidden>
+
+<script>
+'use strict';
+/* ================= helpers ================= */
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const uid=()=>Math.random().toString(36).slice(2,9);
+const pad=n=>String(n).padStart(2,'0');
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const escT=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');   // safe inside <template>
+const slug=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'presentation';
+const txt=h=>{const d=document.createElement('div');d.innerHTML=h||'';return (d.textContent||'').trim()};
+const stripS=h=>String(h).replace(/<script[\s\S]*?<\/script>/gi,'');
+
+const IC={
+  plus:'<path d="M12 5v14M5 12h14"/>',
+  trash:'<path d="M4 7h16M10 4h4M6 7l1 13h10l1-13M10 11v5M14 11v5"/>',
+  copy:'<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  play:'<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/>',
+  down:'<path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14"/>',
+  up:'<path d="M12 15V4m0 0 4 4m-4-4-4 4M5 20h14"/>',
+  file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5z"/><path d="M14 3v5h5M12 11v6M9 14h6"/>',
+  undo:'<path d="M4 10h10a5 5 0 0 1 0 10h-4"/><path d="M8 6 4 10l4 4"/>',
+  redo:'<path d="M20 10H10a5 5 0 0 0 0 10h4"/><path d="m16 6 4 4-4 4"/>',
+  x:'<path d="M6 6l12 12M18 6 6 18"/>',
+  note:'<path d="M5 5h14M5 10h14M5 15h8"/>',
+  left:'<path d="M19 12H5m0 0 6-6m-6 6 6 6"/>',
+  right:'<path d="M5 12h14m0 0-6-6m6 6-6 6"/>',
+  check:'<path d="m5 13 4 4L19 7"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.6 4.6l1.8 1.8M17.6 17.6l1.8 1.8M4.6 19.4l1.8-1.8M17.6 6.4l1.8-1.8"/>',
+  moon:'<path d="M20.6 13.4A8.4 8.4 0 1 1 10.6 3.4a6.6 6.6 0 0 0 10 10z"/>',
+  copyr:'<circle cx="12" cy="12" r="8.5"/><path d="M14.7 9.6a3.7 3.7 0 1 0 0 4.8"/>',
+  layers:'<path d="m12 2 9.5 5.25L12 12.5 2.5 7.25 12 2z"/><path d="m2.5 12.25 9.5 5.25 9.5-5.25"/><path d="m2.5 16.75 9.5 5.25 9.5-5.25"/>',
+  grid4:'<rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/>'
+};
+const ic=(n,s=17)=>`<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n]}</svg>`;
+
+/* ================= constants ================= */
+const LS='slidesmith.v1';
+const LAYOUTS={
+  title:{name:'Title',hint:'Big opening slide'},
+  section:{name:'Section',hint:'Chapter divider'},
+  content:{name:'Content',hint:'Heading + paragraph'},
+  bullets:{name:'Bullets',hint:'Numbered list'},
+  quote:{name:'Quote',hint:'Big statement'},
+  cards:{name:'Cards',hint:'Grid of cards'},
+  custom:{name:'HTML page',hint:'Full-page HTML — the app adds nothing'}
+};
+const ACCENTS=[
+  ['#4da8ff','#9b8cff'],['#9d8cff','#6ec9ff'],['#3fe0c0','#4da8ff'],
+  ['#ffc46b','#ff8d76'],['#ff8d76','#ffc9a0'],['#ff7ab8','#9b8cff']
+];
+const OV_STYLES=['corner','bar','watermark','image','html'],OV_POS=['tl','tr','bl','br'];
+const accent2=a=>{const p=ACCENTS.find(x=>x[0]===a);return p?p[1]:'#9b8cff'};
+const BGFX=`<div class="bgfx" aria-hidden="true"><span class="b b1"></span><span class="b b2"></span><span class="b b3"></span><span class="glines"></span><span class="vig"></span></div>`;
+const FONT_HREF='https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap';
+
+/* starter code for full-page HTML slides — 100% self-contained, the app adds NOTHING */
+const CUSTOM_TPL=`<!-- Full-page HTML — you design EVERYTHING at 1280x720.
+     The app adds no background, no styling. Deck tokens: --acc --acc2 --fd --fb --fm --mut --ink -->
+<style>
+  body{background:radial-gradient(110% 110% at 80% -10%,#0d1830 0%,#04070f 60%)}
+  .wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center}
+  h1{font:700 62px/1.05 var(--fd);margin:0;letter-spacing:-.03em;
+     background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  p{font:400 20px/1.5 var(--fb);color:var(--mut);margin:0}
+  .ring{width:110px;height:110px;border:2px dashed var(--acc);border-radius:50%;position:relative;animation:spin 7s linear infinite}
+  .ring::after{content:"";position:absolute;top:-8px;left:50%;margin-left:-8px;width:16px;height:16px;border-radius:50%;
+     background:var(--acc2);box-shadow:0 0 20px var(--acc2)}
+  .fade{opacity:0;transform:translateY(24px);animation:up .8s .25s cubic-bezier(.22,1,.36,1) forwards}
+  .fade.d2{animation-delay:.5s}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes up{to{opacity:1;transform:none}}
+</style>
+<div class="wrap">
+  <div class="ring"></div>
+  <h1 class="fade">HTML page</h1>
+  <p class="fade d2">This whole page is your code — the app adds nothing on top</p>
+</div>`;
+
+/* starter code for the per-slide BACKGROUND layer (1280x720 sandbox behind the content) */
+const BG_TPL=`<!-- Background layer — a 1280x720 sandbox BEHIND the content layer.
+     Anything works: gradients, grids, particles, animated scenes. -->
+<style>
+  body{background:
+    radial-gradient(90% 70% at 15% 0%,rgba(37,99,235,.35),transparent 60%),
+    radial-gradient(80% 80% at 100% 100%,rgba(124,93,250,.28),transparent 60%),
+    #060b18}
+  .grid{position:absolute;inset:0;background-image:linear-gradient(rgba(130,170,255,.06) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(130,170,255,.06) 1px,transparent 1px);background-size:64px 64px;
+    animation:slide 40s linear infinite}
+  .orb{position:absolute;border-radius:50%;background:radial-gradient(circle,rgba(77,168,255,.5),transparent 70%);
+    animation:float 12s ease-in-out infinite alternate}
+  @keyframes slide{to{background-position:64px 64px}}
+  @keyframes float{to{transform:translate(60px,-40px) scale(1.2)}}
+</style>
+<span class="orb" style="width:420px;height:420px;left:8%;top:12%"></span>
+<span class="orb" style="width:300px;height:300px;right:6%;bottom:8%;animation-delay:-6s;
+  background:radial-gradient(circle,rgba(155,140,255,.4),transparent 70%)"></span>
+<div class="grid"></div>`;
+
+/* starter code for the per-slide transparent OVERLAY layer (above the content) */
+const SOV_TPL=`<!-- Transparent overlay — floats ABOVE this slide only.
+     The background is forced transparent; the slide must stay visible underneath. -->
+<style>
+  .layer{position:absolute;inset:0;pointer-events:none}
+  .frame{position:absolute;inset:26px;border:1px solid rgba(150,180,255,.22);border-radius:20px;
+    animation:breathe 6s ease-in-out infinite}
+  .badge{position:absolute;top:22px;right:34px;font:600 11px var(--fm);letter-spacing:.28em;text-transform:uppercase;
+    color:rgba(200,215,255,.65);padding:7px 13px;border:1px solid rgba(150,180,255,.2);border-radius:99px;
+    background:rgba(8,14,28,.3);backdrop-filter:blur(4px)}
+  .scan{position:absolute;left:0;right:0;height:1px;
+    background:linear-gradient(90deg,transparent,rgba(77,168,255,.55),transparent);animation:scan 7s linear infinite}
+  @keyframes breathe{50%{opacity:.35}}
+  @keyframes scan{0%{top:0}100%{top:100%}}
+</style>
+<div class="layer">
+  <div class="frame"></div>
+  <div class="badge">live</div>
+  <div class="scan"></div>
+</div>`;
+
+/* starter code for the fullscreen HTML overlay — subtle animated layer above every slide */
+const OV_TPL=`<!-- Fullscreen HTML overlay — a transparent 1280x720 layer ABOVE every slide.
+     Animations, particles, frames… Deck tokens: --acc --acc2 --fd --fb --fm --mut --ink -->
+<style>
+  .layer{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+  .orb{position:absolute;border-radius:50%;
+     background:radial-gradient(circle,var(--acc),transparent 70%);opacity:.14;
+     animation:float 10s ease-in-out infinite alternate}
+  .frame{position:absolute;inset:24px;border:1px solid rgba(150,180,255,.18);border-radius:22px;
+     animation:breathe 7s ease-in-out infinite}
+  .tick{position:absolute;left:50%;top:20px;transform:translateX(-50%);
+     font:500 11px var(--fm);letter-spacing:.3em;text-transform:uppercase;color:var(--mut);opacity:.7}
+  @keyframes float{to{transform:translate(70px,-46px) scale(1.3)}}
+  @keyframes breathe{50%{opacity:.4}}
+</style>
+<div class="layer">
+  <span class="orb" style="width:300px;height:300px;left:6%;top:10%"></span>
+  <span class="orb" style="width:190px;height:190px;right:10%;bottom:16%;animation-delay:-3.5s;animation-duration:12s"></span>
+  <span class="orb" style="width:120px;height:120px;left:46%;bottom:6%;animation-delay:-7s;opacity:.09"></span>
+  <div class="frame"></div>
+  <div class="tick">live overlay</div>
+</div>`;
+
+/* ================= toasts & modal ================= */
+function toast(msg,ico='check'){
+  const box=$('#toasts');
+  while(box.children.length>2)box.firstChild.remove();
+  const t=document.createElement('div');t.className='toast';t.innerHTML=ic(ico,16)+`<span>${msg}</span>`;
+  box.append(t);
+  setTimeout(()=>{t.classList.add('out');setTimeout(()=>t.remove(),320)},3200);
+}
+function confirmBox({title,body,ok='OK',cancel='Cancel'}){
+  return new Promise(res=>{
+    const root=$('#modalRoot');
+    root.innerHTML=`<div class="mo-back"><div class="mo" role="dialog" aria-modal="true">
+      <h3>${esc(title)}</h3><p>${esc(body)}</p>
+      <div class="mo-acts"><button class="btn" data-a="no">${esc(cancel)}</button><button class="btn pri" data-a="yes">${esc(ok)}</button></div>
+    </div></div>`;
+    root.onclick=e=>{
+      if(e.target.classList.contains('mo-back')){root.innerHTML='';root.onclick=null;return res(false)}
+      const b=e.target.closest('[data-a]');if(!b)return;
+      root.innerHTML='';root.onclick=null;res(b.dataset.a==='yes');
+    };
+  });
+}
+
+/* ================= popover ================= */
+const pop=$('#pop');let popAnchor=null;
+function openPop(anchor,html){
+  closePop();pop.hidden=false;pop.innerHTML=html;popAnchor=anchor;
+  const r=anchor.getBoundingClientRect(),pw=pop.offsetWidth,ph=pop.offsetHeight;
+  let x=Math.max(10,Math.min(r.right-pw,innerWidth-pw-10));
+  let y=r.bottom+8;if(y+ph>innerHeight-10)y=Math.max(10,r.top-8-ph);
+  pop.style.left=x+'px';pop.style.top=y+'px';
+}
+function closePop(){if(pop.hidden)return;pop.hidden=true;pop.innerHTML='';popAnchor=null;}
+document.addEventListener('pointerdown',e=>{
+  if(pop.hidden)return;
+  if(!pop.contains(e.target)&&!(popAnchor&&popAnchor.contains(e.target)))closePop();
+},true);
+addEventListener('resize',closePop);
+
+/* ================= model & history (undo/redo) ================= */
+let deck=null,cur=0,hist=[],hi=-1,pendingT=null,presenting=false,presRt=null,stageScale=1;
+const thumbTimers=new Map();
+
+function normOverlay(o){
+  o=(o&&typeof o==='object')?o:{};
+  const num=(v,d)=>{v=Number(v);return isFinite(v)?v:d};
+  return{
+    on:!!o.on,
+    text:stripS(String(o.text==null?'':o.text)),
+    style:OV_STYLES.includes(o.style)?o.style:'corner',
+    pos:OV_POS.includes(o.pos)?o.pos:'br',
+    img:(typeof o.img==='string'&&/^(data:image|https?:)/i.test(o.img))?o.img:'',
+    imgOp:Math.min(1,Math.max(.05,num(o.imgOp,1))),
+    imgScale:Math.min(8,Math.max(.05,num(o.imgScale,1))),
+    imgX:num(o.imgX,0),imgY:num(o.imgY,0),
+    html:String(o.html==null?'':o.html)
+  };
+}
+function normBg(b){
+  b=(b&&typeof b==='object')?b:{};
+  return{
+    mode:['none','image','html'].includes(b.mode)?b.mode:'none',
+    img:(typeof b.img==='string'&&/^(data:image|https?:)/i.test(b.img))?b.img:'',
+    fit:b.fit==='contain'?'contain':'cover',
+    op:Math.min(1,Math.max(.05,Number.isFinite(+b.op)?+b.op:1)),
+    html:String(b.html==null?'':b.html)
+  };
+}
+function normSov(o){
+  o=(o&&typeof o==='object')?o:{};
+  return{mode:o.mode==='html'?'html':'none',html:String(o.html==null?'':o.html)};
+}
+function normSlide(s){
+  s=s||{};const so=(s.slots&&typeof s.slots==='object')?s.slots:{};
+  const str=x=>typeof x==='string'?x:'';
+  const bl=Array.isArray(so.bullets)?so.bullets.map(x=>str(x)):[];
+  while(bl.length<1)bl.push('');
+  let cd=Array.isArray(so.cards)?so.cards.map(c=>(c&&typeof c==='object')?{head:str(c.head),text:str(c.text)}:{head:'',text:''}):[];
+  while(cd.length<3)cd.push({head:'',text:''});
+  const out={
+    id:(typeof s.id==='string'&&s.id)?s.id:uid(),
+    layout:LAYOUTS[s.layout]?s.layout:'content',
+    accent:/^#[0-9a-f]{6}$/i.test(s.accent||'')?s.accent:'#4da8ff',
+    notes:str(s.notes),
+    bg:normBg(s.bg),          /* per-slide background layer: none | image | html */
+    sov:normSov(s.sov),       /* per-slide transparent overlay layer: none | html */
+    slots:{
+      kicker:stripS(str(so.kicker)),title:stripS(str(so.title)),
+      body:stripS(str(so.body)),quote:stripS(str(so.quote)),
+      bullets:bl.map(stripS),
+      cards:cd.map(c=>({head:stripS(c.head),text:stripS(c.text)})),
+      html:String(so.html==null?'':so.html)
+    }
+  };
+  if(out.layout==='custom'&&!txt(out.slots.html))out.slots.html=CUSTOM_TPL;
+  return out;
+}
+function normDeck(o){
+  if(!o||!Array.isArray(o.slides)||!o.slides.length)return null;
+  return{
+    theme:o.theme==='light'?'light':'dark',
+    overlay:normOverlay(o.overlay),
+    title:(typeof o.title==='string'&&o.title.trim())?o.title.trim():'Untitled presentation',
+    slides:o.slides.map(normSlide)
+  };
+}
+/* snapshots capture title, slide theme, overlay (incl. image + HTML code) and every slide */
+function snap(){return JSON.stringify({t:deck.title,th:deck.theme,ov:deck.overlay,s:deck.slides})}
+function commit(){
+  clearTimeout(pendingT);pendingT=null;
+  const s=snap();if(hist[hi]===s)return;
+  hist.length=hi+1;hist.push(s);
+  const cap=s.length>1.2e6?24:90;                       /* fewer steps while a big image is in the deck */
+  while(hist.length>cap){hist.shift();hi--}
+  hi=hist.length-1;persist();markSaved();updUndo();
+}
+function queueCommit(){clearTimeout(pendingT);pendingT=setTimeout(()=>{pendingT=null;commit()},650)}
+function flushCommit(){if(pendingT){clearTimeout(pendingT);pendingT=null;commit()}}
+function undo(){
+  if(hi<=0)return toast('Nothing to undo','x');
+  flushCommit();hi--;restore(hist[hi]);
+  toast(`Undone · step ${hi+1}/${hist.length}`,'undo');
+}
+function redo(){
+  if(hi>=hist.length-1)return toast('Nothing to redo','x');
+  flushCommit();hi++;restore(hist[hi]);
+  toast(`Redone · step ${hi+1}/${hist.length}`,'redo');
+}
+function restore(s){
+  const o=JSON.parse(s);
+  deck.title=o.t;deck.theme=o.th==='light'?'light':'dark';
+  deck.overlay=normOverlay(o.ov);deck.slides=o.s;
+  closePop();
+  if(presenting)closePresent(true);
+  cur=Math.min(cur,deck.slides.length-1);
+  $('#deckTitle').value=deck.title;setTitle();
+  buildStrip();select(cur);syncOverlayBtn();persist();markSaved();updUndo();
+}
+let quotaWarned=false;
+function persist(){
+  try{localStorage.setItem(LS,JSON.stringify({v:1,deck}))}
+  catch(e){
+    if(!quotaWarned){quotaWarned=true;toast('Browser storage full — deck too large to autosave. Use Export for a backup','x')}
+  }
+}
+function load(){try{const r=localStorage.getItem(LS);if(!r)return null;return normDeck(JSON.parse(r).deck)}catch(e){return null}}
+function markSaved(){const c=$('#savedChip');c.classList.remove('go');void c.offsetWidth;c.classList.add('go')}
+function updUndo(){$('#btnUndo').disabled=hi<=0;$('#btnRedo').disabled=hi>=hist.length-1}
+function mkBlank(lay){return normSlide({layout:lay})}
+
+/* ================= seed (their Azure deck, condensed + custom slide + overlay demo) ================= */
+const SEED={title:'From Prompt to AI Agent',theme:'dark',
+overlay:{on:true,text:'© 2025 · Azure AI Session — Student Workshop',style:'corner',pos:'br'},
+slides:[
+{layout:'title',accent:'#4da8ff',notes:'Opening: do not define an agent yet. Create curiosity first.',slots:{
+ kicker:'Microsoft Azure · AI Session',
+ title:'From Prompt<br>to <span class="grad">AI&nbsp;Agent</span>',
+ body:'How we move from asking AI questions to building systems that use <b>knowledge</b>, <b>tools</b> and <b>actions</b> to accomplish real goals.'}},
+{layout:'content',accent:'#4da8ff',notes:'Pause for answers before moving on.',slots:{
+ kicker:'01 · The hook',
+ title:'What if AI could do <span class="grad">more than answer?</span>',
+ body:'A student types: <b>“I have an exam in 10 days. Help me prepare.”</b> Ask the room: is this already an AI agent? The point of this slide — a prompt alone does not make an agent.'}},
+{layout:'bullets',accent:'#4da8ff',notes:'Preview the journey without giving the definition away.',slots:{
+ kicker:'A thought experiment',
+ title:'One goal. <span class="grad">Five escalating steps.</span>',
+ bullets:['<b>Prompt</b> — ask for help','<b>Lecture notes</b> — add course material','<b>Search</b> — connect live sources','<b>Quiz</b> — generate practice','<b>Study plan</b> — the agent delivers'],
+ body:'At each step, we give AI more context and capability.'}},
+{layout:'content',accent:'#4da8ff',notes:'This is not a transformer-math session.',slots:{
+ kicker:'02 · The foundation',
+ title:'Start with the <span class="grad">AI model</span>',
+ body:'Prompt in, response out. Generative AI is powerful at producing <b>language</b>, <b>reasoning over context</b>, <b>transforming information</b> and <b>generating content</b> — but keep model internals brief. This session is about application architecture.'}},
+{layout:'cards',accent:'#ffc46b',notes:'Live demo: send both prompts to a model and compare outputs.',slots:{
+ kicker:'03 · Prompt engineering',
+ title:'A better prompt <span class="grad">changes the result</span>',
+ cards:[{head:'Weak',text:'“Explain cloud computing.”'},{head:'Better',text:'“Explain cloud computing to a first-year IT student using one analogy, three key ideas and a short example.”'}],
+ body:'Context + Task + Constraints + Output format.'}},
+{layout:'quote',accent:'#9d8cff',notes:'Transition slide — build suspense before revealing RAG.',slots:{
+ kicker:'The turning point',
+ quote:'But what happens when the AI <span class="grad">doesn’t know</span> the information we need?',
+ body:'That is where we introduce knowledge.'}},
+{layout:'content',accent:'#4da8ff',notes:'Introduce RAG conceptually; skip vector databases unless asked.',slots:{
+ kicker:'04 · Add knowledge · RAG',
+ title:'Give AI access to <span class="grad">relevant information</span>',
+ body:'Don’t expect the model to know everything — <b>retrieve</b> relevant information from trusted sources (handbook, calendar, course guide) and provide it as context.'}},
+{layout:'cards',accent:'#4da8ff',notes:'LIVE DEMO: show the agent answering from the supplied documents.',slots:{
+ kicker:'Demo moment',
+ title:'Meet <span class="grad">CampusMate</span>',
+ body:'A fictional university assistant answering questions from a small, controlled knowledge base.',
+ cards:[{head:'Student Handbook',text:'Rules & policies'},{head:'Academic Calendar',text:'Dates & deadlines'},{head:'Course Guide',text:'Course information'}]}},
+{layout:'quote',accent:'#4da8ff',notes:'Ask a question whose answer is absent from the documents — discuss grounding.',slots:{
+ kicker:'A useful AI lesson',
+ quote:'A good AI system doesn’t need to answer <span class="grad">everything</span>.',
+ body:'It should know when the available information is not enough.'}},
+{layout:'content',accent:'#4da8ff',notes:'Emphasize the move from answering to deciding.',slots:{
+ kicker:'05 · Give it tools',
+ title:'Knowledge lets AI <span class="grad">know</span>. Tools let AI <span class="grad">do</span>.',
+ body:'The shift: the model moves from answering to <b>deciding</b> — what information or capability is needed for this request.'}},
+{layout:'cards',accent:'#4da8ff',notes:'Each ingredient maps to something students click in the Azure portal next.',slots:{
+ kicker:'06 · What makes an agent?',
+ title:'Model + Instructions + Knowledge + Tools',
+ cards:[{head:'Model',text:'Interprets requests and produces responses.'},{head:'Instructions',text:'Define role, boundaries, response style.'},{head:'Knowledge',text:'Retrieve relevant information from sources.'},{head:'Tools',text:'Call functions, APIs, capabilities.'},{head:'Goal',text:'Coordinate capabilities around the objective.'},{head:'Guardrails',text:'Limit unsafe or unsupported behavior.'}],
+ body:'Each ingredient maps to something students will click in the Azure portal next.'}},
+{layout:'content',accent:'#4da8ff',notes:'Bridge into the live Azure demonstration.',slots:{
+ kicker:'07 · Azure',
+ title:'Now let’s build it with <span class="grad">Microsoft Azure</span>',
+ body:'Microsoft Foundry provides a workspace for building and managing AI applications and agents: <b>model</b> + <b>agent</b> + <b>knowledge</b> + <b>tools</b>.'}},
+{layout:'section',accent:'#4da8ff',notes:'Switch to Foundry. Browser pre-authenticated; resources pre-created.',slots:{
+ kicker:'08 · Live build',
+ title:'Let’s build <span class="grad">CampusMate</span>',
+ body:'Live demo · ~25 minutes — create & instruct the agent, connect documents, test real questions, add a tool.'}},
+{layout:'content',accent:'#4da8ff',notes:'Draw it on a whiteboard in parallel.',slots:{
+ kicker:'Demo architecture',
+ title:'Behind the experience',
+ body:'User request → <b>AI agent</b>: retrieve relevant knowledge, call a tool when needed, formulate a response → grounded result. Keep it simple enough that students can redraw it from memory.'}},
+{layout:'custom',accent:'#4da8ff',notes:'Fully custom slide — select it and open the HTML tab in the pane below to see the code, then make it yours.',slots:{html:
+`<style>
+  body{background:radial-gradient(120% 120% at 20% -10%,#0e1a35 0%,#04070f 55%)}
+  .loop{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:38px}
+  .rail{display:flex;align-items:center}
+  .box{padding:16px 26px;border:1.5px solid rgba(140,175,255,.35);border-radius:14px;font:600 22px var(--fd);background:rgba(120,170,255,.07)}
+  .box.hot{border-color:var(--acc);box-shadow:0 0 32px -6px var(--acc);background:rgba(120,170,255,.14)}
+  .wire{position:relative;width:86px;height:2px;background:rgba(140,175,255,.25)}
+  .wire::after{content:"";position:absolute;top:-3px;left:0;width:8px;height:8px;border-radius:50%;
+    background:var(--acc2);box-shadow:0 0 12px var(--acc2);animation:go 1.8s linear infinite}
+  .rail .wire:nth-of-type(1)::after{animation-delay:.6s}
+  .rail .wire:nth-of-type(2)::after{animation-delay:1.2s}
+  @keyframes go{0%{left:-4px;opacity:0}12%{opacity:1}88%{opacity:1}100%{left:82px;opacity:0}}
+  h2{font:700 46px var(--fd);margin:0;letter-spacing:-.025em}
+  h2 span{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .cap{font:400 19px var(--fb);color:var(--mut);margin:0}
+  .fade{opacity:0;transform:translateY(22px);animation:up .8s .2s cubic-bezier(.22,1,.36,1) forwards}
+  .d2{animation-delay:.45s}.d3{animation-delay:.7s}
+  @keyframes up{to{opacity:1;transform:none}}
+</style>
+<div class="loop">
+  <h2 class="fade">This slide is <span>100% custom HTML</span></h2>
+  <div class="rail fade d2">
+    <div class="box">Prompt</div><div class="wire"></div>
+    <div class="box hot">AI Agent</div><div class="wire"></div>
+    <div class="box">Grounded answer</div>
+  </div>
+  <p class="cap fade d3">Open the HTML tab in the pane below — paste anything, animations run live</p>
+</div>`}},
+{layout:'cards',accent:'#4da8ff',notes:'2–3 groups present afterwards.',slots:{
+ kicker:'09 · Challenge',
+ title:'Design your own <span class="grad">student AI agent</span>',
+ cards:[{head:'Agent name',text:'What would you call it?'},{head:'Problem',text:'What student problem does it solve?'},{head:'Knowledge',text:'What information does it need?'},{head:'Tools',text:'What can it actually do?'},{head:'Instructions',text:'How should it behave?'},{head:'Example request',text:'What would a student ask?'}],
+ body:'10 minutes solo or in small groups — explain the problem before the technology.'}},
+{layout:'cards',accent:'#3fe0c0',notes:'Keep it practical — connect each principle to the agent students just designed.',slots:{
+ kicker:'10 · Responsible AI',
+ title:'Capability needs <span class="grad">boundaries</span>',
+ cards:[{head:'Grounding',text:'Prefer relevant sources over invented facts.'},{head:'Permissions',text:'Give tools only the access they need.'},{head:'Human oversight',text:'Keep people involved in consequential actions.'},{head:'Privacy',text:'Don’t feed sensitive data into demos.'}],
+ body:'Keep it practical — connect each principle to the agent students just designed.'}},
+{layout:'bullets',accent:'#4da8ff',notes:'Recap the full arc before the final call to action.',slots:{
+ kicker:'The journey',
+ title:'The full arc',
+ bullets:['<b>Prompt</b> — ask','<b>Better prompt</b> — instruct','<b>Knowledge</b> — ground','<b>Tools</b> — act','<b>Agent</b> — accomplish'],
+ body:'From asking AI questions to <span class="grad">building with AI</span>.'}},
+{layout:'title',accent:'#4da8ff',notes:'Close with the learning path; invite small projects over huge products.',slots:{
+ kicker:'Take it further',
+ title:'Don’t just use AI.<br><span class="grad">Build with it.</span>',
+ body:'Explore Microsoft Learn, experiment with Azure AI, and turn one real problem into a small AI application.'}}
+]};
+
+/* ================= sandboxed iframe plumbing (custom slides + HTML overlay) ================= */
+/* Builds the full document for a sandboxed iframe. Bare fragments get wrapped
+   with a base (1280x720, fonts, deck tokens); full documents pass through untouched.
+   `extra` = raw CSS appended to the base; `guard` = inject the transparency guard
+   (overlay layers only: forces html/body transparent AND strips opaque backgrounds
+   from large elements, so pasted AI pages can never hide the slide underneath). */
+const SOV_FORCE='html,body{background:transparent!important;background-color:transparent!important;background-image:none!important}'
+  +'html body,:root body{background:transparent!important;background-color:transparent!important;background-image:none!important}';
+/* Runs INSIDE overlay iframes: any element that covers a large part of the layer and paints a
+   FULLY opaque flat background (or an all-opaque gradient) is neutralized. Semi-transparent
+   glass/veils, bars, badges and small cards are left exactly as authored. */
+const SOV_GUARD=`<script>(function(){
+function al(c){var m=/rgba?\\(([^)]*)\\)/.exec(c);if(!m)return 1;var p=m[1].split(',');if(p.length<4)return 1;var a=parseFloat(p[3]);return isNaN(a)?1:a}
+function go(){
+  if(!document.body)return;
+  var W=innerWidth,H=innerHeight;if(!W||!H)return;
+  var els=[document.body].concat([].slice.call(document.body.querySelectorAll('*')));
+  for(var i=0;i<els.length;i++){
+    var el=els[i],r;
+    try{r=el.getBoundingClientRect()}catch(e){continue}
+    if(r.width<W*.5||r.height<H*.5)continue;               /* only large, slide-hiding regions */
+    var cs;try{cs=getComputedStyle(el)}catch(e){continue}
+    if(cs.backgroundColor&&al(cs.backgroundColor)>=0.85)el.style.backgroundColor='transparent';
+    var bi=cs.backgroundImage;
+    if(bi&&bi!=='none'&&bi.indexOf('gradient')>-1){        /* all-opaque gradient = opaque paint */
+      var cols=(bi.match(/rgba?\\([^)]*\\)/g)||[]);
+      if(cols.length&&cols.every(function(c){return al(c)>=0.85}))el.style.backgroundImage='none';
+    }
+  }
+}
+if(document.readyState==='complete')setTimeout(go,0);else addEventListener('load',function(){setTimeout(go,0)});
+setTimeout(go,650);
+})()</scr`+`ipt>`;
+function buildSrcdoc(code,accent,still,extra,guard){
+  code=String(code==null?'':code);
+  const light=deck.theme==='light';
+  const ins=(extra?'<style>'+extra+'</style>':'')+(guard?SOV_GUARD:'')+(still?'<style>*{animation-play-state:paused!important}</style>':'');
+  if(/<!doctype\s+html|<html[\s>]/i.test(code)){
+    if(!ins)return code;
+    const i=code.toLowerCase().lastIndexOf('</body>');
+    return i>-1?code.slice(0,i)+ins+code.slice(i):code+ins;
+  }
+  return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+    +'<link rel="preconnect" href="https://fonts.googleapis.com">'
+    +'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    +'<link href="'+FONT_HREF+'" rel="stylesheet">'
+    +'<style>html,body{margin:0;padding:0;width:1280px;height:720px;overflow:hidden}'
+    +'*{box-sizing:border-box}'
+    +"body{font-family:var(--fb);color:var(--ink);-webkit-font-smoothing:antialiased}"
+    +':root{--acc:'+accent+';--acc2:'+accent2(accent)
+    +";--fd:'Space Grotesk',sans-serif;--fb:'Instrument Sans',sans-serif;--fm:'JetBrains Mono',monospace;"
+    +'--mut:'+(light?'#55627e':'#96a2bd')+';--ink:'+(light?'#18213a':'#e9eefb')+'}'
+    +'a{color:var(--acc)}'
+    +(extra||'')
+    +(still?'*{animation-play-state:paused!important}':'')
+    +'</style></head><body>'+code+(guard?SOV_GUARD:'')+'</body></html>';
+}
+/* Generic template → iframe mount (idempotent). */
+function mountTpl(holder,cls,frameCls,after){
+  if(!holder)return;
+  if(holder.querySelector(':scope > iframe.'+frameCls))return;
+  const t=holder.querySelector(':scope > template.'+cls);if(!t)return;
+  const f=document.createElement('iframe');
+  f.className=frameCls;f.setAttribute('sandbox','allow-scripts');
+  f.setAttribute('allowtransparency','true');
+  f.setAttribute('aria-hidden','true');f.tabIndex=-1;f.draggable=false;
+  f.srcdoc=t.content.textContent||'';
+  holder.appendChild(f);after&&after(holder);
+}
+function mountCust(st){mountTpl(st,'cust-src','cust',h=>h.classList.add('cust-on'))}
+function mountOv(st){mountTpl(st.querySelector(':scope > .ov-html'),'ov-src','ov-frame')}
+function mountBg(st){mountTpl(st.querySelector(':scope > .bg-lay.bg-html'),'bg-src','bg-frame')}
+function mountSov(st){mountTpl(st.querySelector(':scope > .sov-lay'),'sov-src','sov-frame')}
+function mountAll(st){mountCust(st);mountOv(st);mountBg(st);mountSov(st)}
+
+/* ================= per-slide layers (background + transparent overlay) ================= */
+function bgHTML(sl,still){
+  const b=sl.bg||{mode:'none'};
+  if(b.mode==='image'&&b.img){
+    return '<div class="bg-lay bg-img" style="background-image:url(\''+esc(b.img)+'\');background-size:'
+      +(b.fit==='contain'?'contain':'cover')+';background-position:center;background-repeat:no-repeat;opacity:'
+      +(b.op==null?1:b.op)+'"></div>';
+  }
+  if(b.mode==='html'&&txt(b.html)){
+    return '<div class="bg-lay bg-html"><template class="bg-src">'
+      +escT(buildSrcdoc(b.html,sl.accent,!!still))+'</template></div>';
+  }
+  return '';
+}
+function sovHTML(sl,still){
+  const s=sl.sov||{mode:'none'};
+  if(s.mode==='html'&&txt(s.html)){
+    return '<div class="sov-lay"><template class="sov-src">'
+      +escT(buildSrcdoc(s.html,sl.accent,!!still,SOV_FORCE,true))+'</template></div>';
+  }
+  return '';
+}
+const kbLen=s=>Math.max(1,Math.round(String(s||'').length*.75/1024))+' KB';
+/* live background tweak without a rebuild (opacity / fit sliders) */
+function updCanvasBg(){
+  const el=stageHost.querySelector('.bg-lay.bg-img');
+  const b=deck.slides[cur].bg;
+  if(el&&b&&b.mode==='image'){
+    el.style.opacity=String(b.op==null?1:b.op);
+    el.style.backgroundSize=b.fit==='contain'?'contain':'cover';
+  }
+  thumbSoon();
+}
+
+/* ================= persistent overlay (text · fullscreen image · fullscreen HTML) ================= */
+function imgTransform(){
+  const ov=deck.overlay;
+  return 'translate(-50%,-50%) translate('+(ov.imgX||0)+'px,'+(ov.imgY||0)+'px) scale('+(ov.imgScale||1)+')';
+}
+function overlayHTML(edit,sl,still){
+  const ov=deck.overlay;
+  if(!ov||!ov.on)return'';
+  if(ov.style==='image'){
+    if(!ov.img)return edit?'<div class="ov ov-img"><span class="wm-ph">fullscreen image — add one in the deck overlay panel</span></div>':'';
+    return '<div class="ov ov-img"><img src="'+esc(ov.img)+'" alt="" draggable="false" style="opacity:'
+      +(ov.imgOp==null?1:ov.imgOp)+';transform:'+imgTransform()+'"></div>';
+  }
+  if(ov.style==='html'){
+    const has=txt(ov.html)!=='';
+    if(!has)return edit?'<div class="ov ov-html"><span class="wm-ph">fullscreen HTML layer — open the Overlay tab (All slides) to add code</span></div>':'';
+    return '<div class="ov ov-html"><template class="ov-src">'
+      +escT(buildSrcdoc(ov.html,(sl&&sl.accent)||'#4da8ff',!!still,SOV_FORCE,true))+'</template></div>';
+  }
+  /* text styles: corner / bar / watermark */
+  const has=txt(ov.text)!=='';
+  if(ov.style==='watermark'){
+    if(!has)return edit?'<div class="ov ov-wm"><span class="wm-ph">watermark — add text in the deck overlay panel</span></div>':'';
+    return `<div class="ov ov-wm" aria-hidden="true"><div class="wm-grid">${(`<span>${ov.text}</span>`).repeat(12)}</div></div>`;
+  }
+  if(!has&&!edit)return'';
+  const inner=edit
+    ?`<div class="ed ov-txt" contenteditable="true" spellcheck="false" data-k="ovtext" data-ph="© your notice">${ov.text}</div>`
+    :`<div class="ov-txt">${ov.text}</div>`;
+  return ov.style==='bar'
+    ?`<div class="ov ov-bar">${inner}</div>`
+    :`<div class="ov ov-corner ${ov.pos}">${inner}</div>`;
+}
+/* swap the overlay layer inside an already-rendered stage (no full rebuild) */
+function refreshOverlayIn(st,sl){
+  st.querySelectorAll(':scope > .ov').forEach(n=>n.remove());
+  const h=overlayHTML(false,sl,true);
+  if(h)st.insertAdjacentHTML('beforeend',h);
+}
+function overlayThumbsNow(){
+  const lr=stripList.getBoundingClientRect();
+  $$('#stripList .t-item').forEach((it,k)=>{
+    const st=it.querySelector('.stage');if(!st)return;
+    const sl=deck.slides[k];if(!sl)return;
+    refreshOverlayIn(st,sl);
+    const r=it.getBoundingClientRect();
+    if(r.bottom>lr.top-220&&r.top<lr.bottom+220)mountOv(st);   /* mount HTML-overlay thumbs near the viewport */
+  });
+}
+let ovThT=null;
+function overlayThumbsSoon(){clearTimeout(ovThT);ovThT=setTimeout(overlayThumbsNow,350)}
+let ovCvT=null;
+function overlayCanvasSoon(){clearTimeout(ovCvT);ovCvT=setTimeout(renderCanvas,150)}
+function refreshCanvasOverlay(){
+  const st=stageHost.querySelector('.stage');if(!st)return;
+  st.querySelectorAll(':scope > .ov').forEach(n=>n.remove());
+  const h=overlayHTML(true,deck.slides[cur],false);
+  if(h){
+    st.insertAdjacentHTML('beforeend',h);
+    mountOv(st);wireOvDrag(st);wireOvText(st);
+  }
+}
+function syncOverlayBtn(){$('#btnOverlay').classList.toggle('on',!!(deck.overlay&&deck.overlay.on))}
+/* live image style update without a rebuild (sliders) */
+function updCanvasImg(){
+  const im=stageHost.querySelector('.ov-img img');
+  if(im){im.style.opacity=String(deck.overlay.imgOp);im.style.transform=imgTransform()}
+  overlayThumbsSoon();
+}
+
+/* ---- image import: data URL, auto-downscaled to the 1280×720 stage (GIF/SVG kept intact) ---- */
+function importImageFile(file,cb){
+  const rd=new FileReader();
+  rd.onload=()=>{
+    const url=String(rd.result);
+    if(file.type==='image/gif'||file.type==='image/svg+xml')return cb(url);
+    const im=new Image();
+    im.onload=()=>{
+      const w=im.naturalWidth,h=im.naturalHeight;
+      if(!w||!h||(w<=1280&&h<=720))return cb(url);
+      const s=Math.min(1280/w,720/h),cw=Math.round(w*s),ch=Math.round(h*s);
+      try{
+        const cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
+        cv.getContext('2d').drawImage(im,0,0,cw,ch);
+        cb(cv.toDataURL('image/png'));
+      }catch(err){cb(url)}
+    };
+    im.onerror=()=>cb(url);
+    im.src=url;
+  };
+  rd.onerror=()=>toast('Could not read that file','x');
+  rd.readAsDataURL(file);
+}
+
+/* ---- overlay settings panel ---- */
+function openOverlayPanel(anchor){
+  const ov=deck.overlay;
+  openPop(anchor,`
+  <div class="ovp">
+    <div class="ovp-top">
+      <div>
+        <b>Deck overlay — all slides</b>
+        <small>The deck scope of the one overlay system: © text, a fullscreen image, or a transparent HTML layer — shown on every slide, in Present mode and in exports. Slide-specific overlays live in the same Overlay tab (“This slide”).</small>
+      </div>
+      <button class="sw-tgl${ov.on?' on':''}" id="ovTgl" type="button" role="switch" aria-checked="${ov.on}" aria-label="Enable overlay"></button>
+    </div>
+    <div id="ovBody"${ov.on?'':' class="off"'}>
+      <div id="ovTextWrap">
+        <label for="ovText">Text</label>
+        <input id="ovText" class="ovp-inp" value="${esc(ov.text)}" placeholder="© 2025 Your Company · All rights reserved" spellcheck="false">
+      </div>
+      <label>Style</label>
+      <div class="ovp-styles">
+        <button class="ovst${ov.style==='corner'?' on':''}" data-s="corner" type="button"><span class="ov-prev"><i class="c"></i></span><b>Corner</b></button>
+        <button class="ovst${ov.style==='bar'?' on':''}" data-s="bar" type="button"><span class="ov-prev"><i class="bb"></i></span><b>Bar</b></button>
+        <button class="ovst${ov.style==='watermark'?' on':''}" data-s="watermark" type="button"><span class="ov-prev"><i class="w"></i></span><b>Watermark</b></button>
+        <button class="ovst${ov.style==='image'?' on':''}" data-s="image" type="button"><span class="ov-prev"><i class="ip"></i></span><b>Image</b></button>
+        <button class="ovst${ov.style==='html'?' on':''}" data-s="html" type="button"><span class="ov-prev"><i class="hp"></i></span><b>HTML</b></button>
+      </div>
+      <div id="ovPosWrap">
+        <label>Position <em>· corner style only</em></label>
+        <div class="ovp-pos">
+          <button class="ovpos${ov.pos==='tl'?' on':''}" data-p="tl" type="button" aria-label="Top left"></button>
+          <button class="ovpos${ov.pos==='tr'?' on':''}" data-p="tr" type="button" aria-label="Top right"></button>
+          <button class="ovpos${ov.pos==='bl'?' on':''}" data-p="bl" type="button" aria-label="Bottom left"></button>
+          <button class="ovpos${ov.pos==='br'?' on':''}" data-p="br" type="button" aria-label="Bottom right"></button>
+        </div>
+      </div>
+      <div id="ovImgSec">
+        <label>Fullscreen image <em>· transparent PNG works best</em></label>
+        <div class="ovp-row">
+          <button class="n-mini" id="ovUpload" type="button">upload image</button>
+          <button class="n-mini" id="ovClearImg" type="button">remove</button>
+        </div>
+        <input id="ovImgUrl" class="ovp-inp" value="${/^https?:/i.test(ov.img)?esc(ov.img):''}" placeholder="…or paste an image URL" spellcheck="false">
+        <label>Opacity <em id="ovOpVal"></em></label>
+        <input type="range" id="ovOp" min="10" max="100" step="5">
+        <label>Scale <em id="ovScVal"></em> <em>· upscale allowed</em></label>
+        <input type="range" id="ovSc" min="10" max="500" step="5">
+        <div class="ovp-row">
+          <button class="n-mini" id="ovFit" type="button">fit screen</button>
+          <button class="n-mini" id="ovResetPos" type="button">center + 100%</button>
+        </div>
+        <div class="ovp-foot">Drag the image directly on the slide to position it. Big uploads are auto-resized to 1280×720 to protect browser storage.</div>
+      </div>
+      <div id="ovHtmlSec">
+        <label>Transparent HTML layer</label>
+        <div class="ovp-row">
+          <button class="n-mini" id="ovEditCode" type="button">edit overlay HTML</button>
+        </div>
+        <div class="ovp-foot">Forced transparent — opaque backgrounds are stripped, so every slide stays visible underneath. Edited in the Overlay tab (All slides scope) — the same editor as the slide overlay, nothing duplicated.</div>
+      </div>
+      <div class="ovp-row" style="margin-top:12px">
+        <button class="n-mini" id="ovOpenLayers" type="button">per-slide layers (background · overlay)</button>
+      </div>
+    </div>
+  </div>`);
+  const body=$('#ovBody'),tgl=$('#ovTgl'),inp=$('#ovText'),
+        textWrap=$('#ovTextWrap'),posWrap=$('#ovPosWrap'),
+        imgSec=$('#ovImgSec'),htmlSec=$('#ovHtmlSec'),
+        opR=$('#ovOp'),opVal=$('#ovOpVal'),scR=$('#ovSc'),scVal=$('#ovScVal');
+  const apply=()=>{renderCanvas();overlayThumbsNow();commit();syncOverlayBtn();updatePane()};
+  const syncSecs=()=>{
+    textWrap.classList.toggle('sec-off',ov.style==='image'||ov.style==='html');
+    posWrap.classList.toggle('sec-off',ov.style!=='corner');
+    imgSec.classList.toggle('sec-off',ov.style!=='image');
+    htmlSec.classList.toggle('sec-off',ov.style!=='html');
+  };
+  const syncSliders=()=>{
+    opR.value=Math.round((ov.imgOp==null?1:ov.imgOp)*100);
+    opVal.textContent=opR.value+'%';
+    scR.value=Math.round((ov.imgScale||1)*100);
+    scVal.textContent=scR.value+'%';
+  };
+  syncSecs();syncSliders();
+  tgl.addEventListener('click',()=>{
+    flushCommit();ov.on=!ov.on;
+    tgl.classList.toggle('on',ov.on);tgl.setAttribute('aria-checked',ov.on);
+    body.classList.toggle('off',!ov.on);
+    apply();
+    toast(ov.on?'Overlay enabled on all slides':'Overlay hidden',ov.on?'check':'x');
+  });
+  inp.addEventListener('input',()=>{
+    ov.text=inp.value;
+    overlayCanvasSoon();overlayThumbsSoon();queueCommit();
+  });
+  inp.addEventListener('blur',flushCommit);
+  pop.querySelectorAll('.ovst').forEach(b=>b.addEventListener('click',()=>{
+    if(ov.style===b.dataset.s)return;
+    flushCommit();ov.style=b.dataset.s;
+    if(ov.style==='html'&&!txt(ov.html))ov.html=OV_TPL;
+    pop.querySelectorAll('.ovst').forEach(x=>x.classList.toggle('on',x===b));
+    syncSecs();apply();
+  }));
+  pop.querySelectorAll('.ovpos').forEach(b=>b.addEventListener('click',()=>{
+    if(ov.pos===b.dataset.p)return;
+    flushCommit();ov.pos=b.dataset.p;
+    pop.querySelectorAll('.ovpos').forEach(x=>x.classList.toggle('on',x===b));
+    apply();
+  }));
+  /* image controls */
+  $('#ovUpload').addEventListener('click',()=>$('#ovFileInput').click());
+  $('#ovClearImg').addEventListener('click',()=>{
+    if(!ov.img)return;
+    flushCommit();ov.img='';
+    const u=$('#ovImgUrl');if(u)u.value='';
+    renderCanvas();overlayThumbsNow();commit();
+  });
+  $('#ovImgUrl').addEventListener('change',e=>{
+    const v=e.target.value.trim();
+    if(!v)return;
+    if(!/^(https?:|data:image)/i.test(v))return toast('Enter an http(s) or data:image URL','x');
+    flushCommit();ov.img=v;
+    renderCanvas();overlayThumbsNow();commit();
+  });
+  opR.addEventListener('input',()=>{ov.imgOp=opR.value/100;opVal.textContent=opR.value+'%';updCanvasImg()});
+  opR.addEventListener('change',()=>{flushCommit();commit()});
+  scR.addEventListener('input',()=>{ov.imgScale=scR.value/100;scVal.textContent=scR.value+'%';updCanvasImg()});
+  scR.addEventListener('change',()=>{flushCommit();commit()});
+  $('#ovFit').addEventListener('click',()=>{
+    if(!ov.img)return toast('Add an image first','x');
+    const im=new Image();
+    im.onload=()=>{
+      flushCommit();
+      ov.imgScale=+Math.max(1280/im.naturalWidth,720/im.naturalHeight).toFixed(3);
+      ov.imgX=0;ov.imgY=0;
+      syncSliders();updCanvasImg();commit();
+      toast('Image scaled to fill the screen','check');
+    };
+    im.onerror=()=>toast('Could not read the image','x');
+    im.src=ov.img;
+  });
+  $('#ovResetPos').addEventListener('click',()=>{
+    flushCommit();ov.imgX=0;ov.imgY=0;ov.imgScale=1;
+    syncSliders();updCanvasImg();commit();
+  });
+  /* HTML overlay — opens the ONE overlay editor, deck scope */
+  $('#ovEditCode').addEventListener('click',()=>{
+    closePop();
+    paneMode='so';ovScope='deck';localStorage.setItem('sm.ovScope','deck');
+    $('#center').classList.remove('no-notes');
+    $('#cNotes').classList.add('on');
+    updatePane();
+    setTimeout(()=>$('#ovTa').focus(),60);
+  });
+  $('#ovOpenLayers').addEventListener('click',()=>{
+    closePop();openLayersPanel($('#btnLayers'));
+  });
+}
+ $('#ovFileInput').addEventListener('change',e=>{
+  const f=e.target.files[0];e.target.value='';if(!f)return;
+  if(!/^image\//.test(f.type))return toast('Please choose an image file','x');
+  importImageFile(f,url=>{
+    flushCommit();deck.overlay.img=url;
+    renderCanvas();overlayThumbsNow();commit();
+    toast('Image added ('+Math.max(1,Math.round(url.length*.75/1024))+' KB) — drag it on the slide to position','check');
+  });
+});
+
+/* ================= per-slide LAYERS panel (background · content · overlay) ================= */
+function openLayersPanel(anchor){
+  const sl=deck.slides[cur];
+  openPop(anchor,`
+  <div class="lyp">
+    <div class="lyp-top">
+      <b>Layers — slide ${cur+1}</b>
+      <small>Three independent layers stack on every slide. HTML layers are edited as code — no manual editing on the canvas.</small>
+    </div>
+    <button class="lyp-view" id="lyView" type="button">${ic('grid4',15)}<span>3-screen layer view</span><kbd>L</kbd></button>
+
+    <label>Background <em>· behind everything</em></label>
+    <div class="lyp-seg" id="lyBgSeg">
+      <button data-m="none" type="button"${sl.bg.mode==='none'?' class="on"':''}>None</button>
+      <button data-m="image" type="button"${sl.bg.mode==='image'?' class="on"':''}>Image</button>
+      <button data-m="html" type="button"${sl.bg.mode==='html'?' class="on"':''}>HTML</button>
+    </div>
+    <div id="lyBgImg"${sl.bg.mode==='image'?'':' class="sec-off"'}>
+      <div class="ovp-row">
+        <button class="n-mini" id="lyBgUpload" type="button">upload image</button>
+        <button class="n-mini" id="lyBgFit" type="button">fit: ${sl.bg.fit}</button>
+        <button class="n-mini" id="lyBgClear" type="button">remove</button>
+      </div>
+      <input id="lyBgUrl" class="ovp-inp" value="${/^https?:/i.test(sl.bg.img)?esc(sl.bg.img):''}" placeholder="…or paste an image URL" spellcheck="false">
+      <label>Opacity <em id="lyBgOpVal"></em></label>
+      <input type="range" id="lyBgOp" min="10" max="100" step="5">
+      <div class="ovp-foot">Big uploads are auto-resized to 1280×720 to protect browser storage.</div>
+    </div>
+    <div id="lyBgHtml"${sl.bg.mode==='html'?'':' class="sec-off"'}>
+      <div class="ovp-row">
+        <button class="n-mini" id="lyBgEdit" type="button">edit background HTML</button>
+      </div>
+      <div class="ovp-foot">A 1280×720 sandbox behind the content — gradients, grids, animated scenes. Runs on this slide only.</div>
+    </div>
+
+    <label>Content <em>· the page itself</em></label>
+    <div class="lyp-stat" id="lyMainStat"></div>
+    <div class="ovp-row">
+      <button class="n-mini" id="lyMainBtn" type="button"></button>
+    </div>
+
+    <label>Overlay <em>· transparent, above the page</em></label>
+    <div class="lyp-seg two" id="lyOvSeg">
+      <button data-m="none" type="button"${sl.sov.mode==='none'?' class="on"':''}>None</button>
+      <button data-m="html" type="button"${sl.sov.mode==='html'?' class="on"':''}>HTML</button>
+    </div>
+    <div id="lyOvHtml"${sl.sov.mode==='html'?'':' class="sec-off"'}>
+      <div class="ovp-row">
+        <button class="n-mini" id="lyOvEdit" type="button">edit overlay HTML</button>
+      </div>
+      <div class="ovp-foot">This slide only · forced transparent — the slide must stay visible underneath.</div>
+    </div>
+    <div class="ovp-row" style="margin-top:7px">
+      <button class="n-mini" id="lyOvDeck" type="button"></button>
+      <button class="n-mini" id="lyOvCr" type="button">deck © settings</button>
+    </div>
+    <div class="ovp-foot" style="margin-top:5px">Same overlay system, deck scope — one overlay on every slide. Edited in the same Overlay tab (“All slides”), never duplicated.</div>
+  </div>`);
+
+  const syncMain=()=>{
+    $('#lyMainStat').textContent=sl.layout==='custom'
+      ?'Full-page HTML — the app adds nothing (no background, no styling)'
+      :'Auto layout — “'+LAYOUTS[sl.layout].name+'” (software-styled)';
+    const b=$('#lyMainBtn');
+    b.textContent=sl.layout==='custom'?'pick an auto layout':'switch to full-page HTML';
+  };
+  syncMain();
+  const syncDeckStat=()=>{
+    const d=deck.overlay;
+    const st=!d.on?'off'
+      :d.style==='html'?(txt(d.html)?'html':'html · empty')
+      :d.style==='image'?(d.img?'image':'image · empty')
+      :(txt(d.text)?'© '+d.style:'© '+d.style+' · empty');
+    $('#lyOvDeck').textContent='deck overlay: '+st;
+  };
+  syncDeckStat();
+
+  const applyAll=(msg)=>{renderCanvas();refreshThumb();commit();updatePane();if(msg)toast(msg,'check')};
+
+  $('#lyView').addEventListener('click',()=>{closePop();openLayerView()});
+
+  pop.querySelectorAll('#lyBgSeg button').forEach(b=>b.addEventListener('click',()=>{
+    if(sl.bg.mode===b.dataset.m)return;
+    flushCommit();
+    sl.bg.mode=b.dataset.m;
+    if(sl.bg.mode==='html'&&!txt(sl.bg.html))sl.bg.html=BG_TPL;
+    pop.querySelectorAll('#lyBgSeg button').forEach(x=>x.classList.toggle('on',x===b));
+    $('#lyBgImg').classList.toggle('sec-off',sl.bg.mode!=='image');
+    $('#lyBgHtml').classList.toggle('sec-off',sl.bg.mode!=='html');
+    applyAll(sl.bg.mode==='none'?'Background layer off':(sl.bg.mode==='image'?'Background image — upload one below':'Background HTML layer added'));
+  }));
+  pop.querySelectorAll('#lyOvSeg button').forEach(b=>b.addEventListener('click',()=>{
+    if(sl.sov.mode===b.dataset.m)return;
+    flushCommit();
+    sl.sov.mode=b.dataset.m;
+    if(sl.sov.mode==='html'&&!txt(sl.sov.html))sl.sov.html=SOV_TPL;
+    pop.querySelectorAll('#lyOvSeg button').forEach(x=>x.classList.toggle('on',x===b));
+    $('#lyOvHtml').classList.toggle('sec-off',sl.sov.mode!=='html');
+    applyAll(sl.sov.mode==='html'?'Transparent overlay layer added':'Overlay layer off');
+  }));
+
+  /* background image controls */
+  $('#lyBgUpload').addEventListener('click',()=>$('#bgFileInput').click());
+  $('#lyBgClear').addEventListener('click',()=>{
+    if(!sl.bg.img)return;
+    flushCommit();sl.bg.img='';
+    const u=$('#lyBgUrl');if(u)u.value='';
+    renderCanvas();refreshThumb();commit();
+  });
+  $('#lyBgUrl').addEventListener('change',e=>{
+    const v=e.target.value.trim();
+    if(!v)return;
+    if(!/^(https?:|data:image)/i.test(v))return toast('Enter an http(s) or data:image URL','x');
+    flushCommit();sl.bg.img=v;
+    renderCanvas();refreshThumb();commit();
+  });
+  const opR=$('#lyBgOp'),opVal=$('#lyBgOpVal');
+  const syncOp=()=>{opR.value=Math.round((sl.bg.op==null?1:sl.bg.op)*100);opVal.textContent=opR.value+'%'};
+  syncOp();
+  opR.addEventListener('input',()=>{sl.bg.op=opR.value/100;opVal.textContent=opR.value+'%';updCanvasBg()});
+  opR.addEventListener('change',()=>{flushCommit();commit()});
+  $('#lyBgFit').addEventListener('click',()=>{
+    flushCommit();sl.bg.fit=sl.bg.fit==='cover'?'contain':'cover';
+    $('#lyBgFit').textContent='fit: '+sl.bg.fit;
+    updCanvasBg();commit();
+  });
+  $('#lyBgEdit').addEventListener('click',()=>{
+    closePop();
+    paneMode='bg';applyPane();
+    $('#center').classList.remove('no-notes');
+    $('#cNotes').classList.add('on');
+    updatePane();
+    setTimeout(()=>$('#bgTa').focus(),60);
+  });
+  $('#lyOvEdit').addEventListener('click',()=>{
+    closePop();
+    paneMode='so';ovScope='slide';localStorage.setItem('sm.ovScope','slide');
+    $('#center').classList.remove('no-notes');
+    $('#cNotes').classList.add('on');
+    updatePane();
+    setTimeout(()=>$('#soTa').focus(),60);
+  });
+  $('#lyOvDeck').addEventListener('click',()=>{
+    closePop();
+    paneMode='so';ovScope='deck';localStorage.setItem('sm.ovScope','deck');
+    $('#center').classList.remove('no-notes');
+    $('#cNotes').classList.add('on');
+    updatePane();
+    setTimeout(()=>$('#ovTa').focus(),60);
+  });
+  $('#lyOvCr').addEventListener('click',()=>{closePop();openOverlayPanel(anchor)});
+  $('#lyMainBtn').addEventListener('click',()=>{
+    if(sl.layout==='custom'){closePop();openLayoutMenu(anchor);return}
+    flushCommit();
+    sl.layout='custom';
+    if(!txt(sl.slots.html))sl.slots.html=CUSTOM_TPL;
+    syncMain();
+    buildStrip();select(cur);commit();updatePane();
+    toast('Full-page HTML — the app adds nothing. Edit the code below','check');
+  });
+}
+ $('#bgFileInput').addEventListener('change',e=>{
+  const f=e.target.files[0];e.target.value='';if(!f)return;
+  if(!/^image\//.test(f.type))return toast('Please choose an image file','x');
+  importImageFile(f,url=>{
+    flushCommit();
+    const sl=deck.slides[cur];
+    sl.bg.mode='image';sl.bg.img=url;
+    renderCanvas();refreshThumb();commit();updatePane();
+    toast('Background image set ('+Math.max(1,Math.round(url.length*.75/1024))+' KB)','check');
+  });
+});
+
+/* ================= 3-SCREEN LAYER VIEW (bg · content · overlay · combined) ================= */
+const layerViewEl=$('#layerView');let lvRt=null;
+function layerViewOpen(){return layerViewEl.classList.contains('on')}
+function closeLayerView(){
+  if(!layerViewOpen())return;
+  if(lvRt){lvRt.disconnect();lvRt=null}
+  layerViewEl.classList.remove('on');layerViewEl.innerHTML='';
+}
+/* stage containing exactly ONE layer of the current slide */
+function lvStage(which){
+  const sl=deck.slides[cur],light=deck.theme==='light';
+  const st=document.createElement('div');
+  st.className='stage'+(light?' light':'');
+  st.style.setProperty('--acc',sl.accent);
+  st.style.setProperty('--acc2',accent2(sl.accent));
+  if(which==='bg'){
+    const h=bgHTML(sl,true);
+    if(h)st.innerHTML=h;
+    return{st,empty:!h};
+  }
+  if(which==='main'){
+    if(sl.layout==='custom'){
+      st.classList.add('lay-html');
+      st.innerHTML='<div class="cust-hold" aria-hidden="true"></div>';
+      const t=document.createElement('template');t.className='cust-src';
+      t.content.textContent=buildSrcdoc(sl.slots.html,sl.accent,true);
+      st.appendChild(t);
+      return{st,empty:!txt(sl.slots.html)};
+    }
+    st.classList.add('lay-'+sl.layout);
+    st.innerHTML='<div class="sc">'+slideInner(sl,false)+'</div>';
+    return{st,empty:false};
+  }
+  if(which==='ov'){
+    /* ONE overlay layer = slide-scope overlay + deck-scope overlay composited together */
+    const h=sovHTML(sl,true);
+    const d=deck.overlay&&deck.overlay.on?overlayHTML(false,sl,true):'';
+    if(h||d){st.innerHTML=(h||'')+(d||'');return{st,empty:false}}
+    return{st,empty:true};
+  }
+  return{st:renderSlideNode(sl,'view'),empty:false};   /* combined — the full stack */
+}
+function lvChip(which){
+  const sl=deck.slides[cur];
+  if(which==='bg'){
+    if(sl.bg.mode==='image')return sl.bg.img?'image · '+sl.bg.fit:'image · empty';
+    if(sl.bg.mode==='html')return txt(sl.bg.html)?'html · '+kbLen(sl.bg.html):'html · empty';
+    return 'none · app default';
+  }
+  if(which==='main')return sl.layout==='custom'?'full-page html':'auto · '+LAYOUTS[sl.layout].name.toLowerCase();
+  if(which==='ov'){
+    const a=sl.sov.mode==='html'&&txt(sl.sov.html);
+    const ov=deck.overlay||{};
+    const dB=!!(ov.on&&((ov.style==='html'&&txt(ov.html))||(ov.style==='image'&&ov.img)
+      ||(ov.style!=='html'&&ov.style!=='image'&&txt(ov.text))));
+    const dName=ov.style==='html'?'html':'© '+ov.style;
+    if(a&&dB)return 'slide html + deck '+dName;
+    if(a)return 'html · transparent';
+    if(dB)return 'deck '+dName;
+    return 'none';
+  }
+  return 'what the audience sees';
+}
+function openLayerView(){
+  if(presenting)return;
+  closePop();
+  const sl=deck.slides[cur];
+  const defs=[
+    {w:'bg',n:'1',t:'Background',note:'checkerboard = transparency'},
+    {w:'main',n:'2',t:'Content',note:'the page itself'},
+    {w:'ov',n:'3',t:'Overlay',note:'transparent layer · checkerboard shows through'},
+    {w:'all',n:'+',t:'Combined',note:'background + content + overlay'}
+  ];
+  layerViewEl.innerHTML=`
+    <div class="lv-top">
+      <div><b>Layer view</b><small>Slide ${cur+1} of ${deck.slides.length} · ${esc(sl.layout==='custom'?'HTML page':LAYOUTS[sl.layout].name)}</small></div>
+      <button class="ib" id="lvX" type="button" title="Close (Esc)"></button>
+    </div>
+    <div class="lv-grid" id="lvGrid"></div>`;
+  const grid=layerViewEl.querySelector('#lvGrid');
+  defs.forEach(d=>{
+    const r=lvStage(d.w);
+    const tile=document.createElement('div');
+    tile.className='lv-tile';
+    if(d.w!=='all')tile.dataset.check='1';
+    else tile.dataset.final='1';
+    const chip=lvChip(d.w);
+    tile.innerHTML=`<div class="lv-head"><span class="lv-idx">${d.n}</span><b>${d.t}</b>
+        <span class="lv-chip${/empty|none/.test(chip)?'':' on'}">${chip}</span></div>
+      <div class="lv-body"></div>
+      <div class="lv-note">${d.note}</div>`;
+    const body=tile.querySelector('.lv-body');
+    if(r.empty){
+      body.innerHTML='<div class="lv-empty">'+(d.w==='bg'
+        ?'no background on this slide —<br>the app default backdrop shows'
+        :'no overlay — this slide or deck scope<br>add one in the Overlay tab')+'</div>';
+    }else{
+      const fr=document.createElement('div');fr.className='lv-frame';
+      fr.append(r.st);body.append(fr);
+      mountCust(r.st);mountBg(r.st);mountSov(r.st);mountOv(r.st);
+    }
+    grid.append(tile);
+  });
+  layerViewEl.classList.add('on');
+  const x=layerViewEl.querySelector('#lvX');
+  x.innerHTML=ic('x');
+  x.addEventListener('click',closeLayerView);
+  fitLayerView();
+  lvRt=new ResizeObserver(fitLayerView);
+  lvRt.observe(grid);
+}
+function fitLayerView(){
+  $$('#layerView .lv-tile').forEach(tile=>{
+    const fr=tile.querySelector('.lv-frame');if(!fr)return;
+    const body=tile.querySelector('.lv-body');if(!body)return;
+    const r=body.getBoundingClientRect();
+    if(!r.width||!r.height)return;
+    const s=Math.max(.05,Math.min((r.width-14)/1280,(r.height-14)/720));
+    fr.style.width=1280*s+'px';fr.style.height=720*s+'px';
+    fr.style.left=(r.width-1280*s)/2+'px';fr.style.top=(r.height-720*s)/2+'px';
+    const st=fr.querySelector('.stage');if(st)st.style.transform='scale('+s+')';
+  });
+}
+
+/* ================= slide renderer (shared by canvas / thumbs / present / export) =================
+   Every slide is a 3-layer stack: BACKGROUND (image/html) → CONTENT (auto layout or full-page
+   pure HTML — the app adds nothing) → per-slide TRANSPARENT OVERLAY (html) → deck © overlay. */
+const PH={kick:'Kicker',title:'Click to add title',body:'Click to add text',quote:'Add the statement',bullet:'Bullet text',cardh:'Card title',cardtxt:'Card text'};
+const ED=(cls,k,html,ph,i)=>`<div class="ed ${cls}" contenteditable="true" spellcheck="false" data-k="${k}"${i!==undefined?` data-i="${i}"`:''} data-ph="${ph}">${html||''}</div>`;
+
+function bulletsHTML(sl,edit){
+  const rows=sl.slots.bullets;
+  const shown=edit?rows:rows.filter(b=>txt(b));
+  const list=shown.map((b,i)=>`<div class="b-row" data-i="${i}">
+    <span class="b-num">${pad(i+1)}</span>
+    ${ED('b-txt','bullet',b,PH.bullet,i)}
+    <button class="row-x" type="button" aria-label="Remove bullet">${ic('x',13)}</button>
+  </div>`).join('');
+  return `<div class="b-list">${list}</div>`+
+    (edit?`<button class="b-add" type="button">${ic('plus',15)}<span>Add bullet</span></button>`:'');
+}
+function cardsHTML(sl,edit){
+  const cd=sl.slots.cards;
+  const shown=edit?cd:cd.filter(c=>txt(c.head)||txt(c.text));
+  if(!edit&&!shown.length)return'';
+  const n=edit?cd.length:shown.length;
+  const cols=n<=1?1:n===2?2:n===3?3:n===4?4:3;
+  const cells=shown.map((c,i)=>`<div class="c-card" data-i="${i}">
+    <button class="card-x" type="button" aria-label="Remove card">${ic('x',13)}</button>
+    ${ED('c-head','cardh',c.head,PH.cardh,i)}
+    ${ED('c-txt','cardt',c.text,PH.cardtxt,i)}
+  </div>`).join('');
+  const add=edit&&cd.length<6?`<button class="c-add" type="button">${ic('plus',18)}<span>Add card</span></button>`:'';
+  return `<div class="c-grid" style="grid-template-columns:repeat(${cols},1fr)">${cells}${add}</div>`;
+}
+function slideInner(sl,edit){
+  const S=sl.slots,L=sl.layout;
+  const has=h=>edit||txt(h)!=='';
+  const kick=has(S.kicker)?ED('s-kick','kick',S.kicker,PH.kick):'';
+  const body=has(S.body)?ED('s-body','body',S.body,PH.body):'';
+  const tit=()=>ED('s-title','title',S.title,PH.title);
+  if(L==='title'||L==='section')return kick+tit()+body;
+  if(L==='content')return kick+tit()+body;
+  if(L==='quote')return kick+(has(S.quote)?'<span class="qmark" aria-hidden="true">“</span>':'')+ED('s-quote','quote',S.quote,PH.quote)+body;
+  if(L==='bullets')return kick+tit()+bulletsHTML(sl,edit)+body;
+  if(L==='cards')return kick+tit()+cardsHTML(sl,edit)+body;
+  return'';
+}
+function renderSlideNode(sl,mode){
+  const light=deck.theme==='light';
+  const isHtml=sl.layout==='custom';
+  const hasBg=sl.bg&&sl.bg.mode!=='none'&&((sl.bg.mode==='image'&&sl.bg.img)||(sl.bg.mode==='html'&&txt(sl.bg.html)));
+  const st=document.createElement('div');
+  const bg=bgHTML(sl,mode==='view');
+  const sov=sovHTML(sl,mode==='view');
+  const ovHTML=overlayHTML(mode==='edit',sl,mode==='view');
+  if(isHtml){
+    /* full-page pure HTML — no ambient FX, no app background, nothing */
+    st.className='stage lay-html'+(light?' light':'')+(hasBg?' has-bg':'')+(mode==='edit'?' editing':'');
+    st.style.setProperty('--acc',sl.accent);
+    st.style.setProperty('--acc2',accent2(sl.accent));
+    st.innerHTML='<div class="cust-hold" aria-hidden="true"></div>'
+      +(mode==='edit'?'<div class="cust-flag">HTML page — edit the code below · nothing added by the app</div>':'');
+    const t=document.createElement('template');t.className='cust-src';
+    t.content.textContent=buildSrcdoc(sl.slots.html,sl.accent,mode==='view'); /* thumbs get paused animations */
+    st.appendChild(t);
+    if(bg)st.insertAdjacentHTML('afterbegin',bg);
+    if(sov)st.insertAdjacentHTML('beforeend',sov);
+    if(ovHTML)st.insertAdjacentHTML('beforeend',ovHTML);
+    return st;
+  }
+  st.className='stage lay-'+sl.layout+(light?' light':'')+(hasBg?' has-bg':'')+(mode==='edit'?' editing':'');
+  st.style.setProperty('--acc',sl.accent);
+  st.style.setProperty('--acc2',accent2(sl.accent));
+  st.innerHTML=`<div class="sc">${slideInner(sl,mode==='edit')}</div>`;
+  if(mode==='present'){let k=0;st.querySelectorAll('.sc > *').forEach(n=>{n.classList.add('a');n.style.setProperty('--d',k++)})}
+  if(bg)st.insertAdjacentHTML('afterbegin',bg);
+  if(sov)st.insertAdjacentHTML('beforeend',sov);
+  if(ovHTML)st.insertAdjacentHTML('beforeend',ovHTML);
+  return st;
+}
+function slideLabel(sl){
+  if(sl.layout==='custom'){
+    const t=txt(String(sl.slots.html||'')
+      .replace(/<style[\s\S]*?<\/style>/gi,' ')
+      .replace(/<script[\s\S]*?<\/script>/gi,' '));
+    return t.slice(0,60)||'Custom HTML';
+  }
+  return txt(sl.slots.kicker)||txt(sl.slots.title)||'';
+}
+
+/* ================= canvas (edit surface) ================= */
+const stageHost=$('#stageHost');
+function renderCanvas(){
+  const sl=deck.slides[cur];
+  const node=renderSlideNode(sl,'edit');
+  stageHost.replaceChildren(node);
+  if(sl.layout==='custom')mountCust(node);
+  else wireStage(sl);
+  mountBg(node);mountSov(node);mountOv(node);
+  wireOvText(node);
+  wireOvDrag(node);
+}
+function applyEdit(sl,ed){
+  const k=ed.dataset.k,i=+(ed.dataset.i||0),v=ed.innerHTML;
+  if(k==='kick')sl.slots.kicker=v;
+  else if(k==='title')sl.slots.title=v;
+  else if(k==='body')sl.slots.body=v;
+  else if(k==='quote')sl.slots.quote=v;
+  else if(k==='bullet')sl.slots.bullets[i]=v;
+  else if(k==='cardh')sl.slots.cards[i].head=v;
+  else if(k==='cardt')sl.slots.cards[i].text=v;
+}
+function normEd(ed){if(!txt(ed.innerHTML))ed.innerHTML=''}
+function placeCaretEnd(el){
+  el.focus();
+  const r=document.createRange();r.selectNodeContents(el);r.collapse(false);
+  const s=getSelection();s.removeAllRanges();s.addRange(r);
+}
+function plainPaste(e){
+  e.preventDefault();
+  const t=(e.clipboardData||window.clipboardData).getData('text/plain');
+  document.execCommand('insertText',false,t);
+}
+function rerenderFocus(sl,sel){
+  renderCanvas();
+  const f=stageHost.querySelector(sel);
+  if(f)placeCaretEnd(f);
+}
+function wireStage(sl){
+  $$('#stageHost .ed').forEach(ed=>{
+    if(ed.dataset.k==='ovtext')return;                    /* overlay text wired separately (works on custom slides too) */
+    ed.addEventListener('input',()=>{applyEdit(sl,ed);queueCommit();thumbSoon()});
+    ed.addEventListener('blur',()=>{normEd(ed);applyEdit(sl,ed);flushCommit();thumbSoon()});
+    ed.addEventListener('paste',plainPaste);
+    ed.addEventListener('keydown',e=>{
+      const k=ed.dataset.k,i=+(ed.dataset.i||0);
+      if(e.key==='Enter'&&k==='bullet'){e.preventDefault();
+        sl.slots.bullets.splice(i+1,0,'');flushCommit();rerenderFocus(sl,`[data-k="bullet"][data-i="${i+1}"]`);commit();return}
+      if(e.key==='Enter'&&(k==='kick'||k==='cardh')){e.preventDefault();ed.blur();return}
+      if(e.key==='Backspace'&&k==='bullet'&&!txt(ed.innerHTML)&&sl.slots.bullets.length>1){
+        e.preventDefault();sl.slots.bullets.splice(i,1);flushCommit();
+        rerenderFocus(sl,`[data-k="bullet"][data-i="${Math.max(0,i-1)}"]`);commit();return}
+    });
+  });
+  $$('#stageHost .row-x').forEach(b=>b.addEventListener('click',()=>{
+    const i=+b.closest('.b-row').dataset.i;
+    if(sl.slots.bullets.length>1)sl.slots.bullets.splice(i,1);else sl.slots.bullets=[''];
+    flushCommit();rerenderFocus(sl,`[data-k="bullet"][data-i="${Math.min(i,sl.slots.bullets.length-1)}"]`);commit();
+  }));
+  $$('#stageHost .card-x').forEach(b=>b.addEventListener('click',()=>{
+    const i=+b.closest('.c-card').dataset.i;
+    if(sl.slots.cards.length>1)sl.slots.cards.splice(i,1);else sl.slots.cards=[{head:'',text:''}];
+    flushCommit();rerenderFocus(sl,`[data-k="cardh"][data-i="${Math.min(i,sl.slots.cards.length-1)}"]`);commit();
+  }));
+  const ba=$('#stageHost .b-add');
+  if(ba)ba.addEventListener('click',()=>{sl.slots.bullets.push('');flushCommit();rerenderFocus(sl,`[data-k="bullet"][data-i="${sl.slots.bullets.length-1}"]`);commit()});
+  const ca=$('#stageHost .c-add');
+  if(ca)ca.addEventListener('click',()=>{sl.slots.cards.push({head:'',text:''});flushCommit();rerenderFocus(sl,`[data-k="cardh"][data-i="${sl.slots.cards.length-1}"]`);commit()});
+}
+/* inline editing of the corner/bar overlay text — on any layout */
+function wireOvText(st){
+  const ed=st.querySelector(':scope > .ov .ed');
+  if(!ed)return;
+  ed.addEventListener('input',()=>{deck.overlay.text=ed.innerHTML;queueCommit();overlayThumbsSoon()});
+  ed.addEventListener('blur',()=>{
+    if(!txt(ed.innerHTML))ed.innerHTML='';
+    deck.overlay.text=ed.innerHTML;flushCommit();overlayThumbsSoon();
+  });
+  ed.addEventListener('paste',plainPaste);
+  ed.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();ed.blur()}});
+}
+/* drag the fullscreen image overlay directly on the canvas */
+function wireOvDrag(st){
+  const im=st.querySelector(':scope > .ov-img > img');
+  if(!im)return;
+  im.addEventListener('pointerdown',e=>{
+    if(e.button!==0)return;
+    e.preventDefault();
+    const sx=e.clientX,sy=e.clientY,ox=deck.overlay.imgX||0,oy=deck.overlay.imgY||0;
+    try{im.setPointerCapture(e.pointerId)}catch(err){}
+    const mv=ev=>{
+      deck.overlay.imgX=Math.round(ox+(ev.clientX-sx)/stageScale);
+      deck.overlay.imgY=Math.round(oy+(ev.clientY-sy)/stageScale);
+      im.style.transform=imgTransform();
+    };
+    const up=()=>{
+      im.removeEventListener('pointermove',mv);
+      im.removeEventListener('pointerup',up);
+      im.removeEventListener('pointercancel',up);
+      flushCommit();commit();overlayThumbsSoon();
+    };
+    im.addEventListener('pointermove',mv);
+    im.addEventListener('pointerup',up);
+    im.addEventListener('pointercancel',up);
+  });
+}
+function fitStage(){
+  const c=$('#canvas'),f=$('#eFrame');
+  const r=c.getBoundingClientRect(),pad=30;
+  const s=Math.max(.18,Math.min(Math.min((r.width-pad*2)/1280,(r.height-pad*2)/720),1.15));
+  f.style.width=1280*s+'px';f.style.height=720*s+'px';f.style.left=(r.width-1280*s)/2+'px';f.style.top=(r.height-720*s)/2+'px';
+  stageHost.style.transform=`scale(${s})`;
+  stageScale=s;
+  $('#zoomChip').textContent=Math.round(s*100)+'%';
+}
+
+/* ================= filmstrip ================= */
+const stripList=$('#stripList');
+let thumbIO=null;
+function ensureThumbIO(){
+  if(thumbIO)return thumbIO;
+  thumbIO=new IntersectionObserver(es=>{
+    es.forEach(en=>{
+      if(!en.isIntersecting)return;
+      const st=en.target.querySelector('.stage');
+      if(st)mountAll(st);            /* mounts custom-slide + HTML-overlay iframes as thumbs scroll near */
+    });
+  },{root:stripList,rootMargin:'200px'});
+  return thumbIO;
+}
+function buildStrip(){
+  stripList.innerHTML='';
+  const io=ensureThumbIO();
+  deck.slides.forEach((sl,i)=>{
+    const it=document.createElement('div');
+    it.className='t-item'+(i===cur?' sel':'');it.dataset.id=sl.id;it.dataset.i=i;
+    it.innerHTML=`<div class="t-thumb" role="button" aria-label="Slide ${i+1}">
+      <div class="mini"></div>
+      <span class="t-num">${i+1}</span>
+      <span class="t-acts">
+        <button class="ta" data-a="dup" type="button" title="Duplicate">${ic('copy',13)}</button>
+        <button class="ta del" data-a="del" type="button" title="Delete">${ic('trash',13)}</button>
+      </span>
+    </div>`;
+    it.querySelector('.mini').append(renderSlideNode(sl,'view'));
+    io.observe(it.querySelector('.t-thumb'));
+    stripList.append(it);
+  });
+  $('#stripCount').textContent=deck.slides.length+'';
+}
+function refreshThumb(){
+  const it=stripList.children[cur];
+  if(!it||it.dataset.id!==deck.slides[cur].id)return;
+  const sl=deck.slides[cur];
+  const hadOv=!!it.querySelector('.ov-html iframe');
+  it.querySelector('.mini').replaceChildren(renderSlideNode(sl,'view'));
+  const st=it.querySelector('.stage');
+  if(!st)return;
+  if(sl.layout==='custom')mountCust(st);
+  if(sl.bg.mode==='html'&&txt(sl.bg.html))mountBg(st);
+  if(sl.sov.mode==='html'&&txt(sl.sov.html))mountSov(st);
+  if(hadOv)mountOv(st);
+}
+function thumbSoon(){
+  clearTimeout(thumbTimers.get('t'));
+  thumbTimers.set('t',setTimeout(refreshThumb,300));
+}
+function select(i){
+  cur=Math.max(0,Math.min(deck.slides.length-1,i));
+  $$('#stripList .t-item').forEach((it,k)=>{
+    it.classList.toggle('sel',k===cur);
+    it.querySelector('.t-num').textContent=k+1;
+  });
+  const it=stripList.children[cur];if(it)it.scrollIntoView({block:'nearest'});
+  renderCanvas();updateCtx();updatePane();
+}
+function updateCtx(){
+  const sl=deck.slides[cur];
+  $('#cNum').innerHTML=`Slide <b>${cur+1}</b> / ${deck.slides.length}`;
+  $('#cLayoutName').textContent=LAYOUTS[sl.layout].name;
+  $$('#cAccents .sw').forEach(b=>b.classList.toggle('on',b.dataset.a===sl.accent));
+  $$('#cTheme button').forEach(b=>b.classList.toggle('on',b.dataset.th===deck.theme));
+  $('#cDel').disabled=deck.slides.length<=1;
+}
+
+/* ---- drag reorder ---- */
+stripList.addEventListener('pointerdown',e=>{
+  if(e.button!==0||e.target.closest('.ta'))return;
+  const item=e.target.closest('.t-item');if(!item)return;
+  const from=+item.dataset.i;
+  const sx=e.clientX,sy=e.clientY;
+  let started=false,ghost=null,line=null;
+  const listRect=()=>stripList.getBoundingClientRect();
+  const begin=()=>{
+    started=true;item.classList.add('lift');
+    line=document.createElement('div');line.className='dropline';stripList.append(line);
+    ghost=document.createElement('div');ghost.className='drag-ghost';
+    const g=item.querySelector('.mini').cloneNode(true);
+    g.querySelectorAll('iframe').forEach(f=>f.remove());                       /* don't clone live iframes */
+    g.querySelectorAll('.cust-on').forEach(el=>el.classList.remove('cust-on'));
+    ghost.append(g);
+    document.body.append(ghost);document.body.classList.add('noselect');
+  };
+  const move=ev=>{
+    if(!started){if(Math.hypot(ev.clientX-sx,ev.clientY-sy)<6)return;begin()}
+    ghost.style.left=ev.clientX-30+'px';ghost.style.top=ev.clientY-14+'px';
+    const lr=listRect();
+    if(ev.clientY<lr.top+34)stripList.scrollTop-=9;
+    if(ev.clientY>lr.bottom-34)stripList.scrollTop+=9;
+    const items=[...stripList.querySelectorAll('.t-item:not(.lift)')];
+    let idx=0;
+    for(const it of items){const r=it.getBoundingClientRect();if(ev.clientY<r.top+r.height/2)break;idx++}
+    let y;
+    if(idx===0&&items[0])y=items[0].getBoundingClientRect().top-7;
+    else if(items[idx-1])y=items[idx-1].getBoundingClientRect().bottom+7;
+    else y=12;
+    line.style.top=(y-lr.top+stripList.scrollTop)+'px';
+    line.dataset.idx=idx;
+  };
+  const finish=()=>{
+    removeEventListener('pointermove',move);
+    if(started){
+      const to=+(line.dataset.idx||from);
+      ghost.remove();line.remove();document.body.classList.remove('noselect');
+      item.classList.remove('lift');
+      if(to!==from)moveSlide(from,to);
+    }else select(from);
+  };
+  addEventListener('pointermove',move);
+  addEventListener('pointerup',finish,{once:true});
+  addEventListener('pointercancel',()=>{
+    removeEventListener('pointermove',move);
+    if(started){ghost&&ghost.remove();line&&line.remove();item.classList.remove('lift');document.body.classList.remove('noselect')}
+  },{once:true});
+});
+stripList.addEventListener('click',e=>{
+  const b=e.target.closest('.ta');if(!b)return;
+  const item=e.target.closest('.t-item');const i=+item.dataset.i;
+  if(b.dataset.a==='dup')dupSlide(i);else delSlide(i);
+});
+stripList.addEventListener('dblclick',e=>{
+  if(e.target.closest('.ta'))return;
+  openPresent(+e.target.closest('.t-item').dataset.i);
+});
+
+/* ================= slide operations ================= */
+function addAfter(i,sl){
+  flushCommit();
+  deck.slides.splice(i+1,0,sl);
+  buildStrip();select(i+1);commit();
+}
+function dupSlide(i){
+  const c=normSlide(JSON.parse(JSON.stringify(deck.slides[i])));c.id=uid();
+  addAfter(i,c);toast('Slide duplicated','copy');
+}
+function delSlide(i){
+  if(deck.slides.length<=1)return toast('A presentation needs at least one slide','x');
+  flushCommit();
+  deck.slides.splice(i,1);
+  cur=Math.min(i,deck.slides.length-1);
+  buildStrip();select(cur);commit();
+  toast('Slide deleted — Ctrl+Z to undo','trash');
+}
+function moveSlide(from,to){
+  if(to<0||to>=deck.slides.length||to===from)return;
+  flushCommit();
+  const sl=deck.slides.splice(from,1)[0];
+  deck.slides.splice(to,0,sl);
+  buildStrip();select(to);commit();
+}
+function addQuick(){addAfter(cur,mkBlank('content'))}
+
+/* ================= popovers: add picker / layout / export ================= */
+const SCH={
+  title:`<u class="sa"></u><u style="width:46px;height:8px"></u><u style="width:26px;height:4px"></u>`,
+  section:`<u style="width:52px;height:9px"></u><u style="width:20px;height:4px"></u>`,
+  content:`<u class="sa"></u><u style="width:48px;height:7px"></u><u style="width:34px;height:3px"></u><u style="width:34px;height:3px"></u>`,
+  bullets:`<u class="sa"></u><u style="width:40px;height:6px"></u><span class="row"><b></b><u style="width:24px;height:3px"></u></span><span class="row"><b></b><u style="width:24px;height:3px"></u></span><span class="row"><b></b><u style="width:24px;height:3px"></u></span>`,
+  quote:`<span class="qm">“</span><u style="width:42px;height:7px"></u><u style="width:22px;height:3px"></u>`,
+  cards:`<u class="sa"></u><u style="width:40px;height:6px"></u><span class="g"><u></u><u></u><u></u></span>`,
+  custom:`<span class="qm">&lt;/&gt;</span><u style="width:44px;height:5px"></u><u style="width:28px;height:3px"></u>`
+};
+function openAddPicker(anchor){
+  openPop(anchor,`<div class="pk-grid">`+Object.keys(LAYOUTS).map(k=>
+    `<button class="pk" data-lay="${k}"><span class="sch${['title','section','quote'].includes(k)?' c':''}">${SCH[k]}</span><b>${LAYOUTS[k].name}</b><small>${LAYOUTS[k].hint}</small></button>`).join('')+`</div>`);
+  pop.addEventListener('click',e=>{
+    const b=e.target.closest('.pk');if(!b)return;
+    addAfter(cur,mkBlank(b.dataset.lay));closePop();
+  },{once:true});
+}
+function openLayoutMenu(anchor){
+  const sl=deck.slides[cur];
+  openPop(anchor,`<div class="lm-list">`+Object.keys(LAYOUTS).map(k=>
+    `<button class="lm${k===sl.layout?' cur':''}" data-lay="${k}"><span>${LAYOUTS[k].name}</span>${k===sl.layout?'<span class="chk">'+ic('check',15)+'</span>':''}</button>`).join('')+`</div>`);
+  pop.addEventListener('click',e=>{
+    const b=e.target.closest('.lm');if(!b)return;
+    if(b.dataset.lay!==sl.layout){
+      flushCommit();sl.layout=b.dataset.lay;
+      if(sl.layout==='custom'&&!txt(sl.slots.html))sl.slots.html=CUSTOM_TPL;
+      buildStrip();select(cur);commit();
+    }
+    closePop();
+  },{once:true});
+}
+function openExportMenu(anchor){
+  openPop(anchor,`<div style="padding:8px">
+    <button class="mx" data-x="html">${ic('play',17)}<span><b>Presentation (.html)</b><small>Standalone file — arrow keys work anywhere</small></span></button>
+    <button class="mx" data-x="json">${ic('down',17)}<span><b>Deck data (.json)</b><small>Backup — re-importable here</small></span></button>
+  </div>`);
+  pop.addEventListener('click',e=>{
+    const b=e.target.closest('.mx');if(!b)return;
+    closePop();
+    if(b.dataset.x==='html')doExportHTML();else doExportJSON();
+  },{once:true});
+}
+function download(name,blob){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download=name;
+  document.body.append(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
+function doExportJSON(){
+  flushCommit();
+  download(slug(deck.title)+'.json',new Blob([JSON.stringify({app:'slidesmith',v:1,deck})],{type:'application/json'}));
+  toast('Deck data exported','down');
+}
+
+/* ================= present runtime (serialized verbatim into exports) ================= */
+function presentChromeHTML(){
+  return `<nav class="p-dots" id="pDots" aria-label="Slide navigation"></nav>
+  <div class="p-hint">← → navigate · F fullscreen · N notes · Esc exit</div>
+  <div class="p-bottom">
+    <button class="p-nav" id="pPrev" type="button" aria-label="Previous">${ic('left',17)}</button>
+    <div class="p-count"><span id="pCur">01</span><i>/</i><span id="pTot"></span></div>
+    <div class="p-prog"><i id="pBar"></i></div>
+    <button class="p-nav" id="pNext" type="button" aria-label="Next">${ic('right',17)}</button>
+  </div>
+  <aside class="p-notes" id="pNotes" role="dialog"><div class="p-nh">Speaker notes</div><p id="pNb"></p></aside>`;
+}
+function initRuntime(onExit,notesFor,at){
+  var deckEl=document.querySelector('.deck');
+  var S=[].slice.call(deckEl.children);
+  var i=at||0;
+  var notes=document.getElementById('pNotes'),curEl=document.getElementById('pCur'),
+      tot=document.getElementById('pTot'),bar=document.getElementById('pBar'),
+      dotsW=document.getElementById('pDots'),nb=document.getElementById('pNb'),
+      prev=document.getElementById('pPrev'),next=document.getElementById('pNext');
+  function pad2(n){return (n<10?'0':'')+n}
+  tot.textContent=pad2(S.length);
+  /* mounts a <template> holder into a sandboxed iframe (custom slides + fullscreen HTML overlay) */
+  function mountOne(st,cls,holderSel,frameCls,markCls){
+    var t=st.querySelector('template.'+cls);if(!t)return;
+    var holder=holderSel?st.querySelector(holderSel):st;
+    if(!holder||holder.querySelector('iframe.'+frameCls))return;
+    var f=document.createElement('iframe');
+    f.className=frameCls;f.setAttribute('sandbox','allow-scripts');
+    f.setAttribute('aria-hidden','true');f.tabIndex=-1;
+    f.srcdoc=t.content.textContent||'';
+    holder.appendChild(f);
+    if(markCls)st.classList.add(markCls);
+  }
+  function mountAt(k){
+    var sl=S[k];if(!sl)return;
+    var st=sl.querySelector('.stage');if(!st)return;
+    mountOne(st,'cust-src',null,'cust','cust-on');
+    mountOne(st,'bg-src','.bg-lay.bg-html','bg-frame');
+    mountOne(st,'sov-src','.sov-lay','sov-frame');
+    mountOne(st,'ov-src','.ov-html','ov-frame');
+  }
+  function warm(k){mountAt(k);mountAt(k+1);mountAt(k-1)}
+  var dots=S.map(function(s,k){
+    var b=document.createElement('button');
+    var lb=s.getAttribute('data-label')||('Slide '+(k+1));
+    b.dataset.label=String(lb).slice(0,44);
+    b.setAttribute('aria-label','Go to slide '+(k+1));
+    b.addEventListener('click',function(e){e.stopPropagation();go(k)});
+    dotsW.appendChild(b);return b;
+  });
+  function syncChrome(){
+    curEl.textContent=pad2(i+1);
+    bar.style.transform='scaleX('+((i+1)/S.length)+')';
+    dots.forEach(function(d,k){d.classList.toggle('on',k===i)});
+    nb.textContent=(((notesFor&&notesFor(i))||'').trim())||'No notes for this slide.';
+  }
+  function go(n){
+    n=Math.max(0,Math.min(S.length-1,n));if(n===i)return;
+    document.body.classList.remove('fwd','back');
+    document.body.classList.add(n>=i?'fwd':'back');
+    var o=S[i];
+    if(o!==S[n]){o.classList.remove('active');o.classList.add('leaving');
+      clearTimeout(o._t);o._t=setTimeout(function(){o.classList.remove('leaving')},700)}
+    S[n].classList.add('active');i=n;warm(n);syncChrome();
+  }
+  function fit(){
+    var s=Math.min(innerWidth/1280,innerHeight/720);
+    var f=document.getElementById('pFrame');
+    f.style.width=1280*s+'px';f.style.height=720*s+'px';
+    deckEl.style.transform='scale('+s+')';
+  }
+  function onKey(e){
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();go(i+1)}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();go(i-1)}
+    else if(e.key==='Home')go(0);
+    else if(e.key==='End')go(S.length-1);
+    else if((e.key||'').toLowerCase()==='f'&&document.documentElement.requestFullscreen){
+      e.preventDefault();
+      document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen();
+    }
+    else if((e.key||'').toLowerCase()==='n'){e.preventDefault();notes.classList.toggle('open')}
+    else if(e.key==='Escape'){
+      if(document.fullscreenElement)document.exitFullscreen();
+      else if(onExit)onExit();else notes.classList.remove('open');
+    }
+  }
+  function onClick(e){
+    if(e.clientX===0&&e.clientY===0)return;
+    if(e.target.closest&&e.target.closest('.p-dots,.p-notes,.p-nav,.p-hint'))return;
+    go(e.clientX<innerWidth*.12?i-1:i+1);
+  }
+  document.addEventListener('keydown',onKey);
+  document.addEventListener('click',onClick);
+  window.addEventListener('resize',fit);
+  prev.addEventListener('click',function(e){e.stopPropagation();go(i-1)});
+  next.addEventListener('click',function(e){e.stopPropagation();go(i+1)});
+  S[i].classList.add('active');syncChrome();fit();warm(i);
+  return{go:go,index:function(){return i},dispose:function(){
+    document.removeEventListener('keydown',onKey);
+    document.removeEventListener('click',onClick);
+    window.removeEventListener('resize',fit);
+    dotsW.innerHTML='';
+    S.forEach(function(s){s.classList.remove('active','leaving')});
+    document.body.classList.remove('fwd','back');
+  }};
+}
+const presentEl=$('#present');
+function openPresent(at){
+  if(presenting)return;
+  closePop();
+  flushCommit();
+  presenting=true;
+  presentEl.classList.toggle('plight',deck.theme==='light');
+  if(!presentEl.querySelector('.p-wrap')){
+    presentEl.insertAdjacentHTML('afterbegin','<div class="p-wrap"><div class="p-frame" id="pFrame"><div class="deck" id="pDeck"></div></div></div>');
+    presentEl.insertAdjacentHTML('beforeend',presentChromeHTML());
+  }
+  const pDeck=$('#pDeck');pDeck.innerHTML='';
+  deck.slides.forEach(sl=>{
+    const s=document.createElement('section');s.className='slide';
+    s.dataset.label=slideLabel(sl);
+    s.append(renderSlideNode(sl,'present'));
+    pDeck.append(s);
+  });
+  presentEl.classList.add('on');
+  document.body.classList.add('fwd');
+  presRt=initRuntime(closePresent,function(i){return deck.slides[i].notes},Math.max(0,Math.min(at,deck.slides.length-1)));
+}
+function closePresent(silent){
+  if(!presenting)return;
+  const end=presRt?presRt.index():cur;
+  if(presRt){presRt.dispose();presRt=null}
+  presenting=false;
+  presentEl.classList.remove('on');
+  $('#pDeck').innerHTML='';
+  if(!silent)select(Math.min(end,deck.slides.length-1));
+}
+
+/* ================= export standalone HTML ================= */
+function buildExportHTML(){
+  const css=document.getElementById('slide-css').textContent;
+  const light=deck.theme==='light';
+  const sections=deck.slides.map(sl=>
+    '<section class="slide" data-label="'+esc(slideLabel(sl))+'">'+renderSlideNode(sl,'present').outerHTML+'</section>').join('');
+  const data=JSON.stringify({title:deck.title,theme:deck.theme,overlay:deck.overlay,slides:deck.slides}).replace(/<\/script/gi,'<\\/script');
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark light">
+<title>${esc(deck.title||'Presentation')}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="${FONT_HREF}" rel="stylesheet">
+<style>${css}</style>
+</head>
+<body class="fwd${light?' plight':''}">
+ ${BGFX}
+<div class="p-wrap"><div class="p-frame" id="pFrame"><div class="deck">${sections}</div></div></div>
+ ${presentChromeHTML()}
+<script id="deck-data" type="application/json">${data}<\/script>
+<script>
+var D=JSON.parse(document.getElementById('deck-data').textContent);
+(${initRuntime.toString()})(null,function(i){return D.slides[i]&&D.slides[i].notes||''},0);
+<\/script>
+</body>
+</html>`;
+}
+function doExportHTML(){
+  flushCommit();
+  download(slug(deck.title)+'.html',new Blob([buildExportHTML()],{type:'text/html'}));
+  toast('Presentation exported — open it and use arrow keys','play');
+}
+
+/* ================= import ================= */
+ $('#fileInput').addEventListener('change',e=>{
+  const f=e.target.files[0];e.target.value='';if(!f)return;
+  const rd=new FileReader();
+  rd.onload=()=>{
+    let d=null;const t=String(rd.result);
+    try{
+      if(t.trim().startsWith('{'))d=JSON.parse(t);
+      else{const m=t.match(/<script id="deck-data"[^>]*>([\s\S]*?)<\/script>/);if(m)d=JSON.parse(m[1])}
+    }catch(err){}
+    const dd=d&&d.deck&&d.deck.slides?d.deck:(d&&d.slides?d:null);
+    const nd=normDeck(dd);
+    if(!nd)return toast('Could not read that file — expected .json or an exported .html','x');
+    flushCommit();
+    deck=nd;cur=0;
+    $('#deckTitle').value=deck.title;setTitle();
+    buildStrip();select(0);syncOverlayBtn();commit();
+    toast(`Imported “${deck.title}”`,'up');
+  };
+  rd.readAsText(f);
+});
+
+/* ================= new deck ================= */
+async function newDeck(){
+  const ok=await confirmBox({
+    title:'Start a new presentation?',
+    body:'Your current deck stays recoverable — press Ctrl+Z right after creating the new one. Nothing leaves this browser.',
+    ok:'New presentation'
+  });
+  if(!ok)return;
+  flushCommit();
+  deck=normDeck({title:'Untitled presentation',slides:[{layout:'title'}]});
+  cur=0;
+  $('#deckTitle').value=deck.title;setTitle();
+  buildStrip();select(0);syncOverlayBtn();commit();
+  toast('New deck — Ctrl+Z restores the previous one','file');
+}
+
+/* ================= bottom pane (notes / slide code / bg code / ONE overlay editor) ================= */
+/* Overlay tab = the single overlay editor. ovScope picks the target:
+   'slide' → this slide's transparent overlay (sl.sov) · 'deck' → the overlay on every slide (deck.overlay). */
+let paneMode='notes',ovScope=localStorage.getItem('sm.ovScope')==='deck'?'deck':'slide';
+let codeT=null,ovT=null,bgT=null,soT=null;
+const codeTa=$('#codeTa'),notesTa=$('#notesTa'),ovTa=$('#ovTa'),bgTa=$('#bgTa'),soTa=$('#soTa');
+function applyPane(){
+  const p=$('#notesPane');
+  p.classList.toggle('mode-code',paneMode==='code');
+  p.classList.toggle('mode-bg',paneMode==='bg');
+  p.classList.toggle('mode-so',paneMode==='so');
+  p.classList.toggle('so-deck',paneMode==='so'&&ovScope==='deck');
+  $$('#notesPane .n-tab').forEach(b=>b.classList.toggle('on',b.dataset.p===paneMode));
+  $$('#soScope button').forEach(b=>b.classList.toggle('on',b.dataset.s===ovScope));
+  $('#paneTip').textContent=
+    paneMode==='code'?'· full-page HTML · nothing added by the app · tokens: --acc --acc2 --fd --fb --fm --mut --ink'
+    :paneMode==='bg'?'· background layer · 1280×720 sandbox behind the content'
+    :paneMode==='so'
+    ?(ovScope==='slide'
+      ?'· overlay · this slide only · forced transparent · opaque backgrounds stripped'
+      :(deck.overlay.on?'· overlay · every slide (deck) · forced transparent · tokens: --acc --acc2 --fd --fb --fm --mut --ink'
+                       :'· overlay · every slide (deck) · currently off — typing here turns it on'))
+    :'· only you see these when presenting (N)';
+}
+function updatePane(){
+  const sl=deck.slides[cur],isC=sl.layout==='custom',isBg=sl.bg.mode==='html';
+  const p=$('#notesPane');
+  p.classList.toggle('has-code',isC);
+  p.classList.toggle('has-bg',isBg);
+  const ok=m=>m==='notes'||m==='so'||(m==='code'&&isC)||(m==='bg'&&isBg);
+  if(!ok(paneMode))paneMode=isC?'code':(isBg?'bg':'so');
+  codeTa.value=isC?sl.slots.html:'';
+  bgTa.value=isBg?sl.bg.html:'';
+  soTa.value=sl.sov.mode==='html'?(sl.sov.html||''):'';
+  ovTa.value=deck.overlay.style==='html'?(deck.overlay.html||''):'';
+  notesTa.value=sl.notes||'';
+  applyPane();
+}
+ $$('#notesPane .n-tab').forEach(b=>b.addEventListener('click',()=>{paneMode=b.dataset.p;applyPane()}));
+$$('#soScope button').forEach(b=>b.addEventListener('click',()=>{
+  if(ovScope===b.dataset.s)return;
+  flushCommit();
+  ovScope=b.dataset.s;localStorage.setItem('sm.ovScope',ovScope);
+  updatePane();
+}));
+codeTa.addEventListener('input',()=>{
+  const sl=deck.slides[cur];if(sl.layout!=='custom')return;
+  sl.slots.html=codeTa.value;
+  clearTimeout(codeT);
+  codeT=setTimeout(()=>{if(deck.slides[cur]===sl){renderCanvas();refreshThumb()}},450);
+  queueCommit();
+});
+codeTa.addEventListener('blur',flushCommit);
+bgTa.addEventListener('input',()=>{
+  const sl=deck.slides[cur];if(sl.bg.mode!=='html')return;
+  sl.bg.html=bgTa.value;
+  clearTimeout(bgT);
+  bgT=setTimeout(()=>{if(deck.slides[cur]===sl){renderCanvas();refreshThumb()}},450);
+  queueCommit();
+});
+bgTa.addEventListener('blur',flushCommit);
+soTa.addEventListener('input',()=>{
+  const sl=deck.slides[cur];
+  if(sl.sov.mode!=='html'&&txt(soTa.value))sl.sov.mode='html';   /* typing here enables the layer */
+  if(sl.sov.mode!=='html')return;
+  sl.sov.html=soTa.value;
+  clearTimeout(soT);
+  soT=setTimeout(()=>{if(deck.slides[cur]===sl){renderCanvas();refreshThumb()}},450);
+  queueCommit();
+});
+soTa.addEventListener('blur',flushCommit);
+ovTa.addEventListener('input',()=>{
+  const ov=deck.overlay;
+  if(ov.style!=='html'&&txt(ovTa.value)){ov.style='html';ov.on=true;syncOverlayBtn()}   /* typing here turns the deck overlay on */
+  if(ov.style!=='html')return;
+  ov.html=ovTa.value;
+  clearTimeout(ovT);
+  ovT=setTimeout(refreshCanvasOverlay,450);
+  overlayThumbsSoon();
+  queueCommit();
+});
+ovTa.addEventListener('blur',flushCommit);
+[codeTa,ovTa,bgTa,soTa].forEach(ta=>ta.addEventListener('keydown',e=>{
+  if(e.key==='Tab'){e.preventDefault();
+    ta.setRangeText('  ',ta.selectionStart,ta.selectionEnd,'end');
+    ta.dispatchEvent(new Event('input'));
+  }
+}));
+ $('#tplBtn').addEventListener('click',()=>{
+  if(paneMode==='so'){
+    const deckScope=ovScope==='deck';
+    const ta=deckScope?ovTa:soTa,tpl=deckScope?OV_TPL:SOV_TPL;
+    ta.value=tpl;
+    ta.dispatchEvent(new Event('input'));
+    toast((deckScope?'Deck':'Slide')+' overlay template inserted — forced transparent','file');
+    return;
+  }
+  if(paneMode==='bg'){
+    bgTa.value=BG_TPL;
+    bgTa.dispatchEvent(new Event('input'));
+    toast('Background template inserted','file');
+    return;
+  }
+  if(deck.slides[cur].layout!=='custom')return;
+  codeTa.value=CUSTOM_TPL;
+  codeTa.dispatchEvent(new Event('input'));
+  toast('Starter template inserted','file');
+});
+
+/* ================= wiring ================= */
+function setTitle(){document.title=(deck.title||'Untitled')+' — Slidesmith'}
+function toggleNotes(){
+  $('#center').classList.toggle('no-notes');
+  $('#cNotes').classList.toggle('on',!$('#center').classList.contains('no-notes'));
+}
+function setAppTheme(t){
+  document.body.classList.toggle('lite',t==='light');
+  localStorage.setItem('sm.appTheme',t);
+  const b=$('#btnTheme');
+  b.innerHTML=ic(t==='light'?'moon':'sun');
+  b.title=t==='light'?'Switch editor to dark':'Switch editor to light';
+}
+function buildSwatches(){
+  const box=$('#cAccents');
+  ACCENTS.forEach(([a])=>{
+    const b=document.createElement('button');
+    b.className='sw';b.type='button';b.dataset.a=a;b.title='Accent '+a;
+    b.style.background=`linear-gradient(135deg,${a} 55%,${accent2(a)})`;
+    b.addEventListener('click',()=>{
+      const sl=deck.slides[cur];if(sl.accent===a)return;
+      flushCommit();sl.accent=a;
+      buildStrip();select(cur);commit();
+    });
+    box.append(b);
+  });
+}
+function boot(){
+  $('#btnUndo').innerHTML=ic('undo');$('#btnRedo').innerHTML=ic('redo');
+  $('#btnImport').innerHTML=ic('up');$('#btnExport').innerHTML=ic('down');
+  $('#btnNew').innerHTML=ic('file');
+  $('#btnOverlay').innerHTML=ic('copyr');
+  $('#btnLayers').innerHTML=ic('layers',15)+'<span>Layers</span>';
+  $('#btnPresent').innerHTML=ic('play',15)+'<span>Present</span>';
+  $('#cNotes').innerHTML=ic('note');$('#cDup').innerHTML=ic('copy');$('#cDel').innerHTML=ic('trash');
+  $('#ehintX').innerHTML=ic('x',12);
+  $('#addBtn').innerHTML=ic('plus',16)+'<span>Add slide</span>';
+  setAppTheme(localStorage.getItem('sm.appTheme')==='light'?'light':'dark');
+  deck=load()||normDeck(SEED);
+  $('#deckTitle').value=deck.title;setTitle();
+  hist=[snap()];hi=0;updUndo();syncOverlayBtn();
+  buildSwatches();buildStrip();select(0);
+  $('#btnTheme').addEventListener('click',()=>setAppTheme(document.body.classList.contains('lite')?'dark':'light'));
+  $('#btnOverlay').addEventListener('click',e=>openOverlayPanel(e.currentTarget));
+  $('#btnLayers').addEventListener('click',e=>openLayersPanel(e.currentTarget));
+  $('#btnUndo').addEventListener('click',undo);
+  $('#btnRedo').addEventListener('click',redo);
+  $('#btnImport').addEventListener('click',()=>$('#fileInput').click());
+  $('#btnExport').addEventListener('click',e=>openExportMenu(e.currentTarget));
+  $('#btnNew').addEventListener('click',newDeck);
+  $('#btnPresent').addEventListener('click',()=>openPresent(cur));
+  $('#addBtn').addEventListener('click',e=>openAddPicker(e.currentTarget));
+  $('#deckTitle').addEventListener('input',e=>{
+    deck.title=e.target.value||'Untitled presentation';setTitle();queueCommit();
+  });
+  $('#deckTitle').addEventListener('blur',flushCommit);
+  $('#cLayout').addEventListener('click',e=>openLayoutMenu(e.currentTarget));
+  $$('#cTheme button').forEach(b=>b.addEventListener('click',()=>{
+    if(deck.theme===b.dataset.th)return;
+    flushCommit();deck.theme=b.dataset.th;
+    buildStrip();select(cur);commit();
+    toast('Slides switched to '+b.dataset.th+' theme',b.dataset.th==='light'?'sun':'moon');
+  }));
+  $('#cDup').addEventListener('click',()=>dupSlide(cur));
+  $('#cDel').addEventListener('click',()=>delSlide(cur));
+  $('#cNotes').classList.add('on');
+  $('#cNotes').addEventListener('click',toggleNotes);
+  notesTa.addEventListener('input',e=>{deck.slides[cur].notes=e.target.value;queueCommit()});
+  notesTa.addEventListener('blur',flushCommit);
+  if(localStorage.getItem('sm.hint')==='1')$('#ehint').remove();
+  else $('#ehintX').addEventListener('click',()=>{localStorage.setItem('sm.hint','1');$('#ehint').remove()});
+  new ResizeObserver(fitStage).observe($('#canvas'));
+  addEventListener('beforeunload',persist);
+  setInterval(persist,6000);
+}
+
+/* ================= global shortcuts ================= */
+document.addEventListener('keydown',e=>{
+  if(presenting)return;                                  /* present runtime owns keys */
+  if(layerViewOpen()){                                   /* 3-screen layer view owns keys */
+    if(e.key==='Escape'||e.key.toLowerCase()==='l'){e.preventDefault();closeLayerView()}
+    return;
+  }
+  const mod=e.ctrlKey||e.metaKey;
+  const t=e.target;
+  const editing=t&&(t.isContentEditable||t.tagName==='INPUT'||t.tagName==='TEXTAREA');
+  if(mod&&e.key.toLowerCase()==='s'){e.preventDefault();flushCommit();persist();toast('All changes saved');return}
+  if(e.key==='F5'){e.preventDefault();openPresent(e.shiftKey?cur:0);return}
+  if(editing)return;                                     /* native text editing (incl. native Ctrl+Z in fields) */
+  if(mod&&e.key.toLowerCase()==='m'){e.preventDefault();addQuick();return}
+  if(mod&&e.key.toLowerCase()==='d'){e.preventDefault();dupSlide(cur);return}
+  if(mod&&!e.shiftKey&&e.key.toLowerCase()==='z'){e.preventDefault();undo();return}
+  if((mod&&e.shiftKey&&e.key.toLowerCase()==='z')||(mod&&e.key.toLowerCase()==='y')){e.preventDefault();redo();return}
+  if(e.altKey&&(e.key==='ArrowUp'||e.key==='ArrowDown')){
+    e.preventDefault();moveSlide(cur,e.key==='ArrowUp'?cur-1:cur+1);return}
+  if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();delSlide(cur);return}
+  if(e.key==='ArrowRight'||e.key==='PageDown'){e.preventDefault();select(cur+1)}
+  else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();select(cur-1)}
+  else if(e.key==='Home')select(0);
+  else if(e.key==='End')select(deck.slides.length-1);
+  else if(e.key.toLowerCase()==='n')toggleNotes();
+  else if(e.key.toLowerCase()==='l')openLayerView();
+  else if(e.key==='Escape'){
+    closePop();
+    const a=document.activeElement;a&&a.blur&&a.blur();
+  }
+});
+
+boot();
+</script>
+</body>
+</html>

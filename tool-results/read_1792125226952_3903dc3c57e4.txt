@@ -1,0 +1,922 @@
+     1→     1→"use client";
+     2→     2→
+     3→     3→import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
+     4→     4→import dynamic from "next/dynamic";
+     5→     5→import type { EditorView } from "@codemirror/view";
+     6→     6→import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, Save, Trash2, Upload, WandSparkles } from "lucide-react";
+     7→     7→import type { DeckJson, FileRow, SlideEntry, Source } from "@/lib/stagesmith/types";
+     8→     8→import { api } from "@/lib/stagesmith/client";
+     9→     9→import { FORMATABLE_EXT, formatTsx } from "@/lib/stagesmith/format";
+    10→    10→import { useUiTheme } from "@/hooks/useUiTheme";
+    11→    11→import { copyText, fixPrompt, sourceLabel } from "./shared";
+    12→    12→import { resolveCode } from "./StageFrame";
+    13→    13→import { useToast } from "@/hooks/use-toast";
+    14→    14→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    15→    15→
+    16→    16→/** the whole CodeMirror stack loads in its own chunk — fast first paint */
+    17→    17→const CmEditor = dynamic(() => import("./editor/CmEditor"), {
+    18→    18→  ssr: false,
+    19→    19→  loading: () => (
+    20→    20→    <div style={{ height: "100%", display: "grid", placeItems: "center" }}>
+    21→    21→      <span className="ss-label" style={{ opacity: 0.45 }}>Loading editor…</span>
+    22→    22→    </div>
+    23→    23→  ),
+    24→    24→});
+    25→    25→
+    26→    26→export type CodeTab = "slide" | "bg" | "overlay" | "notes" | "assets" | "theme";
+    27→    27→
+    28→    28→/** cursor jump request from the filmstrip error badge (fix-list item 4) */
+    29→    29→export interface GotoError {
+    30→    30→  slideId: string;
+    31→    31→  line: number;
+    32→    32→  col: number;
+    33→    33→  nonce: number;
+    34→    34→}
+    35→    35→
+    36→    36→/**
+    37→    37→ * Format a TSX buffer once, when it first appears in the editor
+    38→    38→ * (fix-list item 2). The result is applied through onBufferChange, so it
+    39→    39→ * is a single undoable edit that autosaves like any other change.
+    40→    40→ */
+    41→    41→function useFormatOnOpen(
+    42→    42→  path: string | null,
+    43→    43→  content: string | undefined,
+    44→    44→  apply: (formatted: string) => void,
+    45→    45→) {
+    46→    46→  const doneRef = useRef<Set<string>>(new Set());
+    47→    47→  const busyRef = useRef<string | null>(null);
+    48→    48→  useEffect(() => {
+    49→    49→    if (!path || content === undefined) return;
+    50→    50→    if (!FORMATABLE_EXT.test(path) || doneRef.current.has(path) || busyRef.current === path) return;
+    51→    51→    busyRef.current = path;
+    52→    52→    let cancelled = false;
+    53→    53→    (async () => {
+    54→    54→      const formatted = await formatTsx(content);
+    55→    55→      if (formatted !== content) apply(formatted);
+    56→    56→      if (!cancelled) doneRef.current.add(path);
+    57→    57→      busyRef.current = null;
+    58→    58→    })();
+    59→    59→    return () => {
+    60→    60→      cancelled = true;
+    61→    61→    };
+    62→    62→  }, [path, content, apply]);
+    63→    63→}
+    64→    64→
+    65→    65→export const CodePane = memo(function CodePane(props: {
+    66→    66→  deckId: string;
+    67→    67→  deck: DeckJson;
+    68→    68→  files: FileRow[];
+    69→    69→  sel: SlideEntry | null;
+    70→    70→  tab: CodeTab;
+    71→    71→  onTab: (t: CodeTab) => void;
+    72→    72→  buffers: Record<string, string>;
+    73→    73→  dirty: Record<string, boolean>;
+    74→    74→  onBufferChange: (path: string, content: string) => void;
+    75→    75→  ensureBuffer: (path: string) => Promise<void>;
+    76→    76→  onFlushSave: () => void;
+    77→    77→  onCommonSource: (layer: "bg" | "overlay", source: Source) => void;
+    78→    78→  onOverride: (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => void;
+    79→    79→  version: string;
+    80→    80→  /** fix-list item 1: minimized = tab bar only, preview grows */
+    81→    81→  minimized: boolean;
+    82→    82→  onToggleMinimize: () => void;
+    83→    83→  /** fix-list item 4: open this slide with the cursor on the error line */
+    84→    84→  gotoError: GotoError | null;
+    85→    85→}) {
+    86→    86→  const { deckId, deck, sel, tab, buffers, onBufferChange, ensureBuffer } = props;
+    87→    87→  const { toast } = useToast();
+    88→    88→  const [slideError, setSlideError] = useState<string | null>(null);
+    89→    89→  const [uiTheme] = useUiTheme();
+    90→    90→
+    91→    91→  const slidePath = sel ? `slides/${sel.id}.tsx` : "";
+    92→    92→  const notesPath = sel ? `notes/${sel.id}.md` : "";
+    93→    93→
+    94→    94→  // mirrors for async handlers
+    95→    95→  const buffersRef = useRef(buffers);
+    96→    96→  buffersRef.current = buffers;
+    97→    97→  const changeRef = useRef(onBufferChange);
+    98→    98→  changeRef.current = onBufferChange;
+    99→    99→
+   100→   100→  /** the file currently shown in the editor (slide / bg / overlay) */
+   101→   101→  const activeFileRef = useRef<string | null>(null);
+   102→   102→  useEffect(() => {
+   103→   103→    if (tab === "slide") activeFileRef.current = slidePath || null;
+   104→   104→    else if (tab === "notes") activeFileRef.current = notesPath || null;
+   105→   105→    else if (tab === "theme") activeFileRef.current = "theme.css";
+   106→   106→    // bg / overlay register themselves from SourceEditor
+   107→   107→  }, [tab, slidePath, notesPath]);
+   108→   108→
+   109→   109→  /** format one file — one undoable edit, skipped for non-TSX */
+   110→   110→  const formatFile = useCallback(
+   111→   111→    async (path: string | null) => {
+   112→   112→      if (!path) return;
+   113→   113→      if (!FORMATABLE_EXT.test(path)) {
+   114→   114→        toast({ title: "Formatting is TSX-only", description: `${path} is left as-is` });
+   115→   115→        return;
+   116→   116→      }
+   117→   117→      const content = buffersRef.current[path];
+   118→   118→      if (content === undefined) return;
+   119→   119→      const formatted = await formatTsx(content);
+   120→   120→      if (formatted !== content) {
+   121→   121→        changeRef.current(path, formatted);
+   122→   122→        toast({ title: "Formatted", description: path });
+   123→   123→      }
+   124→   124→    },
+   125→   125→    [toast],
+   126→   126→  );
+   127→   127→  const formatActive = useCallback(() => formatFile(activeFileRef.current), [formatFile]);
+   128→   128→
+   129→   129→  // Shift+Alt+F (fix-list item 2)
+   130→   130→  useEffect(() => {
+   131→   131→    const onKey = (e: KeyboardEvent) => {
+   132→   132→      if (e.altKey && e.shiftKey && (e.key === "f" || e.key === "F")) {
+   133→   133→        e.preventDefault();
+   134→   134→        formatActive();
+   135→   135→      }
+   136→   136→    };
+   137→   137→    window.addEventListener("keydown", onKey);
+   138→   138→    return () => window.removeEventListener("keydown", onKey);
+   139→   139→  }, [formatActive]);
+   140→   140→
+   141→   141→  // format-on-open for the slide file
+   142→   142→  const applySlideFormat = useCallback(
+   143→   143→    (formatted: string) => {
+   144→   144→      if (slidePath) changeRef.current(slidePath, formatted);
+   145→   145→    },
+   146→   146→    [slidePath],
+   147→   147→  );
+   148→   148→  useFormatOnOpen(tab === "slide" ? slidePath || null : null, tab === "slide" ? buffers[slidePath] : undefined, applySlideFormat);
+   149→   149→
+   150→   150→  // load buffer for the active file
+   151→   151→  useEffect(() => {
+   152→   152→    const path =
+   153→   153→      tab === "slide" ? slidePath
+   154→   154→      : tab === "theme" ? "theme.css"
+   155→   155→      : tab === "notes" ? notesPath
+   156→   156→      : null;
+   157→   157→    if (path) ensureBuffer(path);
+   158→   158→  }, [tab, slidePath, notesPath, ensureBuffer]);
+   159→   159→
+   160→   160→  useEffect(() => {
+   161→   161→    if (!sel) return setSlideError(null);
+   162→   162→    let cancelled = false;
+   163→   163→    resolveCode(deckId, slidePath, props.version).then((m) => {
+   164→   164→      if (!cancelled) setSlideError(m.error);
+   165→   165→    });
+   166→   166→    return () => {
+   167→   167→      cancelled = true;
+   168→   168→    };
+   169→   169→  }, [deckId, slidePath, props.version, sel]);
+   170→   170→
+   171→   171→  const slideCode = buffers[slidePath] ?? "";
+   172→   172→
+   173→   173→  const copyFix = async () => {
+   174→   174→    const ok = await copyText(fixPrompt(slidePath, slideCode, slideError || "unknown error"));
+   175→   175→    toast(ok ? { title: "Fix prompt copied — paste it into your AI tool" } : { title: "Clipboard blocked", variant: "destructive" });
+   176→   176→  };
+   177→   177→
+   178→   178→  /* cursor jump to the first error line (fix-list item 4) */
+   179→   179→  const viewRef = useRef<EditorView | null>(null);
+   180→   180→  const goto = props.gotoError;
+   181→   181→  const slideBuffer = tab === "slide" ? buffers[slidePath] : undefined;
+   182→   182→  useEffect(() => {
+   183→   183→    if (props.minimized || !goto || !sel || goto.slideId !== sel.id || tab !== "slide") return;
+   184→   184→    if (slideBuffer === undefined) return; // still loading
+   185→   185→    const view = viewRef.current;
+   186→   186→    if (!view) return;
+   187→   187→    let cancelled = false;
+   188→   188→    (async () => {
+   189→   189→      const { EditorSelection, EditorView: EV } = await import("./editor/bits");
+   190→   190→      if (cancelled) return;
+   191→   191→      const line = Math.max(1, Math.min(goto.line, view.state.doc.lines));
+   192→   192→      const lineInfo = view.state.doc.line(line);
+   193→   193→      const pos = Math.min(lineInfo.to, lineInfo.from + Math.max(0, goto.col));
+   194→   194→      view.dispatch({
+   195→   195→        selection: EditorSelection.cursor(pos),
+   196→   196→        effects: EV.scrollIntoView(pos, { y: "center" }),
+   197→   197→      });
+   198→   198→      view.focus();
+   199→   199→    })();
+   200→   200→    return () => {
+   201→   201→      cancelled = true;
+   202→   202→    };
+   203→   203→  }, [goto, sel, tab, slideBuffer, props.minimized]);
+   204→   204→
+   205→   205→  /* multi-line paste → format (fix-list item 2) — the domEventHandlers
+   206→   206→     extension arrives with the lazy editor chunk */
+   207→   207→  const formatActiveRef = useRef(formatActive);
+   208→   208→  formatActiveRef.current = formatActive;
+   209→   209→  const [pasteFormatExt, setPasteFormatExt] = useState<unknown>(null);
+   210→   210→  useEffect(() => {
+   211→   211→    let cancelled = false;
+   212→   212→    import("./editor/bits").then(({ EditorView: EV }) => {
+   213→   213→      if (cancelled) return;
+   214→   214→      setPasteFormatExt(
+   215→   215→        EV.domEventHandlers({
+   216→   216→          paste: (e) => {
+   217→   217→            const text = e.clipboardData?.getData("text/plain") ?? "";
+   218→   218→            if (/\n/.test(text.trim())) {
+   219→   219→              setTimeout(() => formatActiveRef.current(), 60);
+   220→   220→            }
+   221→   221→          },
+   222→   222→        }),
+   223→   223→      );
+   224→   224→    });
+   225→   225→    return () => {
+   226→   226→      cancelled = true;
+   227→   227→    };
+   228→   228→  }, []);
+   229→   229→
+   230→   230→  const tabs: Array<{ key: CodeTab; label: string; badge?: boolean }> = [
+   231→   231→    { key: "slide", label: "Slide", badge: Boolean(slideError) },
+   232→   232→    { key: "bg", label: "BG" },
+   233→   233→    { key: "overlay", label: "Overlay" },
+   234→   234→    { key: "notes", label: "Notes" },
+   235→   235→    { key: "assets", label: "Assets" },
+   236→   236→    { key: "theme", label: "Theme" },
+   237→   237→  ];
+   238→   238→
+   239→   239→  const cmTheme: "dark" | "light" = uiTheme === "light" ? "light" : "dark";
+   240→   240→
+   241→   241→  return (
+   242→   242→    <section className={`ss-codepane ${props.minimized ? "min" : ""}`}>
+   243→   243→      <div className="ss-codepane-head">
+   244→   244→        <div className="ss-code-tabs">
+   245→   245→          {tabs.map((t) => (
+   246→   246→            <button key={t.key} className={`ss-code-tab ${tab === t.key ? "on" : ""}`} onClick={() => props.onTab(t.key)}>
+   247→   247→              {t.label}
+   248→   248→              {t.badge && <span className="badge">!</span>}
+   249→   249→            </button>
+   250→   250→          ))}
+   251→   251→        </div>
+   252→   252→        {!props.minimized && (
+   253→   253→          <>
+   254→   254→            <div style={{ flex: 1 }} />
+   255→   255→            {tab === "slide" && sel && (
+   256→   256→              <span className="ss-label" style={{ letterSpacing: ".06em" }}>{slidePath}</span>
+   257→   257→            )}
+   258→   258→            {tab === "notes" && sel && <span className="ss-label">{notesPath}</span>}
+   259→   259→            {tab === "theme" && <span className="ss-label">theme.css</span>}
+   260→   260→            {slideError && tab === "slide" && (
+   261→   261→              <button className="ss-btn" style={{ height: 26, padding: "0 10px", fontSize: 12 }} onClick={copyFix} title="Copy slide code + error as an AI fix prompt">
+   262→   262→                <WandSparkles size={13} /> Copy fix prompt
+   263→   263→              </button>
+   264→   264→            )}
+   265→   265→            {(tab === "slide" || tab === "bg" || tab === "overlay") && (
+   266→   266→              <button className="ss-btn" style={{ height: 26, padding: "0 10px", fontSize: 12 }} onClick={() => formatActive()} title="Format file (Shift+Alt+F)">
+   267→   267→                <Braces size={13} /> Format
+   268→   268→              </button>
+   269→   269→            )}
+   270→   270→            <button className="ss-btn" style={{ height: 26, padding: "0 10px", fontSize: 12 }} onClick={props.onFlushSave} title="Save now (Ctrl+S)">
+   271→   271→              <Save size={13} /> Save
+   272→   272→            </button>
+   273→   273→          </>
+   274→   274→        )}
+   275→   275→        {props.minimized && <div style={{ flex: 1 }} />}
+   276→   276→        <button
+   277→   277→          className="ss-btn ss-btn-icon"
+   278→   278→          style={{ width: 28, height: 26, flex: "none" }}
+   279→   279→          onClick={props.onToggleMinimize}
+   280→   280→          title={props.minimized ? "Restore code pane (Ctrl+E)" : "Minimize code pane (Ctrl+E)"}
+   281→   281→        >
+   282→   282→          {props.minimized ? <ChevronsUp size={14} /> : <ChevronsDown size={14} />}
+   283→   283→        </button>
+   284→   284→      </div>
+   285→   285→
+   286→   286→      {!props.minimized && (
+   287→   287→        <>
+   288→   288→          {slideError && (tab === "slide" || tab === "bg" || tab === "overlay") && (
+   289→   289→            <div className="ss-error-banner">
+   290→   290→              <span style={{ color: "var(--ss-err)", flex: "none", fontWeight: 600 }}>
+   291→   291→                <AlertTriangle size={12} style={{ verticalAlign: -1, marginRight: 6 }} />
+   292→   292→                Error
+   293→   293→              </span>
+   294→   294→              <span>{slideError}</span>
+   295→   295→            </div>
+   296→   296→          )}
+   297→   297→
+   298→   298→          <div className="ss-codepane-body ss-cm">
+   299→   299→            {tab === "slide" && sel && (
+   300→   300→              <CmEditor
+   301→   301→                value={buffers[slidePath] ?? ""}
+   302→   302→                theme={cmTheme}
+   303→   303→                lang="tsx"
+   304→   304→                pasteFormatExt={pasteFormatExt}
+   305→   305→                onChange={(v) => onBufferChange(slidePath, v)}
+   306→   306→                onCreateEditor={(view) => {
+   307→   307→                  viewRef.current = view;
+   308→   308→                }}
+   309→   309→              />
+   310→   310→            )}
+   311→   311→            {tab === "slide" && !sel && <EmptyPane text="Select a slide in the filmstrip" />}
+   312→   312→
+   313→   313→            {tab === "bg" && (
+   314→   314→              <SourceEditor
+   315→   315→                layer="bg"
+   316→   316→                deckId={deckId}
+   317→   317→                deck={deck}
+   318→   318→                files={props.files}
+   319→   319→                sel={sel}
+   320→   320→                buffers={buffers}
+   321→   321→                onBufferChange={onBufferChange}
+   322→   322→                ensureBuffer={ensureBuffer}
+   323→   323→                onCommonSource={props.onCommonSource}
+   324→   324→                onOverride={props.onOverride}
+   325→   325→                activeFileRef={activeFileRef}
+   326→   326→                formatFile={formatFile}
+   327→   327→                cmTheme={cmTheme}
+   328→   328→                pasteFormatExt={pasteFormatExt}
+   329→   329→              />
+   330→   330→            )}
+   331→   331→            {tab === "overlay" && (
+   332→   332→              <SourceEditor
+   333→   333→                layer="overlay"
+   334→   334→                deckId={deckId}
+   335→   335→                deck={deck}
+   336→   336→                files={props.files}
+   337→   337→                sel={sel}
+   338→   338→                buffers={buffers}
+   339→   339→                onBufferChange={onBufferChange}
+   340→   340→                ensureBuffer={ensureBuffer}
+   341→   341→                onCommonSource={props.onCommonSource}
+   342→   342→                onOverride={props.onOverride}
+   343→   343→                activeFileRef={activeFileRef}
+   344→   344→                formatFile={formatFile}
+   345→   345→                cmTheme={cmTheme}
+   346→   346→                pasteFormatExt={pasteFormatExt}
+   347→   347→              />
+   348→   348→            )}
+   349→   349→
+   350→   350→            {tab === "notes" && sel && (
+   351→   351→              <CmEditor
+   352→   352→                value={buffers[notesPath] ?? ""}
+   353→   353→                theme={cmTheme}
+   354→   354→                lang="plain"
+   355→   355→                onChange={(v) => onBufferChange(notesPath, v)}
+   356→   356→              />
+   357→   357→            )}
+   358→   358→            {tab === "notes" && !sel && <EmptyPane text="Select a slide to edit its notes" />}
+   359→   359→
+   360→   360→            {tab === "assets" && <AssetsTab deckId={deckId} version={props.version} />}
+   361→   361→
+   362→   362→            {tab === "theme" && (
+   363→   363→              <CmEditor
+   364→   364→                value={buffers["theme.css"] ?? ""}
+   365→   365→                theme={cmTheme}
+   366→   366→                lang="plain"
+   367→   367→                onChange={(v) => onBufferChange("theme.css", v)}
+   368→   368→              />
+   369→   369→            )}
+   370→   370→          </div>
+   371→   371→        </>
+   372→   372→      )}
+   373→   373→    </section>
+   374→   374→  );
+   375→   375→});
+   376→   376→
+   377→   377→function EmptyPane({ text }: { text: string }) {
+   378→   378→  return (
+   379→   379→    <div style={{ height: "100%", display: "grid", placeItems: "center" }}>
+   380→   380→      <span className="ss-label" style={{ opacity: 0.5 }}>{text}</span>
+   381→   381→    </div>
+   382→   382→  );
+   383→   383→}
+   384→   384→
+   385→   385→/* ------------------------------------------------------------------ */
+   386→   386→/* BG / Overlay source editing: common + per-slide override            */
+   387→   387→/* ------------------------------------------------------------------ */
+   388→   388→
+   389→   389→function SourceEditor(props: {
+   390→   390→  layer: "bg" | "overlay";
+   391→   391→  deckId: string;
+   392→   392→  deck: DeckJson;
+   393→   393→  files: FileRow[];
+   394→   394→  sel: SlideEntry | null;
+   395→   395→  buffers: Record<string, string>;
+   396→   396→  onBufferChange: (path: string, content: string) => void;
+   397→   397→  ensureBuffer: (path: string) => Promise<void>;
+   398→   398→  onCommonSource: (layer: "bg" | "overlay", source: Source) => void;
+   399→   399→  onOverride: (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => void;
+   400→   400→  activeFileRef: React.RefObject<string | null>;
+   401→   401→  formatFile: (path: string | null) => Promise<void>;
+   402→   402→  cmTheme: "dark" | "light";
+   403→   403→  pasteFormatExt: unknown;
+   404→   404→}) {
+   405→   405→  const { layer, deckId, deck, files, sel } = props;
+   406→   406→  const { toast } = useToast();
+   407→   407→  const [scope, setScope] = useState<"common" | "override">("common");
+   408→   408→
+   409→   409→  const common = layer === "bg" ? deck.bg : deck.overlay;
+   410→   410→  const override = sel ? (layer === "bg" ? sel.bg : sel.overlay) : undefined;
+   411→   411→  const effective = scope === "override" ? override : common;
+   412→   412→  const dirFiles = files
+   413→   413→    .filter((f) => f.path.startsWith(`${layer}/`) && /\.(tsx|ts)$/.test(f.path))
+   414→   414→    .map((f) => f.path);
+   415→   415→  const images = files.filter((f) => f.path.startsWith("assets/") && /\.(png|jpe?g|svg|webp|gif|avif)$/i.test(f.path)).map((f) => f.path);
+   416→   416→
+   417→   417→  const codePath = effective && effective.type === "code" ? effective.path : null;
+   418→   418→
+   419→   419→  useEffect(() => {
+   420→   420→    if (codePath) props.ensureBuffer(codePath);
+   421→   421→  }, [codePath]);
+   422→   422→
+   423→   423→  // register the visible file with the pane-level formatter
+   424→   424→  const activeFileRef = props.activeFileRef;
+   425→   425→  useEffect(() => {
+   426→   426→    activeFileRef.current = codePath;
+   427→   427→    return () => {
+   428→   428→      if (activeFileRef.current === codePath) activeFileRef.current = null;
+   429→   429→    };
+   430→   430→  }, [codePath, activeFileRef]);
+   431→   431→
+   432→   432→  const applyFormat = useCallback(
+   433→   433→    (formatted: string) => {
+   434→   434→      if (codePath) props.onBufferChange(codePath, formatted);
+   435→   435→    },
+   436→   436→    [codePath],
+   437→   437→  );
+   438→   438→  useFormatOnOpen(codePath, codePath ? props.buffers[codePath] : undefined, applyFormat);
+   439→   439→
+   440→   440→  const setSource = (source: Source | undefined) => {
+   441→   441→    if (scope === "override" && sel) {
+   442→   442→      props.onOverride(sel.id, layer, source);
+   443→   443→    } else {
+   444→   444→      props.onCommonSource(layer, source ?? { type: "none" });
+   445→   445→    }
+   446→   446→  };
+   447→   447→
+   448→   448→  const newCodeFile = async () => {
+   449→   449→    const name = window.prompt(`New ${layer} code file name (without .tsx)`, `custom-${layer}`);
+   450→   450→    if (!name) return;
+   451→   451→    const path = `${layer}/${name.replace(/[^\w-]/g, "-").replace(/\.tsx$/, "")}.tsx`;
+   452→   452→    const template =
+   453→   453→      layer === "bg"
+   454→   454→        ? `import { GridLines, Vignette, Aurora } from "stagesmith";
+   455→   455→
+   456→   456→export default function ${name.replace(/[^\w]/g, "") || "Bg"}() {
+   457→   457→  return (
+   458→   458→    <>
+   459→   459→      <GridLines />
+   460→   460→      <Vignette strength={0.3} />
+   461→   461→    </>
+   462→   462→  );
+   463→   463→}
+   464→   464→`
+   465→   465→        : `import { CornerMarks, SlideNumber } from "stagesmith";
+   466→   466→
+   467→   467→export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
+   468→   468→  return (
+   469→   469→    <>
+   470→   470→      <CornerMarks inset={20} />
+   471→   471→      <SlideNumber format="{n} / {total}" />
+   472→   472→    </>
+   473→   473→  );
+   474→   474→}
+   475→   475→`;
+   476→   476→    try {
+   477→   477→      await api.saveFile(deckId, path, template);
+   478→   478→      setSource({ type: "code", path });
+   479→   479→      toast({ title: `Created ${path}` });
+   480→   480→    } catch (e) {
+   481→   481→      toast({ title: "Could not create file", description: (e as Error).message, variant: "destructive" });
+   482→   482→    }
+   483→   483→  };
+   484→   484→
+   485→   485→  return (
+   486→   486→    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+   487→   487→      <div className="ss-srcbar">
+   488→   488→        <span className="ss-label" style={{ flex: "none" }}>{layer === "bg" ? "Background" : "Overlay"}</span>
+   489→   489→        <div className="ss-mode-tabs" style={{ flex: "none" }}>
+   490→   490→          <button className={`ss-mode-tab ${scope === "common" ? "on" : ""}`} onClick={() => setScope("common")}>
+   491→   491→            Common
+   492→   492→          </button>
+   493→   493→          <button
+   494→   494→            className={`ss-mode-tab ${scope === "override" ? "on" : ""}`}
+   495→   495→            disabled={!sel}
+   496→   496→            title={sel ? "Override for this slide only" : "Select a slide first"}
+   497→   497→            onClick={() => setScope("override")}
+   498→   498→          >
+   499→   499→            Override {sel ? `· ${sel.label.slice(0, 18)}` : ""}
+   500→   500→          </button>
+   501→   501→        </div>
+   502→   502→        <span className="ss-divider" />
+   503→   503→        <Select
+   504→   504→          value={effective?.type ?? "none"}
+   505→   505→          onValueChange={(v) => {
+   506→   506→            if (v === "none") setSource(undefined);
+   507→   507→            else if (v === "code") setSource({ type: "code", path: dirFiles[0] ?? `${layer}/common.tsx` });
+   508→   508→            else if (v === "image") setSource({ type: "image", path: images[0] ?? "assets/placeholder.png" });
+   509→   509→          }}
+   510→   510→        >
+   511→   511→          <SelectTrigger className="ss-input" style={{ height: 28, width: 150, fontSize: 12 }}>
+   512→   512→            <SelectValue />
+   513→   513→          </SelectTrigger>
+   514→   514→          <SelectContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
+   515→   515→            <SelectItem value="none">None</SelectItem>
+   516→   516→            <SelectItem value="code">Code (.tsx)</SelectItem>
+   517→   517→            <SelectItem value="image" disabled={images.length === 0}>Image</SelectItem>
+   518→   518→          </SelectContent>
+   519→   519→        </Select>
+   520→   520→
+   521→   521→        {effective?.type === "code" && (
+   522→   522→          <>
+   523→   523→            <Select
+   524→   524→              value={codePath ?? ""}
+   525→   525→              onValueChange={(v) => setSource({ type: "code", path: v })}
+   526→   526→            >
+   527→   527→              <SelectTrigger className="ss-input" style={{ height: 28, width: 210, fontSize: 12 }}>
+   528→   528→                <SelectValue />
+   529→   529→              </SelectTrigger>
+   530→   530→              <SelectContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
+   531→   531→                {dirFiles.map((p) => (
+   532→   532→                  <SelectItem key={p} value={p}>{p}</SelectItem>
+   533→   533→                ))}
+   534→   534→              </SelectContent>
+   535→   535→            </Select>
+   536→   536→            <button className="ss-btn" style={{ height: 28, padding: "0 10px", fontSize: 12 }} onClick={newCodeFile}>
+   537→   537→              <FilePlus2 size={13} /> New file
+   538→   538→            </button>
+   539→   539→          </>
+   540→   540→        )}
+   541→   541→
+   542→   542→        {effective?.type === "image" && (
+   543→   543→          <>
+   544→   544→            <Select value={effective.path} onValueChange={(v) => setSource({ ...effective, path: v })}>
+   545→   545→              <SelectTrigger className="ss-input" style={{ height: 28, width: 210, fontSize: 12 }}>
+   546→   546→                <SelectValue />
+   547→   547→              </SelectTrigger>
+   548→   548→              <SelectContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
+   549→   549→                {images.map((p) => (
+   550→   550→                  <SelectItem key={p} value={p}>{p}</SelectItem>
+   551→   551→                ))}
+   552→   552→              </SelectContent>
+   553→   553→            </Select>
+   554→   554→            {layer === "bg" ? <ImageBgFields source={effective} onChange={setSource} /> : <ImageOverlayFields source={effective} onChange={setSource} />}
+   555→   555→          </>
+   556→   556→        )}
+   557→   557→
+   558→   558→        <span style={{ font: "500 11px var(--ss-mono)", color: "var(--ss-faint)" }}>
+   559→   559→          {scope === "common" ? sourceLabel(common) : override === undefined ? "follows common" : override?.type === "none" ? "none on this slide" : sourceLabel(override)}
+   560→   560→        </span>
+   561→   561→      </div>
+   562→   562→      <div className="ss-cm" style={{ flex: 1 }}>
+   563→   563→        {effective?.type === "code" && codePath ? (
+   564→   564→          <CmEditor
+   565→   565→            value={props.buffers[codePath] ?? ""}
+   566→   566→            theme={props.cmTheme}
+   567→   567→            lang="tsx"
+   568→   568→            pasteFormatExt={props.pasteFormatExt}
+   569→   569→            onChange={(v) => props.onBufferChange(codePath, v)}
+   570→   570→          />
+   571→   571→        ) : (
+   572→   572→          <EmptyPane
+   573→   573→            text={
+   574→   574→              effective?.type === "image"
+   575→   575→                ? `Image source: ${effective.path}`
+   576→   576→                : "No code source — pick Code + a file, or create one"
+   577→   577→            }
+   578→   578→          />
+   579→   579→        )}
+   580→   580→      </div>
+   581→   581→    </div>
+   582→   582→  );
+   583→   583→}
+   584→   584→
+   585→   585→function ImageBgFields({ source, onChange }: { source: Extract<Source, { type: "image" }>; onChange: (s: Source) => void }) {
+   586→   586→  const num = (label: string, key: "blur" | "dim" | "opacity" | "zoom", step = 0.1) => (
+   587→   587→    <label key={key} style={{ display: "inline-flex", alignItems: "center", gap: 6, font: "500 11px var(--ss-mono)", color: "var(--ss-mut)" }}>
+   588→   588→      {label}
+   589→   589→      <input
+   590→   590→        type="number"
+   591→   591→        step={step}
+   592→   592→        min={0}
+   593→   593→        max={key === "dim" || key === "opacity" ? 1 : 10}
+   594→   594→        value={source[key] ?? 0}
+   595→   595→        onChange={(e) => onChange({ ...source, [key]: Number(e.target.value) })}
+   596→   596→        style={{ width: 58, height: 26, padding: "0 6px", background: "var(--ss-panel)", color: "var(--ss-ink)", border: "1px solid var(--ss-line-strong)", borderRadius: 6, font: "400 11px var(--ss-mono)", outline: "none" }}
+   597→   597→      />
+   598→   598→    </label>
+   599→   599→  );
+   600→   600→  return (
+   601→   601→    <>
+   602→   602→      <Select value={source.fit ?? "cover"} onValueChange={(v) => onChange({ ...source, fit: v as "cover" | "contain" })}>
+   603→   603→        <SelectTrigger className="ss-input" style={{ height: 28, width: 110, fontSize: 12 }}>
+   604→   604→          <SelectValue />
+   605→   605→        </SelectTrigger>
+   606→   606→        <SelectContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
+   607→   607→          <SelectItem value="cover">cover</SelectItem>
+   608→   608→          <SelectItem value="contain">contain</SelectItem>
+   609→   609→        </SelectContent>
+   610→   610→      </Select>
+   611→   611→      {num("blur", "blur")}
+   612→   612→      {num("dim", "dim")}
+   613→   613→      {num("op", "opacity")}
+   614→   614→    </>
+   615→   615→  );
+   616→   616→}
+   617→   617→
+   618→   618→function ImageOverlayFields({ source, onChange }: { source: Extract<Source, { type: "image" }>; onChange: (s: Source) => void }) {
+   619→   619→  const field = (label: string, key: "x" | "y" | "width" | "opacity", def: number, step = 1) => (
+   620→   620→    <label key={key} style={{ display: "inline-flex", alignItems: "center", gap: 6, font: "500 11px var(--ss-mono)", color: "var(--ss-mut)" }}>
+   621→   621→      {label}
+   622→   622→      <input
+   623→   623→        type="number"
+   624→   624→        step={step}
+   625→   625→        value={source[key] ?? def}
+   626→   626→        onChange={(e) => onChange({ ...source, [key]: Number(e.target.value) })}
+   627→   627→        style={{ width: 64, height: 26, padding: "0 6px", background: "var(--ss-panel)", color: "var(--ss-ink)", border: "1px solid var(--ss-line-strong)", borderRadius: 6, font: "400 11px var(--ss-mono)", outline: "none" }}
+   628→   628→      />
+   629→   629→    </label>
+   630→   630→  );
+   631→   631→  return (
+   632→   632→    <>
+   633→   633→      {field("x", "x", 40)}
+   634→   634→      {field("y", "y", 40)}
+   635→   635→      {field("w", "width", 320, 10)}
+   636→   636→      {field("op", "opacity", 1, 0.1)}
+   637→   637→    </>
+   638→   638→  );
+   639→   639→}
+   640→   640→
+   641→   641→/* ------------------------------------------------------------------ */
+   642→   642→/* Assets tab                                                          */
+   643→   643→/* ------------------------------------------------------------------ */
+   644→   644→
+   645→   645→type AssetsSubTab = "assets" | "overlay" | "bg";
+   646→   646→
+   647→   647→function CodeFileList({
+   648→   648→  deckId,
+   649→   649→  dir,
+   650→   650→  version,
+   651→   651→  onOpenFile,
+   652→   652→}: {
+   653→   653→  deckId: string;
+   654→   654→  dir: "overlay" | "bg";
+   655→   655→  version: string;
+   656→   656→  onOpenFile?: (path: string) => void;
+   657→   657→}) {
+   658→   658→  const { toast } = useToast();
+   659→   659→  const [files, setFiles] = useState<FileRow[] | null>(null);
+   660→   660→
+   661→   661→  const refresh = useCallback(async () => {
+   662→   662→    try {
+   663→   663→      setFiles(await api.listCodeFiles(deckId, dir));
+   664→   664→    } catch {
+   665→   665→      setFiles([]);
+   666→   666→    }
+   667→   667→  }, [deckId, dir]);
+   668→   668→
+   669→   669→  useEffect(() => {
+   670→   670→    refresh();
+   671→   671→  }, [refresh, version]);
+   672→   672→
+   673→   673→  const upload = async (fileList: FileList | File[]) => {
+   674→   674→    const list = Array.from(fileList);
+   675→   675→    if (!list.length) return;
+   676→   676→    const nonTsx = list.filter((f) => !f.name.endsWith(".tsx"));
+   677→   677→    if (nonTsx.length) {
+   678→   678→      toast({ title: "Only .tsx files allowed", description: nonTsx.map((f) => f.name).join(", "), variant: "destructive" });
+   679→   679→      return;
+   680→   680→    }
+   681→   681→    try {
+   682→   682→      await api.uploadCodeFile(deckId, dir, list);
+   683→   683→      await refresh();
+   684→   684→      toast({ title: `${list.length} file${list.length > 1 ? "s" : ""} uploaded into ${dir}/` });
+   685→   685→    } catch (e) {
+   686→   686→      toast({ title: "Upload failed", description: (e as Error).message, variant: "destructive" });
+   687→   687→    }
+   688→   688→  };
+   689→   689→
+   690→   690→  const rows = files ?? [];
+   691→   691→
+   692→   692→  return (
+   693→   693→    <div>
+   694→   694→      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
+   695→   695→        <label className="ss-btn" style={{ cursor: "pointer" }}>
+   696→   696→          <Upload size={14} /> Upload .tsx into {dir}/
+   697→   697→          <input
+   698→   698→            type="file"
+   699→   699→            multiple
+   700→   700→            accept=".tsx"
+   701→   701→            style={{ display: "none" }}
+   702→   702→            onChange={(e) => {
+   703→   703→              if (e.target.files) upload(e.target.files);
+   704→   704→              e.target.value = "";
+   705→   705→            }}
+   706→   706→          />
+   707→   707→        </label>
+   708→   708→        <span className="ss-label">Upload React components directly into {dir}/</span>
+   709→   709→      </div>
+   710→   710→      {rows.length === 0 ? (
+   711→   711→        <EmptyPane text={files === null ? `Loading ${dir} files…` : `No ${dir} files yet — upload a .tsx component above`} />
+   712→   712→      ) : (
+   713→   713→        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+   714→   714→          {rows.map((f) => {
+   715→   715→            const name = f.path.replace(`${dir}/`, "");
+   716→   716→            return (
+   717→   717→              <div
+   718→   718→                key={f.path}
+   719→   719→                style={{
+   720→   720→                  display: "flex",
+   721→   721→                  alignItems: "center",
+   722→   722→                  gap: 8,
+   723→   723→                  padding: "6px 8px",
+   724→   724→                  borderRadius: 4,
+   725→   725→                  background: "var(--ss-surface2, rgba(255,255,255,0.04))",
+   726→   726→                }}
+   727→   727→              >
+   728→   728→                <span
+   729→   729→                  style={{
+   730→   730→                    flex: 1,
+   731→   731→                    font: "500 12px var(--ss-mono)",
+   732→   732→                    color: "var(--ss-fg)",
+   733→   733→                    overflow: "hidden",
+   734→   734→                    textOverflow: "ellipsis",
+   735→   735→                    whiteSpace: "nowrap",
+   736→   736→                  }}
+   737→   737→                  title={f.path}
+   738→   738→                >
+   739→   739→                  {name}
+   740→   740→                </span>
+   741→   741→                {onOpenFile && (
+   742→   742→                  <button
+   743→   743→                    className="ss-btn"
+   744→   744→                    style={{ height: 24, padding: "0 8px", fontSize: 11 }}
+   745→   745→                    title="Open in editor"
+   746→   746→                    onClick={() => onOpenFile(f.path)}
+   747→   747→                  >
+   748→   748→                    <Braces size={11} /> open
+   749→   749→                  </button>
+   750→   750→                )}
+   751→   751→                <button
+   752→   752→                  className="ss-btn"
+   753→   753→                  style={{ height: 24, padding: "0 8px", fontSize: 11 }}
+   754→   754→                  title="Copy import path"
+   755→   755→                  onClick={async () => {
+   756→   756→                    const ok = await copyText(`import './${f.path}';`);
+   757→   757→                    toast(ok ? { title: "Path copied" } : { title: "Clipboard blocked", variant: "destructive" });
+   758→   758→                  }}
+   759→   759→                >
+   760→   760→                  <Copy size={11} /> path
+   761→   761→                </button>
+   762→   762→                <button
+   763→   763→                  className="ss-btn"
+   764→   764→                  style={{ height: 24, padding: "0 8px", fontSize: 11, color: "var(--ss-err)" }}
+   765→   765→                  title="Delete file"
+   766→   766→                  onClick={async () => {
+   767→   767→                    try {
+   768→   768→                      await api.deleteCodeFile(deckId, f.path);
+   769→   769→                      refresh();
+   770→   770→                    } catch (e) {
+   771→   771→                      toast({ title: "Delete failed", description: (e as Error).message, variant: "destructive" });
+   772→   772→                    }
+   773→   773→                  }}
+   774→   774→                >
+   775→   775→                  <Trash2 size={11} />
+   776→   776→                </button>
+   777→   777→              </div>
+   778→   778→            );
+   779→   779→          })}
+   780→   780→        </div>
+   781→   781→      )}
+   782→   782→    </div>
+   783→   783→  );
+   784→   784→}
+   785→   785→
+   786→   786→function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
+   787→   787→  const { toast } = useToast();
+   788→   788→  const [assets, setAssets] = useState<FileRow[] | null>(null);
+   789→   789→  const [subTab, setSubTab] = useState<AssetsSubTab>("assets");
+   790→   790→
+   791→   791→  const refresh = useCallback(async () => {
+   792→   792→    try {
+   793→   793→      setAssets(await api.listAssets(deckId));
+   794→   794→    } catch {
+   795→   795→      setAssets([]);
+   796→   796→    }
+   797→   797→  }, [deckId]);
+   798→   798→
+   799→   799→  useEffect(() => {
+   800→   800→    refresh();
+   801→   801→  }, [refresh, version]);
+   802→   802→
+   803→   803→  const upload = async (files: FileList | File[]) => {
+   804→   804→    const list = Array.from(files);
+   805→   805→    if (!list.length) return;
+   806→   806→    try {
+   807→   807→      await api.uploadAssets(deckId, list);
+   808→   808→      await refresh();
+   809→   809→      toast({ title: `${list.length} asset${list.length > 1 ? "s" : ""} copied into assets/` });
+   810→   810→    } catch (e) {
+   811→   811→      toast({ title: "Upload failed", description: (e as Error).message, variant: "destructive" });
+   812→   812→    }
+   813→   813→  };
+   814→   814→
+   815→   815→  const rows = useMemo(() => assets ?? [], [assets]);
+   816→   816→
+   817→   817→  const subTabStyle = (t: AssetsSubTab): React.CSSProperties => ({
+   818→   818→    padding: "3px 10px",
+   819→   819→    borderRadius: 4,
+   820→   820→    fontSize: 11,
+   821→   821→    fontWeight: 600,
+   822→   822→    cursor: "pointer",
+   823→   823→    border: "none",
+   824→   824→    background: subTab === t ? "var(--ss-accent, #6366f1)" : "transparent",
+   825→   825→    color: subTab === t ? "#fff" : "var(--ss-mut)",
+   826→   826→    letterSpacing: "0.02em",
+   827→   827→  });
+   828→   828→
+   829→   829→  return (
+   830→   830→    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+   831→   831→      {/* Sub-tab bar */}
+   832→   832→      <div style={{ display: "flex", gap: 4, padding: "8px 14px 0", borderBottom: "1px solid var(--ss-border, rgba(255,255,255,0.08))", paddingBottom: 8 }}>
+   833→   833→        <button style={subTabStyle("assets")} onClick={() => setSubTab("assets")}>Assets</button>
+   834→   834→        <button style={subTabStyle("overlay")} onClick={() => setSubTab("overlay")}>Overlay</button>
+   835→   835→        <button style={subTabStyle("bg")} onClick={() => setSubTab("bg")}>Background</button>
+   836→   836→      </div>
+   837→   837→
+   838→   838→      {/* Content */}
+   839→   839→      <div style={{ flex: 1, overflowY: "auto", padding: 14 }} className="ss-scroll">
+   840→   840→        {subTab === "assets" && (
+   841→   841→          <>
+   842→   842→            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
+   843→   843→              <label className="ss-btn" style={{ cursor: "pointer" }}>
+   844→   844→                <Upload size={14} /> Upload into assets/
+   845→   845→                <input
+   846→   846→                  type="file"
+   847→   847→                  multiple
+   848→   848→                  accept=".png,.jpg,.jpeg,.svg,.webp,.gif,.avif,.woff,.woff2,.ttf,.otf,.html"
+   849→   849→                  style={{ display: "none" }}
+   850→   850→                  onChange={(e) => {
+   851→   851→                    if (e.target.files) upload(e.target.files);
+   852→   852→                    e.target.value = "";
+   853→   853→                  }}
+   854→   854→                />
+   855→   855→              </label>
+   856→   856→              <span className="ss-label">Assets are copied into the deck folder — never linked (plan §2)</span>
+   857→   857→            </div>
+   858→   858→            {rows.length === 0 ? (
+   859→   859→              <EmptyPane text={assets === null ? "Loading assets…" : "No assets — drop files into the deck via upload"} />
+   860→   860→            ) : (
+   861→   861→              <div className="ss-assets-grid">
+   862→   862→                {rows.map((a) => {
+   863→   863→                  const isImage = /\.(png|jpe?g|svg|webp|gif|avif)$/i.test(a.path);
+   864→   864→                  return (
+   865→   865→                    <div key={a.path} className="ss-asset">
+   866→   866→                      {isImage ? (
+   867→   867→                        <img src={`/api/assets/${deckId}/${a.path}`} alt={a.path} loading="lazy" />
+   868→   868→                      ) : (
+   869→   869→                        <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", font: "500 10px var(--ss-mono)", color: "var(--ss-mut)" }}>
+   870→   870→                          {a.path.split(".").pop()?.toUpperCase()}
+   871→   871→                        </div>
+   872→   872→                      )}
+   873→   873→                      <div className="nm" title={a.path}>
+   874→   874→                        {a.path.replace("assets/", "")}
+   875→   875→                      </div>
+   876→   876→                      <div className="acts">
+   877→   877→                        <button
+   878→   878→                          className="ss-btn"
+   879→   879→                          style={{ height: 24, padding: "0 8px", fontSize: 11 }}
+   880→   880→                          title="Copy <Img name='…' /> snippet"
+   881→   881→                          onClick={async () => {
+   882→   882→                            const ok = await copyText(`<Img name='${a.path}' />`);
+   883→   883→                            toast(ok ? { title: "Snippet copied" } : { title: "Clipboard blocked", variant: "destructive" });
+   884→   884→                          }}
+   885→   885→                        >
+   886→   886→                          <Copy size={11} /> snippet
+   887→   887→                        </button>
+   888→   888→                        <button
+   889→   889→                          className="ss-btn"
+   890→   890→                          style={{ height: 24, padding: "0 8px", fontSize: 11, color: "var(--ss-err)" }}
+   891→   891→                          onClick={async () => {
+   892→   892→                            try {
+   893→   893→                              await api.deleteFile(deckId, a.path);
+   894→   894→                              refresh();
+   895→   895→                            } catch (e) {
+   896→   896→                              toast({ title: "Delete failed", description: (e as Error).message, variant: "destructive" });
+   897→   897→                            }
+   898→   898→                          }}
+   899→   899→                        >
+   900→   900→                          <Trash2 size={11} />
+   901→   901→                        </button>
+   902→   902→                      </div>
+   903→   903→                    </div>
+   904→   904→                  );
+   905→   905→                })}
+   906→   906→              </div>
+   907→   907→            )}
+   908→   908→          </>
+   909→   909→        )}
+   910→   910→
+   911→   911→        {subTab === "overlay" && (
+   912→   912→          <CodeFileList deckId={deckId} dir="overlay" version={version} />
+   913→   913→        )}
+   914→   914→
+   915→   915→        {subTab === "bg" && (
+   916→   916→          <CodeFileList deckId={deckId} dir="bg" version={version} />
+   917→   917→        )}
+   918→   918→      </div>
+   919→   919→    </div>
+   920→   920→  );
+   921→   921→}
+   922→   922→

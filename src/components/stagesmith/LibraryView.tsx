@@ -1,12 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderPlus, Import, Layers, Play, Plus, Presentation, QrCode, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderPlus, Import, Layers, Play, Plus } from "lucide-react";
 import { api } from "@/lib/stagesmith/client";
-import type { DeckBundle } from "@/lib/stagesmith/client";
 import type { DeckSummary } from "@/lib/stagesmith/types";
-import { StageFrame } from "./StageFrame";
 import { NewProjectDialog } from "./NewProjectDialog";
+import { ThumbImg } from "./ThumbImg";
 import { download, formatWhen, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -24,8 +23,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-/** lazy mount when scrolled into view (thumbnails are iframes) */
-export function useInView<T extends HTMLElement>(rootMargin = "120px") {
+/** lazy mount when scrolled into view (thumbnails are static images now) */
+export function useInView<T extends HTMLElement>(rootMargin = "160px") {
   const ref = useRef<T | null>(null);
   const [inView, setInView] = useState(false);
   useEffect(() => {
@@ -46,10 +45,9 @@ export function useInView<T extends HTMLElement>(rootMargin = "120px") {
   return { ref, inView };
 }
 
-export function LibraryView({ nav }: { nav: SsNav }) {
+export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: DeckSummary[] | null }) {
   const { toast } = useToast();
-  const [decks, setDecks] = useState<DeckSummary[] | null>(null);
-  const [bundles, setBundles] = useState<Record<string, DeckBundle>>({});
+  const [decks, setDecks] = useState<DeckSummary[] | null>(initialDecks);
   const [newOpen, setNewOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -67,31 +65,14 @@ export function LibraryView({ nav }: { nav: SsNav }) {
     }
   }, [toast]);
 
+  // SSR delivered the list — refresh in the background for freshness
   useEffect(() => {
+    if (initialDecks) {
+      const t = setTimeout(refresh, 800);
+      return () => clearTimeout(t);
+    }
     refresh();
-  }, [refresh]);
-
-  // load bundles for card thumbnails
-  useEffect(() => {
-    if (!decks) return;
-    let cancelled = false;
-    (async () => {
-      for (const d of decks) {
-        if (cancelled) return;
-        if (bundles[d.id]) continue;
-        try {
-          const b = await api.getDeck(d.id);
-          if (!cancelled) setBundles((prev) => ({ ...prev, [d.id]: b }));
-        } catch {
-          /* skip */
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-     
-  }, [decks]);
+  }, [refresh, initialDecks]);
 
   const createDeck = async () => {
     const title = newTitle.trim() || "Untitled deck";
@@ -172,22 +153,23 @@ export function LibraryView({ nav }: { nav: SsNav }) {
           alignItems: "center",
           justifyContent: "space-between",
           gap: 16,
-          padding: "26px clamp(18px, 4vw, 44px) 22px",
+          padding: "24px clamp(18px, 4vw, 44px) 20px",
           borderBottom: "1px solid var(--ss-line)",
           position: "sticky",
           top: 0,
-          background: "color-mix(in srgb, var(--ss-bg) 88%, transparent)",
+          background: "color-mix(in srgb, var(--ss-bg) 86%, transparent)",
           backdropFilter: "blur(10px)",
           zIndex: 10,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 13 }}>
-          <svg viewBox="0 0 24 24" width="26" height="26" style={{ color: "var(--ss-acc)" }} aria-hidden>
-            <path d="M12 3 22 20H2Z" fill="currentColor" />
-          </svg>
+          <BrandLogo size={30} />
           <div>
-            <div style={{ font: "600 20px var(--ss-sans)", letterSpacing: "-.02em" }}>Stagesmith</div>
-            <div className="ss-label" style={{ marginTop: 2 }}>Code-first presentation studio</div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ font: "700 20px var(--ss-fd)", letterSpacing: "-.02em" }}>Stagesmith</span>
+              <span className="ss-label" style={{ letterSpacing: ".24em" }}>studio</span>
+            </div>
+            <div className="ss-label" style={{ marginTop: 3 }}>Code-first presentation studio</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -195,17 +177,17 @@ export function LibraryView({ nav }: { nav: SsNav }) {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="ss-btn" disabled={busy} title="File options">
-                <FolderPlus size={15} /> File <ChevronDown size={13} style={{ opacity: 0.7 }} />
+                <FolderPlus size={15} /> File <ChevronDown size={13} style={{ opacity: 0.65 }} />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea", minWidth: 210 }}>
+            <DropdownMenuContent align="end" style={{ minWidth: 210 }}>
               <DropdownMenuItem onClick={() => setNewProjectOpen(true)}>
                 <FolderPlus size={14} /> New project…
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => smdeckInput.current?.click()}>
                 <FileUp size={14} /> Load .smdeck…
               </DropdownMenuItem>
-              <DropdownMenuSeparator style={{ background: "#2a2a2e" }} />
+              <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setImportOpen(true)}>
                 <Import size={14} /> Import / paste…
               </DropdownMenuItem>
@@ -231,32 +213,42 @@ export function LibraryView({ nav }: { nav: SsNav }) {
 
       <main style={{ padding: "26px clamp(18px, 4vw, 44px) 60px" }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 16 }}>
-          <div className="ss-label" style={{ fontSize: 12 }}>Decks — {decks ? decks.length : "…"}</div>
+          <div className="ss-label" style={{ fontSize: 11 }}>Decks — {decks ? decks.length : "…"}</div>
           <div className="ss-label">~/Stagesmith/decks · folder is the project</div>
         </div>
 
         {!decks ? (
-          <div className="ss-label" style={{ padding: "40px 0" }}>Loading…</div>
+          <div className="ss-library-grid" aria-hidden>
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="ss-card" style={{ pointerEvents: "none" }}>
+                <div className="ss-card-frame ss-shimmer" style={{ aspectRatio: "16/9" }} />
+                <div className="ss-card-body">
+                  <div style={{ height: 14, width: "56%", borderRadius: 7, background: "var(--ss-hov)", marginBottom: 8 }} />
+                  <div style={{ height: 10, width: "38%", borderRadius: 6, background: "var(--ss-hov)" }} />
+                </div>
+              </div>
+            ))}
+          </div>
         ) : decks.length === 0 ? (
           <div
             style={{
-              border: "1px dashed var(--ss-line-strong)",
+              border: "1.5px dashed var(--ss-line-strong)",
               borderRadius: 16,
               padding: "60px 20px",
               textAlign: "center",
               color: "var(--ss-mut)",
             }}
           >
-            <Layers size={30} style={{ margin: "0 auto 14px", display: "block", opacity: .6 }} />
-            <div style={{ font: "500 15px var(--ss-sans)", color: "var(--ss-ink2)" }}>No decks yet</div>
-            <div style={{ font: "400 13px var(--ss-sans)", marginTop: 6 }}>
+            <Layers size={30} style={{ margin: "0 auto 14px", display: "block", opacity: 0.6 }} />
+            <div style={{ font: "600 15px var(--ss-fd)", color: "var(--ss-ink2)" }}>No decks yet</div>
+            <div style={{ font: "400 13px var(--ss-fb)", marginTop: 6 }}>
               Create a starter deck, or import a .smdeck / .deck.tsx / AI answer.
             </div>
           </div>
         ) : (
           <div className="ss-library-grid">
             {decks.map((d) => (
-              <DeckCard key={d.id} deck={d} bundle={bundles[d.id]} nav={nav} onDeleted={refresh} onDuplicated={refresh} />
+              <DeckCard key={d.id} deck={d} nav={nav} onDeleted={refresh} onDuplicated={refresh} />
             ))}
           </div>
         )}
@@ -267,9 +259,9 @@ export function LibraryView({ nav }: { nav: SsNav }) {
 
       {/* New deck */}
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
-        <DialogContent style={{ background: "#101012", borderColor: "#2a2a2e", color: "#f1f1f2" }}>
+        <DialogContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)", borderRadius: 18 }}>
           <DialogHeader>
-            <DialogTitle style={{ color: "#f1f1f2" }}>New deck</DialogTitle>
+            <DialogTitle style={{ color: "var(--ss-ink)", font: "700 17px var(--ss-fd)", letterSpacing: "-.01em" }}>New deck</DialogTitle>
           </DialogHeader>
           <div style={{ display: "grid", gap: 12, padding: "4px 0" }}>
             <div className="ss-label">Deck title</div>
@@ -283,7 +275,7 @@ export function LibraryView({ nav }: { nav: SsNav }) {
                 if (e.key === "Enter") createDeck();
               }}
             />
-            <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-mut)" }}>
+            <div style={{ font: "400 12px var(--ss-fb)", color: "var(--ss-mut)" }}>
               Creates a folder with a title slide, end slide, theme.css and a grid background.
             </div>
           </div>
@@ -297,9 +289,9 @@ export function LibraryView({ nav }: { nav: SsNav }) {
 
       {/* Import */}
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
-        <DialogContent style={{ background: "#101012", borderColor: "#2a2a2e", color: "#f1f1f2", maxWidth: 560 }}>
+        <DialogContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)", borderRadius: 18, maxWidth: 560 }}>
           <DialogHeader>
-            <DialogTitle style={{ color: "#f1f1f2" }}>Import a deck</DialogTitle>
+            <DialogTitle style={{ color: "var(--ss-ink)", font: "700 17px var(--ss-fd)", letterSpacing: "-.01em" }}>Import a deck</DialogTitle>
           </DialogHeader>
           <div style={{ display: "grid", gap: 16, padding: "4px 0" }}>
             <div>
@@ -329,7 +321,7 @@ export function LibraryView({ nav }: { nav: SsNav }) {
               />
               <textarea
                 className="ss-input"
-                style={{ width: "100%", height: 140, padding: "10px 12px", resize: "vertical", fontFamily: "var(--ss-mono)", fontSize: 12 }}
+                style={{ width: "100%", height: 140, padding: "10px 12px", resize: "vertical", fontFamily: "var(--ss-fm)", fontSize: 12 }}
                 placeholder={"// @file slides/intro.tsx\nexport default function Slide() {\n  …\n}"}
                 value={pasted}
                 onChange={(e) => setPasted(e.target.value)}
@@ -347,15 +339,23 @@ export function LibraryView({ nav }: { nav: SsNav }) {
   );
 }
 
+/** Slidesmith-style brand mark — two overlapping rounded rects */
+export function BrandLogo({ size = 23 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="8.5" y="3.5" width="12" height="12" rx="3" stroke="#3fe0c0" strokeWidth="1.8" />
+      <rect x="3.5" y="8.5" width="12" height="12" rx="3" stroke="#4da8ff" strokeWidth="1.8" style={{ fill: "var(--ss-panel, #0d1322)" }} />
+    </svg>
+  );
+}
+
 function DeckCard({
   deck,
-  bundle,
   nav,
   onDeleted,
   onDuplicated,
 }: {
   deck: DeckSummary;
-  bundle?: DeckBundle;
   nav: SsNav;
   onDeleted: () => void;
   onDuplicated: () => void;
@@ -363,6 +363,12 @@ function DeckCard({
   const { toast } = useToast();
   const { ref, inView } = useInView<HTMLDivElement>();
   const [confirming, setConfirming] = useState(false);
+  const [sig, setSig] = useState(deck.signature);
+
+  // keep the cover thumbnail fresh without a full refresh
+  useEffect(() => {
+    setSig(deck.signature);
+  }, [deck.signature]);
 
   return (
     <div className="ss-card">
@@ -372,21 +378,14 @@ function DeckCard({
         onClick={() => nav.deck(deck.id)}
         title={`Open ${deck.title}`}
       >
-        {inView && bundle ? (
-          <StageFrame
-            deckId={deck.id}
-            slide={bundle.deck.slides[0] ?? null}
-            deckBg={bundle.deck.bg}
-            deckOverlay={bundle.deck.overlay}
-            themeCss={bundle.themeCss}
-            mode={bundle.deck.settings.defaultMode}
-            staticMode
-            version={bundle.signature}
+        {inView ? (
+          <ThumbImg
+            src={api.thumbUrl(deck.id, "cover", { w: 480, v: sig })}
+            alt={`${deck.title} — cover`}
+            fetchPriority="low"
           />
         ) : (
-          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-            <span className="ss-label" style={{ opacity: 0.5 }}>…</span>
-          </div>
+          <span className="ss-shimmer" aria-hidden />
         )}
       </div>
       <div className="ss-card-body">
@@ -401,9 +400,9 @@ function DeckCard({
                 gap: 3,
                 marginLeft: 7,
                 verticalAlign: "middle",
-                font: "500 10px var(--ss-mono)",
+                font: "500 10px var(--ss-fm)",
                 color: "var(--ss-mut)",
-                border: "1px solid var(--ss-line-strong)",
+                border: "1px solid var(--ss-line)",
                 borderRadius: 99,
                 padding: "1px 7px",
                 letterSpacing: ".06em",
@@ -428,13 +427,10 @@ function DeckCard({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="ss-btn ss-btn-icon" style={{ height: 30, width: 30 }} title="More">
-              <QrCode size={0} style={{ display: "none" }} />
-              <Presentation size={0} style={{ display: "none" }} />
-              <Copy size={0} style={{ display: "none" }} />
-              <span style={{ font: "600 14px var(--ss-mono)" }}>···</span>
+              <span style={{ font: "600 14px var(--ss-fm)", letterSpacing: 1 }}>···</span>
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+          <DropdownMenuContent>
             <DropdownMenuItem
               onClick={async () => {
                 try {
@@ -454,9 +450,9 @@ function DeckCard({
             <DropdownMenuItem onClick={() => download(api.exportUrl(deck.id, "deck.tsx"), `${deck.id}.deck.tsx`)}>
               <Import size={14} /> Export .deck.tsx
             </DropdownMenuItem>
-            <DropdownMenuSeparator style={{ background: "#2a2a2e" }} />
+            <DropdownMenuSeparator />
             <DropdownMenuItem
-              style={{ color: "#f26d6d" }}
+              style={{ color: "var(--ss-danger)" }}
               onClick={() => {
                 if (!confirming) {
                   setConfirming(true);
@@ -473,7 +469,7 @@ function DeckCard({
                 }).catch((e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }));
               }}
             >
-              <Trash2 size={14} />{" "}
+              <ExternalLink size={0} style={{ display: "none" }} />
               {confirming
                 ? "Click again to confirm"
                 : deck.external

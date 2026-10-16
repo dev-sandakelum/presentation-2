@@ -1,12 +1,9 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
-import CodeMirror from "@uiw/react-codemirror";
-import { javascript } from "@codemirror/lang-javascript";
-import { oneDark } from "@codemirror/theme-one-dark";
-import { EditorView } from "@codemirror/view";
-import { EditorSelection } from "@codemirror/state";
-import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, Save, Trash2, Upload, WandSparkles } from "lucide-react";
+import dynamic from "next/dynamic";
+import type { EditorView } from "@codemirror/view";
+import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, PanelBottom, PanelRight, Save, Trash2, Upload, WandSparkles } from "lucide-react";
 import type { DeckJson, FileRow, SlideEntry, Source } from "@/lib/stagesmith/types";
 import { api } from "@/lib/stagesmith/client";
 import { FORMATABLE_EXT, formatTsx } from "@/lib/stagesmith/format";
@@ -15,6 +12,16 @@ import { copyText, fixPrompt, sourceLabel } from "./shared";
 import { resolveCode } from "./StageFrame";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+/** the whole CodeMirror stack loads in its own chunk — fast first paint */
+const CmEditor = dynamic(() => import("./editor/CmEditor"), {
+  ssr: false,
+  loading: () => (
+    <div style={{ height: "100%", display: "grid", placeItems: "center" }}>
+      <span className="ss-label" style={{ opacity: 0.45 }}>Loading editor…</span>
+    </div>
+  ),
+});
 
 export type CodeTab = "slide" | "bg" | "overlay" | "notes" | "assets" | "theme";
 
@@ -25,11 +32,6 @@ export interface GotoError {
   col: number;
   nonce: number;
 }
-
-/* line wrapping everywhere (fix-list item 2) + TSX highlighting */
-const WRAP = EditorView.lineWrapping;
-const TSX_EXT = [javascript({ jsx: true, typescript: true }), WRAP];
-const PLAIN_EXT = [WRAP];
 
 /**
  * Format a TSX buffer once, when it first appears in the editor
@@ -78,6 +80,9 @@ export const CodePane = memo(function CodePane(props: {
   /** fix-list item 1: minimized = tab bar only, preview grows */
   minimized: boolean;
   onToggleMinimize: () => void;
+  /** dock the editor as a right side panel (full-height, scrollable) */
+  side: boolean;
+  onToggleSide: () => void;
   /** fix-list item 4: open this slide with the cursor on the error line */
   gotoError: GotoError | null;
 }) {
@@ -182,31 +187,48 @@ export const CodePane = memo(function CodePane(props: {
     if (slideBuffer === undefined) return; // still loading
     const view = viewRef.current;
     if (!view) return;
-    const line = Math.max(1, Math.min(goto.line, view.state.doc.lines));
-    const lineInfo = view.state.doc.line(line);
-    const pos = Math.min(lineInfo.to, lineInfo.from + Math.max(0, goto.col));
-    view.dispatch({
-      selection: EditorSelection.cursor(pos),
-      effects: EditorView.scrollIntoView(pos, { y: "center" }),
-    });
-    view.focus();
+    let cancelled = false;
+    (async () => {
+      const { EditorSelection, EditorView: EV } = await import("./editor/bits");
+      if (cancelled) return;
+      const line = Math.max(1, Math.min(goto.line, view.state.doc.lines));
+      const lineInfo = view.state.doc.line(line);
+      const pos = Math.min(lineInfo.to, lineInfo.from + Math.max(0, goto.col));
+      view.dispatch({
+        selection: EditorSelection.cursor(pos),
+        effects: EV.scrollIntoView(pos, { y: "center" }),
+      });
+      view.focus();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [goto, sel, tab, slideBuffer, props.minimized]);
 
-  /* multi-line paste → format (fix-list item 2) */
+  /* multi-line paste → format (fix-list item 2) — the domEventHandlers
+     extension arrives with the lazy editor chunk */
   const formatActiveRef = useRef(formatActive);
   formatActiveRef.current = formatActive;
-  const pasteFormatExt = useMemo(
-    () =>
-      EditorView.domEventHandlers({
-        paste: (e) => {
-          const text = e.clipboardData?.getData("text/plain") ?? "";
-          if (/\n/.test(text.trim())) {
-            setTimeout(() => formatActiveRef.current(), 60);
-          }
-        },
-      }),
-    [],
-  );
+  const [pasteFormatExt, setPasteFormatExt] = useState<unknown>(null);
+  useEffect(() => {
+    let cancelled = false;
+    import("./editor/bits").then(({ EditorView: EV }) => {
+      if (cancelled) return;
+      setPasteFormatExt(
+        EV.domEventHandlers({
+          paste: (e) => {
+            const text = e.clipboardData?.getData("text/plain") ?? "";
+            if (/\n/.test(text.trim())) {
+              setTimeout(() => formatActiveRef.current(), 60);
+            }
+          },
+        }),
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const tabs: Array<{ key: CodeTab; label: string; badge?: boolean }> = [
     { key: "slide", label: "Slide", badge: Boolean(slideError) },
@@ -217,10 +239,10 @@ export const CodePane = memo(function CodePane(props: {
     { key: "theme", label: "Theme" },
   ];
 
-  const cmTheme = uiTheme === "light" ? "light" : oneDark;
+  const cmTheme: "dark" | "light" = uiTheme === "light" ? "light" : "dark";
 
   return (
-    <section className={`ss-codepane ${props.minimized ? "min" : ""}`}>
+    <section className={`ss-codepane ${props.minimized ? "min" : ""} ${props.side ? "side" : ""}`}>
       <div className="ss-codepane-head">
         <div className="ss-code-tabs">
           {tabs.map((t) => (
@@ -257,6 +279,14 @@ export const CodePane = memo(function CodePane(props: {
         <button
           className="ss-btn ss-btn-icon"
           style={{ width: 28, height: 26, flex: "none" }}
+          onClick={props.onToggleSide}
+          title={props.side ? "Dock the code panel back at the bottom" : "Move code to the right side panel"}
+        >
+          {props.side ? <PanelBottom size={14} /> : <PanelRight size={14} />}
+        </button>
+        <button
+          className="ss-btn ss-btn-icon"
+          style={{ width: 28, height: 26, flex: "none" }}
           onClick={props.onToggleMinimize}
           title={props.minimized ? "Restore code pane (Ctrl+E)" : "Minimize code pane (Ctrl+E)"}
         >
@@ -278,12 +308,11 @@ export const CodePane = memo(function CodePane(props: {
 
           <div className="ss-codepane-body ss-cm">
             {tab === "slide" && sel && (
-              <CodeMirror
+              <CmEditor
                 value={buffers[slidePath] ?? ""}
                 theme={cmTheme}
-                extensions={[...TSX_EXT, pasteFormatExt]}
-                height="100%"
-                basicSetup={{ foldGutter: true, highlightActiveLine: true, autocompletion: false }}
+                lang="tsx"
+                pasteFormatExt={pasteFormatExt}
                 onChange={(v) => onBufferChange(slidePath, v)}
                 onCreateEditor={(view) => {
                   viewRef.current = view;
@@ -330,11 +359,10 @@ export const CodePane = memo(function CodePane(props: {
             )}
 
             {tab === "notes" && sel && (
-              <CodeMirror
+              <CmEditor
                 value={buffers[notesPath] ?? ""}
                 theme={cmTheme}
-                extensions={PLAIN_EXT}
-                height="100%"
+                lang="plain"
                 onChange={(v) => onBufferChange(notesPath, v)}
               />
             )}
@@ -343,11 +371,10 @@ export const CodePane = memo(function CodePane(props: {
             {tab === "assets" && <AssetsTab deckId={deckId} version={props.version} />}
 
             {tab === "theme" && (
-              <CodeMirror
+              <CmEditor
                 value={buffers["theme.css"] ?? ""}
                 theme={cmTheme}
-                extensions={PLAIN_EXT}
-                height="100%"
+                lang="plain"
                 onChange={(v) => onBufferChange("theme.css", v)}
               />
             )}
@@ -383,7 +410,7 @@ function SourceEditor(props: {
   onOverride: (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => void;
   activeFileRef: React.RefObject<string | null>;
   formatFile: (path: string | null) => Promise<void>;
-  cmTheme: "light" | typeof oneDark;
+  cmTheme: "dark" | "light";
   pasteFormatExt: unknown;
 }) {
   const { layer, deckId, deck, files, sel } = props;
@@ -545,12 +572,11 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
       </div>
       <div className="ss-cm" style={{ flex: 1 }}>
         {effective?.type === "code" && codePath ? (
-          <CodeMirror
+          <CmEditor
             value={props.buffers[codePath] ?? ""}
             theme={props.cmTheme}
-            extensions={[...TSX_EXT, props.pasteFormatExt as never]}
-            height="100%"
-            basicSetup={{ foldGutter: true, highlightActiveLine: true, autocompletion: false }}
+            lang="tsx"
+            pasteFormatExt={props.pasteFormatExt}
             onChange={(v) => props.onBufferChange(codePath, v)}
           />
         ) : (

@@ -243,6 +243,9 @@ async function applyConfig(next) {
   else clearError();
   renderTree();
 
+  // paint marker — the headless thumbnail generator waits for this
+  try { window.__ssRendered = (window.__ssRendered || 0) + 1; } catch (e) {}
+
   // report literal step count after paint
   requestAnimationFrame(() => {
     const steps = stagesmith.getState().declaredSteps;

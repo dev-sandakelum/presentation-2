@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
+import { useCallback, useEffect, useMemo, useState, memo } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -17,7 +17,8 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { Copy, GripVertical, Moon, Plus, Sun, Trash2 } from "lucide-react";
 import type { DeckJson, ThemeMode } from "@/lib/stagesmith/types";
-import { StageFrame } from "./StageFrame";
+import { api } from "@/lib/stagesmith/client";
+import { ThumbImg } from "./ThumbImg";
 import { useInView } from "./LibraryView";
 import { resolveCode } from "./StageFrame";
 import {
@@ -65,23 +66,6 @@ export const Filmstrip = memo(function Filmstrip(props: {
 }) {
   const { deck, deckId, selId } = props;
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [rtErrors, setRtErrors] = useState<Record<string, string>>({});
-
-  // runtime errors reported by the sandboxed thumbnails (item 4).
-  // "compile" phase errors are already counted from resolveCode — skip them.
-  // Stable per-slide callbacks keyed by slideId so SortableThumb doesn't re-render
-  // when an unrelated slide gets a runtime error.
-  const rtErrorsRef = useRef(rtErrors);
-  rtErrorsRef.current = rtErrors;
-
-  const onSlideRuntimeError = useCallback((slideId: string, err: { phase: string; message: string }) => {
-    if (err.phase === "compile") return;
-    const msg = `${err.phase} error — ${err.message}`;
-    setRtErrors((prev) => (prev[slideId] === msg ? prev : { ...prev, [slideId]: msg }));
-  }, []);
-  useEffect(() => {
-    setRtErrors({}); // fresh compile → stale runtime errors are dropped
-  }, [props.version]);
 
   // fetch compile meta for all slides (filmstrip badges — plan §6)
   useEffect(() => {
@@ -102,9 +86,8 @@ export const Filmstrip = memo(function Filmstrip(props: {
   }, [deckId, props.version, deck.slides.map((s) => s.id).join(",")]);
 
   const mergedError = useCallback((id: string): string | undefined => {
-    const parts = [errors[id], rtErrors[id]].filter(Boolean) as string[];
-    return parts.length ? parts.join("\n") : undefined;
-  }, [errors, rtErrors]);
+    return errors[id];
+  }, [errors]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const ids = useMemo(() => (deck.slides ?? []).map((s) => s.id), [deck.slides]);
@@ -146,7 +129,6 @@ export const Filmstrip = memo(function Filmstrip(props: {
                 onRename={props.onRename}
                 onSetTheme={props.onSetTheme}
                 onJumpToError={props.onJumpToError}
-                onRuntimeError={onSlideRuntimeError}
               />
             ))}
           </SortableContext>
@@ -209,7 +191,6 @@ const SortableThumb = memo(function SortableThumb(props: {
   onRename: (id: string, label: string) => void;
   onSetTheme: (id: string, theme: ThemeMode | null) => void;
   onJumpToError: (id: string, line: number, col: number) => void;
-  onRuntimeError: (slideId: string, err: { phase: string; message: string }) => void;
 }) {
   const { entry, deckId, deck, index, selected, error } = props;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
@@ -220,13 +201,7 @@ const SortableThumb = memo(function SortableThumb(props: {
   // fix-list item 5: the dot means a *background* override — nothing else
   const hasBgOverride = Boolean(entry.bg && entry.bg.type !== "none");
   const count = error ? errorCount(error) : 0;
-
-  // Stable per-entry callbacks — avoids passing new function identity on every parent render
-  const onRuntimeError = useCallback(
-    (err: { phase: string; message: string }) => props.onRuntimeError(entry.id, err),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [entry.id, props.onRuntimeError],
-  );
+  const mode = entry.theme ?? deck.settings.defaultMode;
   const onSelect = useCallback(() => props.onSelect(entry.id), [entry.id, props.onSelect]);
   const onDuplicate = useCallback(() => props.onDuplicate(entry.id), [entry.id, props.onDuplicate]);
   const onDelete = useCallback(() => props.onDelete(entry.id), [entry.id, props.onDelete]);
@@ -236,7 +211,6 @@ const SortableThumb = memo(function SortableThumb(props: {
       const { line, col } = errorLineCol(error ?? "");
       props.onJumpToError(entry.id, line, col);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [entry.id, error, props.onJumpToError],
   );
 
@@ -254,23 +228,13 @@ const SortableThumb = memo(function SortableThumb(props: {
             title={entry.label}
           >
             {inView ? (
-              <StageFrame
-                deckId={deckId}
-                slide={entry}
-                deckBg={deck.bg}
-                deckOverlay={deck.overlay}
-                themeCss={props.themeCss}
-                mode={entry.theme ?? deck.settings.defaultMode}
-                staticMode
-                version={props.version}
-                slideIndex={index}
-                slideTotal={deck.slides.length}
-                onRuntimeError={onRuntimeError}
+              <ThumbImg
+                src={api.thumbUrl(deckId, entry.id, { w: 480, mode, v: props.version })}
+                alt={`${entry.label} — slide ${index + 1}`}
+                fetchPriority={index < 3 ? "high" : "low"}
               />
             ) : (
-              <div style={{ aspectRatio: "16/9", display: "grid", placeItems: "center" }}>
-                <span className="ss-label" style={{ opacity: 0.4 }}>…</span>
-              </div>
+              <span className="ss-shimmer" aria-hidden />
             )}
             <span className="ss-thumb-num">{String(index + 1).padStart(2, "0")}</span>
             {error && (
@@ -307,7 +271,7 @@ const SortableThumb = memo(function SortableThumb(props: {
                 <Copy size={12} />
               </span>
               <span
-                className="ss-thumb-act"
+                className="ss-thumb-act del"
                 title="Delete"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -351,7 +315,7 @@ const SortableThumb = memo(function SortableThumb(props: {
             )}
           </div>
         </ContextMenuTrigger>
-        <ContextMenuContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+        <ContextMenuContent>
           <ContextMenuItem onClick={() => setRenaming(true)}>
             Rename
           </ContextMenuItem>
@@ -360,7 +324,7 @@ const SortableThumb = memo(function SortableThumb(props: {
           </ContextMenuItem>
           <ContextMenuSub>
             <ContextMenuSubTrigger>Slide theme</ContextMenuSubTrigger>
-            <ContextMenuSubContent style={{ background: "#141417", borderColor: "#2a2a2e", color: "#e8e8ea" }}>
+            <ContextMenuSubContent>
               <ContextMenuItem onClick={() => props.onSetTheme(entry.id, null)}>
                 Use deck default ({deck.settings.defaultMode})
               </ContextMenuItem>
@@ -372,9 +336,9 @@ const SortableThumb = memo(function SortableThumb(props: {
               </ContextMenuItem>
             </ContextMenuSubContent>
           </ContextMenuSub>
-          <ContextMenuSeparator style={{ background: "#2a2a2e" }} />
+          <ContextMenuSeparator />
           <ContextMenuItem
-            style={{ color: "#f26d6d" }}
+            style={{ color: "var(--ss-danger)" }}
             onClick={onDelete}
           >
             <Trash2 size={13} /> Delete slide

@@ -82,6 +82,14 @@ export interface DeckSummary {
   external?: boolean;
 }
 
+/** full deck payload used by the editor / presenter / remote (client + SSR) */
+export interface DeckBundle {
+  deck: DeckJson;
+  files: FileRow[];
+  signature: string;
+  themeCss: string;
+}
+
 export interface CompileResult {
   ok: boolean;
   /** url of compiled module (with cache-busting version) */

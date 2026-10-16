@@ -4,16 +4,27 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Smartphone } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { api } from "@/lib/stagesmith/client";
-import type { DeckJson } from "@/lib/stagesmith/types";
+import type { DeckBundle, DeckJson } from "@/lib/stagesmith/types";
 import { useSync } from "@/hooks/useSync";
+import type { SsNav } from "./shared";
 
 /**
  * Phone remote (plan §7): dark, mobile-first. Status badge, current slide,
  * big Prev/Next, slide list, collapsible notes, footer with all decks.
  * Control requires the deck token (server-enforced).
  */
-export function RemoteView({ deckId, token }: { deckId: string; token: string | null }) {
-  const [deck, setDeck] = useState<DeckJson | null>(null);
+export function RemoteView({
+  deckId,
+  token,
+  nav,
+  initialBundle,
+}: {
+  deckId: string;
+  token: string | null;
+  nav?: SsNav;
+  initialBundle?: DeckBundle | null;
+}) {
+  const [deck, setDeck] = useState<DeckJson | null>(initialBundle?.deck ?? null);
   const [notes, setNotes] = useState<string>("");
   const [host, setHost] = useState<string>("stagesmith");
 
@@ -28,9 +39,27 @@ export function RemoteView({ deckId, token }: { deckId: string; token: string | 
   const listRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<HTMLButtonElement | null>(null);
 
+  // SSR already delivered the deck — only fetch when it is missing or stale
   useEffect(() => {
+    if (initialBundle?.deck && initialBundle.deck.id === deckId) return;
     api.getDeck(deckId).then((b) => setDeck(b.deck)).catch(() => {});
-  }, [deckId]);
+  }, [deckId, initialBundle]);
+
+  // live edit: keep the slide list current while presenting
+  useEffect(() => {
+    const t = setInterval(async () => {
+      try {
+        const sig = await api.poll(deckId);
+        if (sig !== (initialBundle?.signature ?? "")) {
+          const b = await api.getDeck(deckId);
+          setDeck(b.deck);
+        }
+      } catch {
+        /* keep polling */
+      }
+    }, 2500);
+    return () => clearInterval(t);
+  }, [deckId, initialBundle?.signature]);
 
   // notes for the current slide
   useEffect(() => {
@@ -53,7 +82,7 @@ export function RemoteView({ deckId, token }: { deckId: string; token: string | 
         <div className={`ss-remote-status ${status}`}>
           <span className="dot" />
           {statusLabel}
-          {sync.error && <span style={{ color: "#f26d6d", textTransform: "none", letterSpacing: 0 }}> · {sync.error}</span>}
+          {sync.error && <span style={{ color: "var(--ss-danger)", textTransform: "none", letterSpacing: 0 }}> · {sync.error}</span>}
         </div>
         <div className="ss-remote-title">{current?.label ?? (deck?.title ?? deckId)}</div>
         <div className="ss-remote-counter">
@@ -107,7 +136,7 @@ export function RemoteView({ deckId, token }: { deckId: string; token: string | 
       )}
 
       <footer className="ss-remote-foot">
-        <a href="/?view=library">
+        <a href="/" onClick={(e) => { e.preventDefault(); nav?.library(); }}>
           <Smartphone size={12} style={{ verticalAlign: -2, marginRight: 5 }} />
           All decks
         </a>

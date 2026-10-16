@@ -1,6 +1,8 @@
 "use client";
 
-import type { DeckJson, DeckSummary, FileRow, Source, ThemeMode } from "./types";
+import type { DeckJson, DeckBundle, DeckSummary, FileRow, Source, ThemeMode } from "./types";
+
+export type { DeckBundle };
 
 /** Typed fetch helpers for the Stagesmith API */
 
@@ -20,12 +22,7 @@ async function j<T>(res: Response): Promise<T> {
   return body as T;
 }
 
-export interface DeckBundle {
-  deck: DeckJson;
-  files: FileRow[];
-  signature: string;
-  themeCss: string;
-}
+export type DeckBundleView = DeckBundle;
 
 /** /api/fs — directory browser row */
 export interface FsBrowse {
@@ -254,6 +251,30 @@ export const api = {
 
   exportUrl: (deckId: string, format: "smdeck" | "deck.tsx") =>
     `/api/decks/${deckId}/export?format=${encodeURIComponent(format)}`,
+
+  /** auto-generated static thumbnail of a slide ("cover" = first slide) */
+  thumbUrl: (
+    deckId: string,
+    slideId: string,
+    opts?: { w?: number; mode?: ThemeMode; v?: string | number; layers?: "full" | "content"; np?: boolean },
+  ) => {
+    const q = new URLSearchParams();
+    q.set("w", String(opts?.w ?? 480));
+    if (opts?.mode) q.set("mode", opts.mode);
+    if (opts?.layers) q.set("layers", opts.layers);
+    if (opts?.v !== undefined) q.set("v", String(opts.v));
+    if (opts?.np) q.set("np", "1");
+    return `/api/decks/${deckId}/thumb/${encodeURIComponent(slideId)}?${q.toString()}`;
+  },
+
+  /** warm all slide thumbnails of a deck in the background (fire & forget) */
+  warmThumbs: async (deckId: string, v?: string | number, mode?: ThemeMode): Promise<void> => {
+    try {
+      await fetch(api.thumbUrl(deckId, "_warm", { v, mode }));
+    } catch {
+      /* background nicety */
+    }
+  },
 
   browseFs: async (dirPath?: string): Promise<FsBrowse> => {
     const q = dirPath ? `?path=${encodeURIComponent(dirPath)}` : "";

@@ -7,7 +7,7 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
-  serverExternalPackages: ["esbuild"],
+  serverExternalPackages: ["esbuild", "playwright-core"],
   allowedDevOrigins: ["10.161.79.82"],
 };
 

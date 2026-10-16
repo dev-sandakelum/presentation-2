@@ -90,7 +90,7 @@ export function QrPanel({
                   flex: "none",
                   border: i === sel ? "1px solid var(--ss-acc)" : "1px solid var(--ss-line)",
                   color: i === sel ? "var(--ss-ink)" : "var(--ss-mut)",
-                  background: i === sel ? "var(--ss-card)" : "transparent",
+                  background: i === sel ? "var(--ss-hov)" : "transparent",
                 }}
                 title={o.iface ? `Network interface: ${o.iface}` : o.url}
                 onClick={() => setSel(i)}

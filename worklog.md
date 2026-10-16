@@ -83,3 +83,22 @@ Stage Summary:
 - QR panel is now network-aware: same-network IP-based remote URLs for phone clickers, origin URL behind the public preview
 - Project "stagelink" exists at /home/z/my-project/stagelink (external, linked) — fully editable/presentable; remove via card menu if not wanted
 - Key artifacts: src/lib/stagesmith/registry.ts, src/components/stagesmith/NewProjectDialog.tsx, src/app/api/{fs,projects,network}/route.ts, updated store.ts/client.ts/LibraryView.tsx/QrPanel.tsx/useSync.ts/mini-services/stagesmith-sync/index.ts
+
+---
+Task ID: 5
+Agent: main (Super Z)
+Task: Add a button to the code pane section that moves the code editor into a right-side panel (full-height, scrollable, resizable) — user request with screenshot of the OVERLAY tab header.
+
+Work Log:
+- Viewed the user's screenshot via VLM (CodePane header: SLIDE/BG/OVERLAY/NOTES/ASSETS/THEME tabs + Format/Save + chevron).
+- DashboardView.tsx: new persisted layout state — codeSide (ss-code-side) + codeSideW (ss-code-side-w, default 480, clamp 300–1000 while keeping 420px for the preview). PreviewPane wrapped in a new .ss-preview-main column; .ss-preview-wrap gets class "side" + inline --ss-code-w var when side && !minimized. Added a 5px drag resizer (.ss-side-resizer) between preview and panel — pointer-capture drag, live width update, persisted on pointerup, userSelect guard during drag.
+- CodePane.tsx: new side/onToggleSide props; PanelRight (bottom mode → click docks right) / PanelBottom (side mode → click docks back) icon button placed left of the minimize chevron, visible in minimized state too.
+- stagesmith.css: .ss-preview-main; .ss-preview-wrap.side row layout; side codepane = border-left, full stretch, width var, max-width 72%; head + tab-row flex-wrap (narrow panels wrap instead of overflow — verified 299px no overflow, head 128px 3 rows); .ss-codepane-body flexes to full panel height (overrides fixed 260px) so the CodeMirror scroller becomes a tall scrollable editor; resizer styles with 13px hit area + accent hover/drag.
+- Minimize interplay: side mode is suspended while minimized (wrap drops "side") — the min bar keeps the familiar bottom-dock shape and the preview reclaims full width; Ctrl+E roundtrips back to the side panel at the same width. gotoError flow unaffected (it only clears minimized).
+- Fixed broken lint toolchain found during verification (pre-existing, not feature-related): node_modules had stale eslint-config-next@14 (eslintrc-style, incompatible with ESLint 9 flat) — upgraded to eslint-config-next@16.4.2 matching Next 16 and restored the original direct flat imports; cleaned 5 pre-existing lint problems (DeckBundleView empty interface → type alias, stock shadcn carousel setState-in-effect disable comment, 3 unused eslint-disable directives).
+- Verified with agent-browser + VLM on ?deck=slidesmith-theme-test: side toggle works (pane 479×846 full height, preview refits to exact 16:9 809×455 via existing ResizeObserver); drag 479→598→550 persisted (ss-code-side-w); theme.css/overlay/assets tabs all render in the tall panel (srcbar fits, assets scroll); forced-overflow scroll test passed (scrollTop 200 on 743>493 scroller); narrow 299px wraps with zero overflow; Ctrl+E min bar + restore keeps 598px; reload persists side mode + width; dock-back button returns to 260px bottom editor and clears the flag; light + dark themes clean; zero page errors; tsc clean; full-project eslint 0 problems.
+
+Stage Summary:
+- The code pane now has a PanelRight/PanelBottom dock toggle in its header (screenshot section): one click moves the code block into a right-side panel — full-height, scrollable CodeMirror editor, drag-resizable (300–1000px, preview guaranteed 420px+), persisted across sessions (position + width).
+- Key artifacts: src/components/stagesmith/DashboardView.tsx, src/components/stagesmith/CodePane.tsx, src/app/stagesmith.css, eslint.config.mjs (repaired), package.json (eslint-config-next@16.4.2).
+- Note: the decks folder currently holds "hi" and "slidesmith-theme-test" (nextjs-unlocked was removed in an earlier session); the stagelink external project still exists.

@@ -1,14 +1,9 @@
-"use client";
-
-import { Suspense, useCallback, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 import "./stagesmith.css";
-import { LibraryView } from "@/components/stagesmith/LibraryView";
-import { DashboardView } from "@/components/stagesmith/DashboardView";
-import { PresentView } from "@/components/stagesmith/PresentView";
-import { RemoteView } from "@/components/stagesmith/RemoteView";
+import { ViewsShell } from "@/components/stagesmith/ViewsShell";
+import { getDeckBundle, listDecksSafe } from "@/lib/stagesmith/bundle";
 
-
+export const dynamic = "force-dynamic";
 
 /**
  * Stagesmith — code-first presentation studio.
@@ -17,7 +12,48 @@ import { RemoteView } from "@/components/stagesmith/RemoteView";
  *   /?deck=<id>            → dashboard (editor)
  *   /?deck=<id>&present=1  → display (presenter)
  *   /?remote=<id>&t=<tok>  → phone remote
+ *
+ * Server-rendered: initial data (deck list / deck bundle) is fetched on the
+ * server, so the first paint is real HTML — no client loading spinners.
  */
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
+  const str = (k: string): string | null => {
+    const v = sp[k];
+    return typeof v === "string" && v.length > 0 ? v : null;
+  };
+  const deck = str("deck");
+  const present = str("present");
+  const remote = str("remote");
+  const token = str("t");
+  const from = str("from");
+
+  // Server-side initial data — failures degrade to client fetching
+  const [initialDecks, initialDeckBundle, initialRemoteBundle] = await Promise.all([
+    !deck && !remote ? listDecksSafe() : Promise.resolve(null),
+    deck ? getDeckBundle(deck).catch(() => null) : Promise.resolve(null),
+    remote ? getDeckBundle(remote).catch(() => null) : Promise.resolve(null),
+  ]);
+
+  return (
+    <Suspense fallback={<Boot />}>
+      <ViewsShell
+        deck={deck}
+        present={present}
+        remote={remote}
+        token={token}
+        from={from}
+        initialDecks={initialDecks}
+        initialDeckBundle={initialDeckBundle}
+        initialRemoteBundle={initialRemoteBundle}
+      />
+    </Suspense>
+  );
+}
 
 function Boot() {
   return (
@@ -25,48 +61,4 @@ function Boot() {
       <div className="ss-label" style={{ letterSpacing: ".3em" }}>Loading Stagesmith…</div>
     </div>
   );
-}
-
-function Views({ view, deck, present, remote, token, from }: { view: string; deck: string | null; present: string | null; remote: string | null; token: string | null; from: string | null }) {
-  const router = useRouter();
-  const go = useCallback(
-    (url: string) => {
-      router.push(url, { scroll: false });
-    },
-    [router],
-  );
-
-  const nav = useMemo(
-    () => ({
-      library: () => go("/"),
-      deck: (id: string) => go(`/?deck=${encodeURIComponent(id)}`),
-      present: (id: string, from?: number) =>
-        go(`/?deck=${encodeURIComponent(id)}&present=1${from !== undefined ? `&from=${from}` : ""}`),
-    }),
-    [go],
-  );
-
-  if (remote) return <RemoteView deckId={remote} token={token} />;
-  if (deck && present) return <PresentView deckId={deck} fromParam={from} nav={nav} />;
-  if (deck) return <DashboardView deckId={deck} nav={nav} />;
-  return <LibraryView nav={nav} />;
-}
-
-export default function Page() {
-  return (
-    <Suspense fallback={<Boot />}>
-      <Shell />
-    </Suspense>
-  );
-}
-
-function Shell() {
-  const sp = useSearchParams();
-  const view = sp.get("view");
-  const deck = sp.get("deck");
-  const present = sp.get("present");
-  const remote = sp.get("remote");
-  const token = sp.get("t");
-  const from = sp.get("from");
-  return <Views view={view || ""} deck={deck} present={present} remote={remote} token={token} from={from} />;
 }

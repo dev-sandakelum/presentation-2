@@ -21,6 +21,7 @@ import { Filmstrip } from "./Filmstrip";
 import { PreviewPane } from "./PreviewPane";
 import { CodePane, type CodeTab, type GotoError } from "./CodePane";
 import { QrPanel } from "./QrPanel";
+import { BrandLogo } from "./LibraryView";
 import { useSync } from "@/hooks/useSync";
 import { useUiTheme, hydrateUiTheme } from "@/hooks/useUiTheme";
 import { download, type SsNav } from "./shared";
@@ -36,6 +37,12 @@ import {
 
 const SAVE_DEBOUNCE = 320; // ms — plan: ~400 ms autosave
 const CODE_MIN_KEY = "ss-code-minimized"; // fix-list item 1: remembered between sessions
+/* code panel dock position (right side vs bottom) + side width — persisted */
+const CODE_SIDE_KEY = "ss-code-side";
+const CODE_SIDE_W_KEY = "ss-code-side-w";
+const CODE_SIDE_DEFAULT_W = 480;
+const CODE_SIDE_MIN_W = 300;
+const CODE_SIDE_MAX_W = 1000;
 
 function readCodeMinimized(): boolean {
   try {
@@ -45,17 +52,38 @@ function readCodeMinimized(): boolean {
   }
 }
 
-export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
+function readCodeSide(): boolean {
+  try {
+    return window.localStorage.getItem(CODE_SIDE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function readCodeSideW(): number {
+  try {
+    const n = Number(window.localStorage.getItem(CODE_SIDE_W_KEY));
+    return Number.isFinite(n) && n >= CODE_SIDE_MIN_W && n <= CODE_SIDE_MAX_W ? n : CODE_SIDE_DEFAULT_W;
+  } catch {
+    return CODE_SIDE_DEFAULT_W;
+  }
+}
+
+export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; nav: SsNav; initialBundle: DeckBundle | null }) {
   const { toast } = useToast();
-  const [bundle, setBundle] = useState<DeckBundle | null>(null);
-  const [deck, setDeck] = useState<DeckJson | null>(null);
-  const [themeCss, setThemeCss] = useState("");
-  const [version, setVersion] = useState("boot");
+  const [bundle, setBundle] = useState<DeckBundle | null>(initialBundle ?? null);
+  const [deck, setDeck] = useState<DeckJson | null>(initialBundle?.deck ?? null);
+  const [themeCss, setThemeCss] = useState(initialBundle?.themeCss ?? "");
+  const [version, setVersion] = useState(initialBundle?.signature ?? "boot");
   const [selId, setSelId] = useState<string | null>(null);
   const [buffers, setBuffers] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
   const [saveState, setSaveState] = useState<"saved" | "saving" | "idle">("idle");
   const [codeMinimized, setCodeMinimized] = useState(false);
+  /** dock the code editor as a right side panel (user request) */
+  const [codeSide, setCodeSide] = useState(false);
+  const [codeSideW, setCodeSideW] = useState(CODE_SIDE_DEFAULT_W);
+  const [sideDragging, setSideDragging] = useState(false);
   const [tab, setTab] = useState<CodeTab>("slide");
   const [qrOpen, setQrOpen] = useState(false);
   const [snapshots, setSnapshots] = useState<string[]>([]);
@@ -69,6 +97,8 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
   // code pane minimize state — persisted (fix-list item 1)
   useEffect(() => {
     setCodeMinimized(readCodeMinimized());
+    setCodeSide(readCodeSide());
+    setCodeSideW(readCodeSideW());
   }, []);
   const toggleCodeMin = useCallback(() => {
     setCodeMinimized((m) => {
@@ -80,6 +110,57 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
       }
       return next;
     });
+  }, []);
+
+  /* ---------- right-side code panel: dock toggle + drag resizer ---------- */
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const sideWRef = useRef(codeSideW);
+  sideWRef.current = codeSideW;
+  const toggleCodeSide = useCallback(() => {
+    setCodeSide((s) => {
+      const next = !s;
+      try {
+        window.localStorage.setItem(CODE_SIDE_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
+  const clampSideW = useCallback((w: number) => {
+    // keep at least ~420px for the preview stage (16:9 needs width most)
+    const avail = wrapRef.current ? wrapRef.current.clientWidth : 1400;
+    const max = Math.min(CODE_SIDE_MAX_W, Math.max(CODE_SIDE_MIN_W, avail - 420));
+    return Math.round(Math.max(CODE_SIDE_MIN_W, Math.min(max, w)));
+  }, []);
+
+  const sideDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const onResizerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    sideDragRef.current = { startX: e.clientX, startW: sideWRef.current };
+    setSideDragging(true);
+    document.body.style.userSelect = "none";
+  }, []);
+  const onResizerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = sideDragRef.current;
+      if (!d) return;
+      // dragging left widens the panel (it lives on the right edge)
+      setCodeSideW(clampSideW(d.startW - (e.clientX - d.startX)));
+    },
+    [clampSideW],
+  );
+  const onResizerUp = useCallback(() => {
+    if (!sideDragRef.current) return;
+    sideDragRef.current = null;
+    setSideDragging(false);
+    document.body.style.userSelect = "";
+    try {
+      window.localStorage.setItem(CODE_SIDE_W_KEY, String(sideWRef.current));
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   // undo/redo of file buffers (plan: 200-step undo)
@@ -115,10 +196,22 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
     refreshSnapshots();
   }, [deckId, refreshSnapshots]);
 
+  // SSR already delivered the bundle — hydrate selection, then only reload
+  // when the bundle is missing or the folder signature moved on
   useEffect(() => {
+    if (initialBundle?.deck && initialBundle.deck.id === deckId) {
+      setSelId((prev) => (prev && initialBundle.deck.slides.some((s) => s.id === prev) ? prev : initialBundle.deck.slides[0]?.id ?? null));
+      refreshSnapshots();
+      return;
+    }
     load().catch((e) => toast({ title: "Could not open deck", description: (e as Error).message, variant: "destructive" }));
-     
   }, [deckId]);
+
+  // warm the auto-generated filmstrip thumbnails in the background
+  useEffect(() => {
+    if (!deck) return;
+    api.warmThumbs(deckId, version);
+  }, [deckId, version, deck]);
 
   /* ---------- folder watching (plan §2: VS Code edits appear live) ---------- */
   const ownSaveRef = useRef(false);
@@ -414,10 +507,9 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
       {/* top bar */}
       <header className="ss-topbar">
         <div className="ss-brand" onClick={nav.library} title="Back to library">
-          <svg viewBox="0 0 24 24" className="ss-brand-mark" aria-hidden>
-            <path d="M12 3 22 20H2Z" fill="currentColor" />
-          </svg>
+          <span className="ss-brand-mark"><BrandLogo size={23} /></span>
           <span className="ss-brand-name">Stagesmith</span>
+          <span className="ss-brand-sub">studio</span>
         </div>
         <span className="ss-divider" />
         <input
@@ -433,15 +525,24 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
               }
             }
           }}
+          spellCheck={false}
           style={{
             background: "transparent",
-            border: "1px solid transparent",
-            borderRadius: 8,
+            border: "0",
+            borderBottom: "1px dashed transparent",
+            borderRadius: 0,
             color: "var(--ss-ink)",
-            font: "600 14px var(--ss-sans)",
-            padding: "6px 10px",
-            width: 260,
+            font: "600 14px var(--ss-fd)",
+            padding: "5px 2px",
+            width: 280,
             outline: "none",
+            transition: "border-color .2s",
+          }}
+          onFocus={(e) => {
+            e.currentTarget.style.borderBottomColor = "var(--ss-hovline)";
+          }}
+          onBlurCapture={(e) => {
+            e.currentTarget.style.borderBottomColor = "transparent";
           }}
         />
         <span className={`ss-chip ${anyDirty ? (saveState === "saving" ? "warn" : "warn") : "ok"}`}>
@@ -473,7 +574,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
               <FileUp size={15} /> Import
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
+          <DropdownMenuContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)" }}>
             <ImportSlideItems onAdd={addSlideFrom} />
           </DropdownMenuContent>
         </DropdownMenu>
@@ -484,7 +585,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
               <Import size={15} /> Export
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
+          <DropdownMenuContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)" }}>
             <DropdownMenuItem onClick={() => download(api.exportUrl(deckId, "smdeck"), `${deckId}.smdeck`)}>
               .smdeck (zip with manifest)
             </DropdownMenuItem>
@@ -500,7 +601,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
               <Camera size={15} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)", maxHeight: 320, overflowY: "auto" }}>
+          <DropdownMenuContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)", maxHeight: 320, overflowY: "auto" }}>
             <DropdownMenuLabel className="ss-label">Snapshots — restore a point</DropdownMenuLabel>
             {snapshots.length === 0 && (
               <div style={{ padding: "8px 12px", font: "400 12px var(--ss-sans)", color: "var(--ss-mut)" }}>
@@ -538,7 +639,7 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
               <Play size={13} style={{ transform: "rotate(90deg)" }} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
+          <DropdownMenuContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)" }}>
             <DropdownMenuItem onClick={() => nav.present(deckId, 0)}>
               <Play size={13} /> From start
             </DropdownMenuItem>
@@ -571,15 +672,33 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
           onAdd={addSlideFrom}
           onJumpToError={jumpToError}
         />
-        <div className="ss-preview-wrap">
-          <PreviewPane
-            deckId={deckId}
-            deck={deck}
-            sel={sel}
-            themeCss={themeCss}
-            version={version}
-            onOverride={setSlideOverride}
-          />
+        {/* side mode is suspended while minimized — the min bar keeps its
+            familiar bottom-dock shape and the preview reclaims full width */}
+        <div
+          ref={wrapRef}
+          className={`ss-preview-wrap ${codeSide && !codeMinimized ? "side" : ""}`}
+          style={codeSide && !codeMinimized ? ({ "--ss-code-w": `${codeSideW}px` } as React.CSSProperties) : undefined}
+        >
+          <div className="ss-preview-main">
+            <PreviewPane
+              deckId={deckId}
+              deck={deck}
+              sel={sel}
+              themeCss={themeCss}
+              version={version}
+              onOverride={setSlideOverride}
+            />
+          </div>
+          {codeSide && !codeMinimized && (
+            <div
+              className={`ss-side-resizer ${sideDragging ? "drag" : ""}`}
+              onPointerDown={onResizerDown}
+              onPointerMove={onResizerMove}
+              onPointerUp={onResizerUp}
+              onPointerCancel={onResizerUp}
+              title="Drag to resize the code panel"
+            />
+          )}
           <CodePane
             deckId={deckId}
             deck={deck}
@@ -598,6 +717,8 @@ export function DashboardView({ deckId, nav }: { deckId: string; nav: SsNav }) {
             minimized={codeMinimized}
             onToggleMinimize={toggleCodeMin}
             gotoError={gotoError}
+            side={codeSide}
+            onToggleSide={toggleCodeSide}
           />
         </div>
       </div>
@@ -648,7 +769,7 @@ function ImportSlideItems({ onAdd }: { onAdd: (opts: { code?: string; label?: st
       >
         <Import size={14} /> Paste TSX from clipboard
       </DropdownMenuItem>
-      <DropdownMenuSeparator style={{ background: "#2a2a2e" }} />
+      <DropdownMenuSeparator />
     </>
   );
 }

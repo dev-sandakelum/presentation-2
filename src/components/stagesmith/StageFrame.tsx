@@ -14,6 +14,8 @@ export interface StageFrameProps {
   slide?: SlideEntry | null;
   deckBg?: Source;
   deckOverlay?: Source;
+  /** optional independent common-overlay source for <Common/> (defaults to deckOverlay) */
+  commonOverlay?: Source;
   themeCss: string;
   mode: ThemeMode;
   show?: { bg: boolean; content: boolean; overlay: boolean };
@@ -90,7 +92,7 @@ export function useResolvedSources(
 
 export function StageFrame(props: StageFrameProps) {
   const {
-    deckId, slide, deckBg, deckOverlay, themeCss, mode,
+    deckId, slide, deckBg, deckOverlay, commonOverlay: commonOverlayProp, themeCss, mode,
     show = { bg: true, content: true, overlay: true },
     staticMode = false, version, step, slideIndex, slideTotal,
     className, interactive = false, onSteps, onRuntimeError,
@@ -109,7 +111,8 @@ export function StageFrame(props: StageFrameProps) {
   };
   const bgSource = slide?.bg !== undefined ? slide.bg : deckBg;
   const overlaySource = slide?.overlay !== undefined ? slide.overlay : deckOverlay;
-  const commonOverlaySource = deckOverlay;
+  // the common overlay for <Common/>: dedicated prop ?? deckOverlay
+  const commonOverlaySource = commonOverlayProp !== undefined ? commonOverlayProp : deckOverlay;
 
   const metas = useResolvedSources(deckId, version, [
     { kind: "slide", source: slide ? { type: "code", path: `slides/${slide.id}.tsx` } : null },

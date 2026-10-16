@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Based on the image provided:\n\n1.  **Sub-tab bar and Upload:** Yes, there is a sub-tab bar with **Assets**, **Overlay**, and **Background** options (Assets is active). Below that, there is an **\"Upload into assets/\"** button.\n2.  **Scrolling/Fitting:** The content fits properly within the tall right panel. The \"NO ASSETS\" message is centered in the available space, indicating the layout handles the empty state correctly.\n3.  **Layout Issues:** There are **no signs of overlap, clipping, or broken layout**. The top header row (containing Save, view toggles, etc.) is perfectly aligned, and all elements within the Assets panel are cleanly spaced.",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1792126349,
+  "id": "2026101612522772307d5e3ec84c0c",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "2026101612522772307d5e3ec84c0c",
+  "usage": {
+    "completion_tokens": 151,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 1882,
+    "prompt_tokens_details": {
+      "cached_tokens": 2
+    },
+    "total_tokens": 2033
+  }
+}

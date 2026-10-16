@@ -6,32 +6,37 @@ import type { DeckJson, SlideEntry } from "./types";
  */
 
 export function defaultThemeCss(): string {
-  return `/* Stagesmith deck theme — tokens, light and dark values (plan §5.2).
+  return `/* Stagesmith deck theme — Slidesmith stage aesthetic.
    Dark lives on :root, light overrides on [data-theme="light"]. */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
 :root {
-  --acc: #ededed;
-  --acc2: #9c9c9c;
-  --ink: #f2f2f2;
-  --ink2: #c4c4c4;
-  --mut: #8f8f8f;
-  --line: #2b2b2b;
-  --card: #121212;
-  --bg: #0a0a0a;
-  --grid: rgba(255,255,255,.055);
-  --fd: -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --fb: var(--fd);
-  --fm: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  --acc: #4da8ff;
+  --acc2: #9b8cff;
+  --ink: #e9eefb;
+  --ink2: #eef2ff;
+  --mut: #96a2bd;
+  --line: rgba(150,180,255,.17);
+  --card: rgba(255,255,255,.05);
+  --card2: rgba(255,255,255,.015);
+  --bg: #04070f;
+  --grid: rgba(130,170,255,.05);
+  --glow: 0 0 90px rgba(77,168,255,.16);
+  --fd: 'Space Grotesk', -apple-system, 'Segoe UI', sans-serif;
+  --fb: 'Instrument Sans', -apple-system, 'Segoe UI', sans-serif;
+  --fm: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
 }
 [data-theme="light"] {
-  --acc: #101010;
-  --acc2: #5c5c5c;
-  --ink: #161616;
-  --ink2: #454545;
-  --mut: #6b6b6b;
-  --line: #e3e3e3;
-  --card: #fafafa;
-  --bg: #ffffff;
-  --grid: rgba(0,0,0,.05);
+  --acc: #2f7fe0;
+  --acc2: #7b6ce0;
+  --ink: #18213a;
+  --ink2: #0e1730;
+  --mut: #55627e;
+  --line: rgba(28,55,120,.16);
+  --card: rgba(255,255,255,.72);
+  --card2: rgba(255,255,255,.35);
+  --bg: #f4f7fd;
+  --grid: rgba(40,80,160,.07);
+  --glow: none;
 }
 #root { background: var(--bg); color: var(--ink); font-family: var(--fb); }
 `;

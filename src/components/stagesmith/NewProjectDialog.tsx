@@ -108,10 +108,10 @@ export function NewProjectDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        style={{ background: "#101012", borderColor: "#2a2a2e", color: "#f1f1f2", maxWidth: 620 }}
+        style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)", maxWidth: 620 }}
       >
         <DialogHeader>
-          <DialogTitle style={{ color: "#f1f1f2" }}>New project</DialogTitle>
+          <DialogTitle style={{ color: "var(--ss-ink)", font: "700 17px var(--ss-fd)" }}>New project</DialogTitle>
         </DialogHeader>
 
         <div style={{ display: "grid", gap: 14, padding: "2px 0 6px" }}>

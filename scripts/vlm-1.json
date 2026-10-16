@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Based on the image, here is the layout description:\n\n**Layout Structure:**\n*   **Slide Preview (Left):** The slide thumbnails are located in a vertical sidebar on the **left** side of the screen. It shows \"SLIDES — 2\" with thumbnails for slides 01 and 02.\n*   **Code Editor Pane (Bottom):** The code editor is positioned at the **bottom** of the screen, below the main slide canvas.\n*   **Main Canvas (Center/Right):** The large area in the center/right displays the actual slide preview (\"Deck title\").\n\n**Code Editor Header Bar Details:**\n*   **Tabs:** The header contains the following tabs from left to right: **SLIDE**, **BG**, **OVERLAY**, **NOTES**, **ASSETS**, and **THEME**. (The \"SLIDE\" tab is currently active/highlighted).\n*   **Right-side Controls:** On the right end of this header bar, there is the file name (**SLIDES/TITLE.TSX**), followed by a **Format** button (with curly braces icon), a **Save** button (with floppy disk icon), and a **Chevron-down** button.\n\n**Specific Button Inquiry:**\n**Yes**, there is a small button with a panel/rectangle icon. It is located immediately to the **left** of the chevron-down button at the far right of the code editor's header bar (between the Save button and the dropdown arrow).",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1792126059,
+  "id": "20261016124732fe7f2c2112dd4044",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "20261016124732fe7f2c2112dd4044",
+  "usage": {
+    "completion_tokens": 304,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 1864,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "total_tokens": 2168
+  }
+}
