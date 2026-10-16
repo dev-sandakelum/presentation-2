@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderPlus, Import, Layers, Play, Plus } from "lucide-react";
-import { api } from "@/lib/stagesmith/client";
+import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderOpen, FolderPlus, Home, Import, Layers, Play, Plus, ArrowUp, RefreshCw, HardDrive } from "lucide-react";
+import { api, type FsBrowse } from "@/lib/stagesmith/client";
 import type { DeckSummary } from "@/lib/stagesmith/types";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ThumbImg } from "./ThumbImg";
@@ -50,6 +50,7 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
   const [decks, setDecks] = useState<DeckSummary[] | null>(initialDecks);
   const [newOpen, setNewOpen] = useState(false);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [openFolderOpen, setOpenFolderOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [pasted, setPasted] = useState("");
@@ -184,6 +185,9 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
               <DropdownMenuItem onClick={() => setNewProjectOpen(true)}>
                 <FolderPlus size={14} /> New project…
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setOpenFolderOpen(true)}>
+                <FolderOpen size={14} /> Open folder…
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => smdeckInput.current?.click()}>
                 <FileUp size={14} /> Load .smdeck…
               </DropdownMenuItem>
@@ -256,6 +260,9 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
 
       {/* New project (folder structure at a picked location) */}
       <NewProjectDialog open={newProjectOpen} onOpenChange={setNewProjectOpen} nav={nav} />
+
+      {/* Open existing folder */}
+      <OpenFolderDialog open={openFolderOpen} onOpenChange={setOpenFolderOpen} nav={nav} />
 
       {/* New deck */}
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
@@ -336,6 +343,238 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/**
+ * "Open folder…" — opens an existing presentation folder from anywhere
+ * on the filesystem and links it into the library.
+ */
+function OpenFolderDialog({
+  open,
+  onOpenChange,
+  nav,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  nav: SsNav;
+}) {
+  const { toast } = useToast();
+  const [dir, setDir] = useState<string | null>(null);
+  const [browse, setBrowse] = useState<FsBrowse | null>(null);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      setBusy(true);
+      try {
+        const b = await api.browseFs(dir ?? undefined);
+        if (cancelled) return;
+        setBrowse(b);
+        setTyped(b.path);
+        setError(null);
+      } catch (e) {
+        if (!cancelled) setError((e as Error).message);
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, dir]);
+
+  const open_folder = async () => {
+    if (!browse?.path) return;
+    setOpening(true);
+    try {
+      // Try to open the selected folder as a project
+      // If it's already a valid presentation folder, it should work
+      const result = await api.createProject("", browse.path);
+      toast({
+        title: `Opened "${result.deck.title}"`,
+        description: result.external
+          ? `Linked: ${result.root}`
+          : `${result.root}`,
+      });
+      onOpenChange(false);
+      nav.deck(result.deckId);
+    } catch (e) {
+      toast({
+        title: "Could not open folder",
+        description: (e as Error).message,
+        variant: "destructive",
+      });
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)", maxWidth: 620 }}
+      >
+        <DialogHeader>
+          <DialogTitle style={{ color: "var(--ss-ink)", font: "700 17px var(--ss-fd)" }}>Open existing folder</DialogTitle>
+        </DialogHeader>
+
+        <div style={{ display: "grid", gap: 14, padding: "2px 0 6px" }}>
+          {/* location browser */}
+          <div>
+            <div className="ss-label" style={{ marginBottom: 6 }}>Select a folder containing a presentation</div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+              <button
+                className="ss-btn ss-btn-icon"
+                style={{ height: 28, width: 28, flex: "none" }}
+                title="Up one folder"
+                disabled={!browse?.parent || busy}
+                onClick={() => browse?.parent && setDir(browse.parent)}
+              >
+                <ArrowUp size={13} />
+              </button>
+              <button
+                className="ss-btn ss-btn-icon"
+                style={{ height: 28, width: 28, flex: "none" }}
+                title="Home"
+                disabled={busy}
+                onClick={() => setDir(null)}
+              >
+                <Home size={13} />
+              </button>
+              <button
+                className="ss-btn ss-btn-icon"
+                style={{ height: 28, width: 28, flex: "none" }}
+                title="Default decks folder"
+                disabled={busy}
+                onClick={() => browse && setDir(browse.decksRoot)}
+              >
+                <HardDrive size={13} />
+              </button>
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  font: "500 12px var(--ss-mono)",
+                  color: "var(--ss-ink2)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  padding: "6px 8px",
+                  border: "1px solid var(--ss-line)",
+                  borderRadius: 8,
+                  background: "var(--ss-panel2)",
+                }}
+                title={browse?.path ?? ""}
+              >
+                {busy ? "…" : browse?.path ?? ""}
+              </div>
+              <button
+                className="ss-btn ss-btn-icon"
+                style={{ height: 28, width: 28, flex: "none" }}
+                title="Refresh"
+                disabled={busy}
+                onClick={() => setDir(browse?.path ?? null)}
+              >
+                <RefreshCw size={13} />
+              </button>
+            </div>
+
+            {/* subfolder list */}
+            <div
+              className="ss-scroll"
+              style={{
+                border: "1px solid var(--ss-line)",
+                borderRadius: 10,
+                background: "var(--ss-panel2)",
+                maxHeight: 168,
+                overflowY: "auto",
+                padding: 4,
+              }}
+            >
+              {busy && !browse ? (
+                <div className="ss-label" style={{ padding: "14px 10px" }}>Loading…</div>
+              ) : browse && browse.dirs.length === 0 ? (
+                <div className="ss-label" style={{ padding: "14px 10px" }}>No subfolders here</div>
+              ) : (
+                browse?.dirs.map((d) => (
+                  <button
+                    key={d}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      width: "100%",
+                      padding: "6px 10px",
+                      borderRadius: 7,
+                      border: "none",
+                      background: "transparent",
+                      color: "var(--ss-ink2)",
+                      font: "400 13px var(--ss-sans)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                    onClick={() => setDir(`${browse.path}/${d}`)}
+                  >
+                    <FolderOpen size={13} style={{ color: "var(--ss-acc)", flex: "none" }} />
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d}</span>
+                  </button>
+                ))
+              )}
+            </div>
+
+            {/* manual path */}
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <input
+                className="ss-input"
+                style={{ flex: 1, minWidth: 0, font: "400 12px var(--ss-mono)" }}
+                value={typed}
+                placeholder="/absolute/path/to/folder"
+                spellCheck={false}
+                onChange={(e) => setTyped(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && typed.trim()) setDir(typed.trim());
+                }}
+              />
+              <button
+                className="ss-btn"
+                style={{ height: 34, flex: "none" }}
+                disabled={busy || !typed.trim()}
+                onClick={() => setDir(typed.trim())}
+              >
+                Go
+              </button>
+            </div>
+
+            {error && (
+              <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-err)", marginTop: 6 }}>
+                {error}
+              </div>
+            )}
+          </div>
+
+          <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-mut)" }}>
+            Select a folder with a deck.json file to open it as a project.
+          </div>
+        </div>
+
+        <DialogFooter>
+          <button
+            className="ss-btn ss-btn-acc"
+            disabled={opening || busy || !browse?.path || !!error}
+            onClick={open_folder}
+          >
+            <FolderOpen size={15} />
+            {opening ? "Opening…" : "Open folder"}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
