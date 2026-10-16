@@ -46,7 +46,9 @@ export const metadata: Metadata = {
   keywords: ["Chassé", "Chassé studio", "presentation", "slides", "TSX", "Next.js"],
   authors: [{ name: "Chassé studio" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
   },
   openGraph: {
     title: "Chassé",
@@ -54,11 +56,20 @@ export const metadata: Metadata = {
     url: "https://chat.z.ai",
     siteName: "Z.ai",
     type: "website",
+    images: [
+      {
+        url: "/logo.png",
+        width: 256,
+        height: 256,
+        alt: "Chassé Logo",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "Chassé",
     description: "Slides written as code",
+    images: ["/logo.png"],
   },
 };
 

@@ -535,7 +535,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
       {/* top bar */}
       <header className="ss-topbar">
         <div className="ss-brand" onClick={nav.library} title="Back to library">
-          <span className="ss-brand-mark"><BrandLogo size={22} /></span>
+          <span className="ss-brand-mark"><BrandLogo size={22} showImage /></span>
           <span className="ss-brand-name">Chassé</span>
           <span className="ss-brand-sub">studio</span>
         </div>

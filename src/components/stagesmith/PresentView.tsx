@@ -288,7 +288,7 @@ export function PresentView({
         <div className="ss-chrome-panel">
           <div className="ss-brand" onClick={() => nav.deck(deckId)} title="Back to editor" style={{ gap: 8 }}>
             <span style={{ width: 17, height: 17, display: "inline-flex" }}>
-              <BrandLogo size={17} />
+              <BrandLogo size={17} showImage />
             </span>
             <span className="ss-chrome-title">{deck?.title ?? deckId}</span>
           </div>

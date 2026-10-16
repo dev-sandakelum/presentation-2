@@ -174,7 +174,7 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 13 }}>
-          <BrandLogo size={30} />
+          <BrandLogo size={30} showImage />
           <div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
               <span style={{ font: "italic 600 22px var(--ss-fbrand)", letterSpacing: "-.01em" }}>Chassé</span>
@@ -647,7 +647,27 @@ function OpenFolderDialog({
 }
 
 /** Chassé brand mark — two overlapping rounded rects (amber + rose) */
-export function BrandLogo({ size = 23 }: { size?: number }) {
+import Image from "next/image";
+
+export function BrandLogo({ size = 23, showImage = false }: { size?: number; showImage?: boolean }) {
+  if (showImage) {
+    return (
+      <Image
+        src="/logo.png"
+        alt="Chassé Logo"
+        width={size}
+        height={size}
+        quality={95}
+        priority
+        style={{
+          display: "block",
+          width: size,
+          height: size,
+        }}
+      />
+    );
+  }
+
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <rect x="8.5" y="3.5" width="12" height="12" rx="3" stroke="#ffb454" strokeWidth="1.8" />
