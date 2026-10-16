@@ -190,7 +190,7 @@ export function NewProjectDialog({
                   padding: "6px 8px",
                   border: "1px solid var(--ss-line)",
                   borderRadius: 8,
-                  background: "var(--ss-card)",
+                  background: "var(--ss-panel2)",
                 }}
                 title={browse?.path ?? ""}
               >
@@ -213,7 +213,7 @@ export function NewProjectDialog({
               style={{
                 border: "1px solid var(--ss-line)",
                 borderRadius: 10,
-                background: "var(--ss-card)",
+                background: "var(--ss-panel2)",
                 maxHeight: 168,
                 overflowY: "auto",
                 padding: 4,
@@ -274,12 +274,12 @@ export function NewProjectDialog({
             </div>
 
             {error && (
-              <div style={{ font: "400 12px var(--ss-sans)", color: "#f26d6d", marginTop: 6 }}>
+              <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-err)", marginTop: 6 }}>
                 {error}
               </div>
             )}
             {!error && browse && !browse.writable && (
-              <div style={{ font: "400 12px var(--ss-sans)", color: "#e0a945", marginTop: 6 }}>
+              <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-warn)", marginTop: 6 }}>
                 This folder is not writable — pick another location.
               </div>
             )}

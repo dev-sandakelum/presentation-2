@@ -507,8 +507,8 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
       {/* top bar */}
       <header className="ss-topbar">
         <div className="ss-brand" onClick={nav.library} title="Back to library">
-          <span className="ss-brand-mark"><BrandLogo size={23} /></span>
-          <span className="ss-brand-name">Stagesmith</span>
+          <span className="ss-brand-mark"><BrandLogo size={22} /></span>
+          <span className="ss-brand-name">Chassé</span>
           <span className="ss-brand-sub">studio</span>
         </div>
         <span className="ss-divider" />
@@ -532,7 +532,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
             borderBottom: "1px dashed transparent",
             borderRadius: 0,
             color: "var(--ss-ink)",
-            font: "600 14px var(--ss-fd)",
+            font: "600 14px var(--ss-fb)",
             padding: "5px 2px",
             width: 280,
             outline: "none",
@@ -731,6 +731,32 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
           onClose={() => setQrOpen(false)}
         />
       )}
+
+      {/* status bar (Chassé .status) */}
+      <footer className="ss-statusbar">
+        <span>
+          Slide {(deck.slides.findIndex((s) => s.id === selId) + 1 || 1)} of {deck.slides.length}
+        </span>
+        <span style={{ flex: 1 }} />
+        <span className="kbd-hints">
+          <kbd>←</kbd> <kbd>→</kbd> slides
+        </span>
+        <span className="kbd-hints">
+          <kbd>F5</kbd> present
+        </span>
+        <span className="kbd-hints">
+          <kbd>O</kbd> overview
+        </span>
+        <span className="kbd-hints">
+          <kbd>T</kbd> theme
+        </span>
+        <span className="kbd-hints">
+          <kbd>Q</kbd> remote
+        </span>
+        <span className="kbd-hints">
+          <kbd>Ctrl</kbd>+<kbd>S</kbd> save
+        </span>
+      </footer>
     </div>
   );
 }

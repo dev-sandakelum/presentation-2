@@ -227,6 +227,10 @@ export async function deleteSlide(deckId: string, slideId: string): Promise<Deck
 
   await snapshotDeck(deckId, `before-delete-${slideId}`);
 
+  // Clean up thumbnails for this slide BEFORE removing it
+  const { deleteSlideThumbs } = await import("./thumbs");
+  await deleteSlideThumbs(deckId, slideId).catch(() => {});
+
   // collect override files referenced only by this slide
   const entry = deck.slides[idx];
   const overrideFiles: string[] = [];

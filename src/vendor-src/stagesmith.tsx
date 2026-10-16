@@ -197,7 +197,7 @@ export function BrandFrame({
 }
 
 /** Crosshair marks in the four corners (as in the Next.js Unlocked deck) */
-export function CornerMarks({ inset = 20, color }: { inset?: number; color?: string }) {
+export function CornerMarks({ inset = 20, size = 15, color }: { inset?: number; size?: number; color?: string }) {
   const c = color ?? "var(--mut, rgba(128,128,128,.5))";
   const Mark = ({ x, y }: { x: "left" | "right"; y: "top" | "bottom" }) => (
     <span
@@ -205,13 +205,14 @@ export function CornerMarks({ inset = 20, color }: { inset?: number; color?: str
         position: "absolute",
         [x]: inset,
         [y]: inset,
-        width: 15,
-        height: 15,
+        width: size,
+        height: size,
         color: c,
+        opacity: 0.55,
         pointerEvents: "none",
       } as React.CSSProperties}
     >
-      <svg viewBox="0 0 15 15" width="15" height="15">
+      <svg viewBox="0 0 15 15" width={size} height={size}>
         <line x1="7" y1="0" x2="7" y2="15" stroke="currentColor" strokeWidth="1" />
         <line x1="0" y1="7" x2="15" y2="7" stroke="currentColor" strokeWidth="1" />
       </svg>
@@ -265,14 +266,16 @@ const FX_LAYER: React.CSSProperties = {
 };
 
 export function GridLines({
-  size = 88,
+  size = 64,
   color,
-}: { size?: number; color?: string }) {
+  opacity,
+}: { size?: number; color?: string; opacity?: number }) {
   const c = color ?? "var(--grid, rgba(128,128,128,.10))";
   return (
     <div
       style={{
         ...FX_LAYER,
+        opacity: opacity ?? 1,
         backgroundImage: `linear-gradient(${c} 1px, transparent 1px), linear-gradient(90deg, ${c} 1px, transparent 1px)`,
         backgroundSize: `${size}px ${size}px`,
       }}
@@ -280,12 +283,85 @@ export function GridLines({
   );
 }
 
-export function Vignette({ strength = 0.5 }: { strength?: number }) {
+export function Vignette({ strength = 0.3 }: { strength?: number }) {
+  const mode = useMode();
+  const a = strength * (mode === "light" ? 0.4 : 1);
   return (
     <div
       style={{
         ...FX_LAYER,
-        background: `radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,${strength}) 100%)`,
+        background: `radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,${a}) 100%)`,
+      }}
+    />
+  );
+}
+
+/** Warm dual glow — amber from the top, rose along the bottom edge (Chassé stage) */
+export function Glow({
+  colors,
+  opacity = 1,
+}: { colors?: [string, string]; opacity?: number }) {
+  const [a, b] = colors ?? ["var(--glow, rgba(255,180,84,.16))", "var(--glow2, rgba(255,122,144,.10))"];
+  return (
+    <div
+      style={{
+        ...FX_LAYER,
+        opacity,
+        background: `radial-gradient(900px 520px at 50% -8%, ${a}, transparent 70%), linear-gradient(to top, ${b}, transparent 150px)`,
+      }}
+    />
+  );
+}
+
+/** Footer strip — italic brand left, slide counter right (Chassé ov-foot) */
+export function Footer({
+  text = "Chassé",
+  style,
+}: { text?: string; style?: React.CSSProperties }) {
+  const { index, total } = useSlideInfo();
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 56,
+        right: 56,
+        bottom: 34,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        font: `500 15px var(--fb, "Instrument Sans", sans-serif)`,
+        color: "var(--mut, rgba(128,128,128,.7))",
+        pointerEvents: "none",
+        zIndex: 36,
+        ...style,
+      }}
+    >
+      <em style={{ font: `italic 600 20px var(--fbrand, "Fraunces", Georgia, serif)`, color: "var(--ink, #eee)" }}>{text}</em>
+      <span>{String(index + 1).padStart(2, "0")} / {String(total).padStart(2, "0")}</span>
+    </div>
+  );
+}
+
+/** Bottom progress bar — grows with the deck (Chassé ov-bar) */
+export function Progress({
+  color,
+  style,
+}: { color?: string; style?: React.CSSProperties }) {
+  const { index, total } = useSlideInfo();
+  const c = color ?? "var(--acc, #ffb454)";
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 0,
+        bottom: 0,
+        height: 4,
+        width: total ? `${((index + 1) / total) * 100}%` : 0,
+        background: c,
+        transition: "width .4s cubic-bezier(.3,.7,.2,1)",
+        pointerEvents: "none",
+        zIndex: 37,
+        ...style,
       }}
     />
   );

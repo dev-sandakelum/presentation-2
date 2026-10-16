@@ -447,7 +447,7 @@ export function PresentView({
             <span style={{ width: 17, height: 17, display: "inline-flex" }}>
               <BrandLogo size={17} />
             </span>
-            <span style={{ font: "600 13px var(--ss-fd)" }}>{deck?.title ?? deckId}</span>
+            <span className="ss-chrome-title">{deck?.title ?? deckId}</span>
           </div>
         </div>
         <div className="ss-chrome-panel">
@@ -529,7 +529,7 @@ export function PresentView({
       {ui.overview && (
         <div className="ss-ov ss-scroll" role="dialog" aria-label="Slide overview">
           <div className="ss-ov-head">
-            <span className="ss-ov-title">Overview</span>
+            <span className="ss-ov-title">{deck?.title ?? "Overview"}</span>
             <span className="ss-ov-hint">Click a slide to jump · Esc to close</span>
             <button className="ss-ghost-btn" onClick={() => setUi((u) => ({ ...u, overview: false }))} title="Close (Esc)">
               <X size={16} />

@@ -6,37 +6,40 @@ import type { DeckJson, SlideEntry } from "./types";
  */
 
 export function defaultThemeCss(): string {
-  return `/* Stagesmith deck theme — Slidesmith stage aesthetic.
+  return `/* Chassé deck theme — warm stage aesthetic.
    Dark lives on :root, light overrides on [data-theme="light"]. */
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Fraunces:ital,wght@1,500;1,600&display=swap');
 :root {
-  --acc: #4da8ff;
-  --acc2: #9b8cff;
-  --ink: #e9eefb;
-  --ink2: #eef2ff;
-  --mut: #96a2bd;
-  --line: rgba(150,180,255,.17);
-  --card: rgba(255,255,255,.05);
-  --card2: rgba(255,255,255,.015);
-  --bg: #04070f;
-  --grid: rgba(130,170,255,.05);
-  --glow: 0 0 90px rgba(77,168,255,.16);
+  --acc: #ffb454;
+  --acc2: #ff8fa3;
+  --ink: #f3eff9;
+  --ink2: #efeaf7;
+  --mut: #a59dbb;
+  --line: rgba(165, 157, 187, 0.22);
+  --card: rgba(255, 255, 255, 0.05);
+  --card2: rgba(255, 255, 255, 0.015);
+  --bg: #100e17;
+  --grid: rgba(255, 255, 255, 0.035);
+  --glow: rgba(255, 180, 84, 0.16);
+  --glow2: rgba(255, 122, 144, 0.1);
   --fd: 'Space Grotesk', -apple-system, 'Segoe UI', sans-serif;
   --fb: 'Instrument Sans', -apple-system, 'Segoe UI', sans-serif;
   --fm: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  --fbrand: 'Fraunces', Georgia, serif;
 }
 [data-theme="light"] {
-  --acc: #2f7fe0;
-  --acc2: #7b6ce0;
-  --ink: #18213a;
-  --ink2: #0e1730;
-  --mut: #55627e;
-  --line: rgba(28,55,120,.16);
-  --card: rgba(255,255,255,.72);
-  --card2: rgba(255,255,255,.35);
-  --bg: #f4f7fd;
-  --grid: rgba(40,80,160,.07);
-  --glow: none;
+  --acc: #c25a08;
+  --acc2: #b4234a;
+  --ink: #1d1a2c;
+  --ink2: #16132a;
+  --mut: #5f5877;
+  --line: rgba(95, 88, 119, 0.25);
+  --card: rgba(255, 255, 255, 0.72);
+  --card2: rgba(255, 255, 255, 0.35);
+  --bg: #f6f4fa;
+  --grid: rgba(40, 30, 90, 0.06);
+  --glow: rgba(194, 90, 8, 0.1);
+  --glow2: rgba(200, 50, 79, 0.06);
 }
 #root { background: var(--bg); color: var(--ink); font-family: var(--fb); }
 `;
@@ -235,21 +238,28 @@ export function starterDeckFiles(title: string): Record<string, string> {
   return {
     "deck.json": JSON.stringify(deck, null, 2),
     "theme.css": defaultThemeCss(),
-    "bg/common.tsx": `import { GridLines, Vignette } from "stagesmith";
+    "bg/common.tsx": `import { Glow, GridLines, Vignette } from "stagesmith";
 
 export default function CommonBg() {
   return (
     <>
+      <Glow />
       <GridLines />
       <Vignette strength={0.32} />
     </>
   );
 }
 `,
-    "overlay/common.tsx": `import { CornerMarks } from "stagesmith";
+    "overlay/common.tsx": `import { CornerMarks, Footer, Progress } from "stagesmith";
 
 export default function CommonOverlay() {
-  return <CornerMarks inset={20} />;
+  return (
+    <>
+      <CornerMarks inset={20} />
+      <Footer text="Chassé" />
+      <Progress />
+    </>
+  );
 }
 `,
     "slides/title.tsx": titleSlide.code,

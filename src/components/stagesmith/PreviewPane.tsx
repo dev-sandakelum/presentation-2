@@ -88,6 +88,10 @@ export const PreviewPane = memo(function PreviewPane(props: {
 
   const idx = deck.slides.findIndex((s) => s.id === sel?.id);
 
+  /* transparent stage behind layer-only previews — shows the Chassé checkerboard */
+  const frameThemeCss =
+    mode === "content" || mode === "overlay" ? `${themeCss}\n#root { background: transparent !important; }` : themeCss;
+
   const modeTabs = useMemo(
     () => (["final", "bg", "content", "overlay"] as PreviewMode[]).map((m) => ({ m, label: m === "final" ? "Final" : m === "bg" ? "BG" : m === "content" ? "Content" : "Overlay" })),
     [],
@@ -135,7 +139,7 @@ export const PreviewPane = memo(function PreviewPane(props: {
       </div>
       <div className="ss-preview-stage" ref={fit.ref}>
         <div
-          className="ss-preview-frame"
+          className={`ss-preview-frame ss-frame-${mode}`}
           style={
             fit.size
               ? { width: fit.size.w, height: fit.size.h, aspectRatio: "16 / 9", maxWidth: "100%", maxHeight: "100%" }
@@ -148,7 +152,7 @@ export const PreviewPane = memo(function PreviewPane(props: {
               slide={sel}
               deckBg={deck.bg}
               deckOverlay={deck.overlay}
-              themeCss={themeCss}
+              themeCss={frameThemeCss}
               mode={sel.theme ?? deck.settings.defaultMode}
               show={SHOW[mode]}
               version={version}

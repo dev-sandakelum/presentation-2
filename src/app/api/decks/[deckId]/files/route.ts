@@ -59,6 +59,35 @@ export async function PUT(
         ? content.replace(new RegExp(`/api/assets/${deckId}/assets/`, "g"), "./assets/")
         : content;
     await writeFileAtomic(deckPath(deckId, rel), portable);
+    
+    // Trigger thumbnail cleanup for affected slides (async, non-blocking)
+    // Only for slide content changes, not for new slide creation
+    const slideMatch = rel.match(/^slides\/([^\/]+)\.tsx$/);
+    if (slideMatch) {
+      const slideId = slideMatch[1];
+      // Fire and forget - runs after response is sent
+      setImmediate(async () => {
+        try {
+          const { cleanupSlideThumbs } = await import("@/lib/stagesmith/thumbs");
+          await cleanupSlideThumbs(deckId, slideId);
+        } catch {
+          /* best effort cleanup */
+        }
+      });
+    }
+    
+    // If bg/ or overlay/ files or theme.css changed, clean all deck thumbnails
+    if (rel.startsWith("bg/") || rel.startsWith("overlay/") || path.basename(rel) === "theme.css") {
+      setImmediate(async () => {
+        try {
+          const { cleanupDeckThumbs } = await import("@/lib/stagesmith/thumbs");
+          await cleanupDeckThumbs(deckId);
+        } catch {
+          /* best effort cleanup */
+        }
+      });
+    }
+    
     return Response.json({ ok: true, savedAt: Date.now(), signature: await deckSignature(deckId) });
   } catch (e) {
     return Response.json({ error: (e as Error).message }, { status: 400 });
@@ -80,4 +109,40 @@ export async function DELETE(
   const fs = await import("fs/promises");
   await fs.rm(deckPath(deckId, rel), { force: true }).catch(() => {});
   return Response.json({ ok: true });
+}
+
+/**
+ * POST /api/decks/<id>/files — trigger thumbnail cleanup
+ * Body: { action: "cleanup-thumbs", slideId?: string }
+ */
+export async function POST(
+  req: Request,
+  { params }: { params: Promise<{ deckId: string }> },
+) {
+  const { deckId } = await params;
+  if (!validDeckId(deckId) || !(await deckExists(deckId))) {
+    return Response.json({ error: "Deck not found" }, { status: 404 });
+  }
+  
+  try {
+    const body = await req.json();
+    
+    if (body.action === "cleanup-thumbs") {
+      const { cleanupSlideThumbs, cleanupDeckThumbs } = await import("@/lib/stagesmith/thumbs");
+      
+      if (body.slideId) {
+        // Clean specific slide thumbnails
+        await cleanupSlideThumbs(deckId, String(body.slideId));
+        return Response.json({ ok: true, action: "cleanup-thumbs", slideId: body.slideId });
+      } else {
+        // Clean all deck thumbnails
+        const deleted = await cleanupDeckThumbs(deckId);
+        return Response.json({ ok: true, action: "cleanup-thumbs", deleted });
+      }
+    }
+    
+    return Response.json({ error: "Unknown action" }, { status: 400 });
+  } catch (e) {
+    return Response.json({ error: (e as Error).message }, { status: 400 });
+  }
 }

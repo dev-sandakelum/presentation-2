@@ -48,7 +48,7 @@ export async function copyText(text: string): Promise<boolean> {
 /** The AI fix-prompt (plan §6 copy fix prompt) */
 export function fixPrompt(file: string, code: string, error: string): string {
   return [
-    "The Stagesmith slide below fails to compile. Fix the code and return the FULL corrected file only — no explanations.",
+    "The Chassé slide below fails to compile. Fix the code and return the FULL corrected file only — no explanations.",
     "",
     "Constraints:",
     "- Keep the default export.",

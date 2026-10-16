@@ -57,8 +57,9 @@ export default async function Page({
 
 function Boot() {
   return (
-    <div className="ss-app" style={{ placeItems: "center", display: "grid" }}>
-      <div className="ss-label" style={{ letterSpacing: ".3em" }}>Loading Stagesmith…</div>
+    <div className="ss-app" style={{ placeItems: "center", display: "grid", justifyItems: "center", gap: 14 }}>
+      <div style={{ font: "italic 600 36px var(--ss-fbrand)", letterSpacing: "-.01em" }}>Chassé</div>
+      <div className="ss-label" style={{ letterSpacing: ".3em" }}>Loading studio…</div>
     </div>
   );
 }

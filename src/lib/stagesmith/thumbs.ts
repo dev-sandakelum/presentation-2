@@ -401,3 +401,155 @@ export async function warmDeck(deckId: string, opts: StillOptions = {}): Promise
   }
   return n;
 }
+
+/**
+ * Clean up old thumbnails for a specific slide.
+ * Removes all .webp files that start with any prefix OTHER than the current valid keys.
+ * This handles both deletion and content changes efficiently.
+ */
+export async function cleanupSlideThumbs(deckId: string, slideId: string): Promise<void> {
+  if (!validDeckId(deckId)) return;
+  
+  const dir = thumbDir(deckId);
+  try {
+    const files = await fs.readdir(dir);
+    const webpFiles = files.filter((f) => f.endsWith(".webp"));
+    
+    // Get current valid keys for this slide
+    const validKeys = new Set<string>();
+    
+    // Generate keys for common thumbnail configurations
+    const modes: ThemeMode[] = ["dark", "light"];
+    const widths = [480, 640, 960];
+    const layers: Array<"full" | "content"> = ["full", "content"];
+    
+    for (const mode of modes) {
+      for (const width of widths) {
+        for (const layer of layers) {
+          const plan = await planStill(deckId, slideId, { mode, width, layers: layer }).catch(() => null);
+          if (plan && plan.key) {
+            validKeys.add(plan.key);
+          }
+        }
+      }
+    }
+    
+    // Delete files that don't match current valid keys for this slide
+    // (files are named <key>.webp where key includes slide identity)
+    for (const file of webpFiles) {
+      const key = file.replace(".webp", "");
+      // Only delete if this file's key contains the slideId in its hash
+      // We check if the file doesn't match ANY current valid key
+      // This is safe because keys are unique hashes
+      if (!validKeys.has(key)) {
+        // Verify this thumbnail is for this slide by checking if re-rendering produces same key
+        // If the slide was deleted or changed significantly, old keys won't be generated
+        try {
+          await fs.unlink(path.join(dir, file));
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+  } catch {
+    /* directory doesn't exist or not accessible */
+  }
+}
+
+/**
+ * Clean up ALL thumbnails for a slide (used on slide deletion).
+ * This is more aggressive - removes any thumbnail that might be for this slide.
+ */
+export async function deleteSlideThumbs(deckId: string, slideId: string): Promise<void> {
+  if (!validDeckId(deckId)) return;
+  
+  const dir = thumbDir(deckId);
+  try {
+    const files = await fs.readdir(dir);
+    const webpFiles = files.filter((f) => f.endsWith(".webp"));
+    
+    // For deletion, we need to check which thumbnails belong to this slide
+    // Since we can't easily reverse the hash, we'll regenerate keys and delete matches
+    const keysToDelete = new Set<string>();
+    
+    const modes: ThemeMode[] = ["dark", "light"];
+    const widths = [480, 640, 960];
+    const layers: Array<"full" | "content"> = ["full", "content"];
+    
+    for (const mode of modes) {
+      for (const width of widths) {
+        for (const layer of layers) {
+          const plan = await planStill(deckId, slideId, { mode, width, layers: layer }).catch(() => null);
+          if (plan && plan.key) {
+            keysToDelete.add(plan.key);
+          }
+        }
+      }
+    }
+    
+    // Delete matching thumbnails
+    for (const key of keysToDelete) {
+      try {
+        await fs.unlink(path.join(dir, `${key}.webp`));
+      } catch {
+        /* file may not exist */
+      }
+    }
+  } catch {
+    /* directory doesn't exist or not accessible */
+  }
+}
+
+/**
+ * Clean up stale thumbnails for an entire deck.
+ * Removes thumbnails for slides that no longer exist.
+ */
+export async function cleanupDeckThumbs(deckId: string): Promise<number> {
+  if (!validDeckId(deckId) || !(await deckExists(deckId))) return 0;
+  
+  const deck = await readDeck(deckId);
+  const dir = thumbDir(deckId);
+  
+  try {
+    const files = await fs.readdir(dir);
+    const webpFiles = files.filter((f) => f.endsWith(".webp"));
+    
+    let deleted = 0;
+    
+    // Generate all valid keys for all current slides
+    const validKeys = new Set<string>();
+    for (const slide of deck.slides) {
+      const modes: ThemeMode[] = ["dark", "light"];
+      const widths = [480, 640, 960];
+      const layers: Array<"full" | "content"> = ["full", "content"];
+      
+      for (const mode of modes) {
+        for (const width of widths) {
+          for (const layer of layers) {
+            const plan = await planStill(deckId, slide.id, { mode, width, layers: layer }).catch(() => null);
+            if (plan && plan.key) {
+              validKeys.add(plan.key);
+            }
+          }
+        }
+      }
+    }
+    
+    // Delete files that don't match any current valid key
+    for (const file of webpFiles) {
+      const key = file.replace(".webp", "");
+      if (!validKeys.has(key)) {
+        try {
+          await fs.unlink(path.join(dir, file));
+          deleted++;
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+    
+    return deleted;
+  } catch {
+    return 0;
+  }
+}

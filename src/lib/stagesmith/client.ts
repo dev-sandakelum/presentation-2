@@ -276,6 +276,20 @@ export const api = {
     }
   },
 
+  /** cleanup stale thumbnails for a deck or specific slide */
+  cleanupThumbs: async (deckId: string, slideId?: string): Promise<{ ok: boolean; deleted?: number }> => {
+    try {
+      const res = await fetch(`/api/decks/${deckId}/files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cleanup-thumbs", slideId }),
+      });
+      return j(res);
+    } catch {
+      return { ok: false };
+    }
+  },
+
   browseFs: async (dirPath?: string): Promise<FsBrowse> => {
     const q = dirPath ? `?path=${encodeURIComponent(dirPath)}` : "";
     const res = await fetch(`/api/fs${q}`, { cache: "no-store" });

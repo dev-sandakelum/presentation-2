@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono, Space_Grotesk, Instrument_Sans, JetBrains_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Space_Grotesk, Instrument_Sans, JetBrains_Mono, Fraunces } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 
@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-/* Slidesmith type system: Space Grotesk (display) · Instrument Sans (body) · JetBrains Mono (code) */
+/* Slidesmith → Chassé type system: Fraunces (brand, italic) · Space Grotesk (display) · Instrument Sans (body) · JetBrains Mono (code) */
 const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
   subsets: ["latin"],
@@ -32,32 +32,40 @@ const jetbrainsMono = JetBrains_Mono({
   weight: ["400", "500", "600"],
 });
 
+/* Chassé brand voice — italic Fraunces serif for the brand + titles */
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
+  subsets: ["latin"],
+  style: ["italic"],
+  weight: ["500", "600"],
+});
+
 export const metadata: Metadata = {
-  title: "Stagesmith — code-first presentation studio",
-  description: "Stagesmith — a code-first presentation studio. A deck is a folder of TSX slides; edit, preview, present and remote-control it.",
-  keywords: ["Stagesmith", "presentation", "slides", "TSX", "Next.js"],
-  authors: [{ name: "Stagesmith" }],
+  title: "Chassé — slides written as code",
+  description: "Chassé studio — a code-first presentation studio. A deck is a folder of TSX slides; edit, preview, present and remote-control it.",
+  keywords: ["Chassé", "Chassé studio", "presentation", "slides", "TSX", "Next.js"],
+  authors: [{ name: "Chassé studio" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
-    title: "Stagesmith",
-    description: "Code-first presentation studio",
+    title: "Chassé",
+    description: "Slides written as code",
     url: "https://chat.z.ai",
     siteName: "Z.ai",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Stagesmith",
-    description: "Code-first presentation studio",
+    title: "Chassé",
+    description: "Slides written as code",
   },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#070c17",
+  themeColor: "#12101a",
 };
 
 export default function RootLayout({
@@ -66,11 +74,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body
-        suppressHydrationWarning
-        className={`${geistSans.variable} ${geistMono.variable} ${spaceGrotesk.variable} ${instrumentSans.variable} ${jetbrainsMono.variable} antialiased bg-background text-foreground`}
-      >
+    <html
+      lang="en"
+      suppressHydrationWarning
+      /* font variables live on <html> so :root-level --ss-f* token chains resolve */
+      className={`${geistSans.variable} ${geistMono.variable} ${spaceGrotesk.variable} ${instrumentSans.variable} ${jetbrainsMono.variable} ${fraunces.variable}`}
+    >
+      <body suppressHydrationWarning className="antialiased bg-background text-foreground">
         {children}
         <Toaster />
       </body>

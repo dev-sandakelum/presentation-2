@@ -226,6 +226,21 @@ export function StageFrame(props: StageFrameProps) {
     setTimeout(postLatest, 350);
   }, [postLatest]);
 
+  // heal heartbeat — an SSR-rendered iframe can finish loading BEFORE React
+  // attaches onLoad (missed load event), and the runtime's boot-ok can arrive
+  // before this component's message listener attaches. Posting the config is
+  // idempotent, so re-post periodically until the runtime answers back.
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!loadedRef.current) postLatest();
+    }, 700);
+    const stop = setTimeout(() => clearInterval(t), 30_000);
+    return () => {
+      clearInterval(t);
+      clearTimeout(stop);
+    };
+  }, [postLatest]);
+
   // step updates
   useEffect(() => {
     const win = iframeRef.current?.contentWindow;
@@ -239,8 +254,10 @@ export function StageFrame(props: StageFrameProps) {
     const onMessage = (ev: MessageEvent) => {
       const m = ev.data as RuntimeMessage & { frameId?: string };
       if (!m || typeof m !== "object" || m.frameId !== frameId) return;
-      if (m.type === "ready" || m.type === "boot-ok") {
+      if (m.type === "ready" || m.type === "boot-ok" || m.type === "rendered") {
         loadedRef.current = true;
+      }
+      if (m.type === "ready" || m.type === "boot-ok") {
         postLatest();
       } else if (m.type === "rendered" && onSteps) {
         onSteps(m.steps ?? 1);

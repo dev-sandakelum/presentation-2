@@ -166,10 +166,10 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
           <BrandLogo size={30} />
           <div>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span style={{ font: "700 20px var(--ss-fd)", letterSpacing: "-.02em" }}>Stagesmith</span>
-              <span className="ss-label" style={{ letterSpacing: ".24em" }}>studio</span>
+              <span style={{ font: "italic 600 22px var(--ss-fbrand)", letterSpacing: "-.01em" }}>Chassé</span>
+              <span style={{ font: "400 12px var(--ss-fb)", color: "var(--ss-mut)" }}>studio</span>
             </div>
-            <div className="ss-label" style={{ marginTop: 3 }}>Code-first presentation studio</div>
+            <div className="ss-label" style={{ marginTop: 3 }}>Slides written as code</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -214,7 +214,7 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
       <main style={{ padding: "26px clamp(18px, 4vw, 44px) 60px" }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 16 }}>
           <div className="ss-label" style={{ fontSize: 11 }}>Decks — {decks ? decks.length : "…"}</div>
-          <div className="ss-label">~/Stagesmith/decks · folder is the project</div>
+          <div className="ss-label">~/chasse/decks · the folder is the project</div>
         </div>
 
         {!decks ? (
@@ -240,7 +240,7 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
             }}
           >
             <Layers size={30} style={{ margin: "0 auto 14px", display: "block", opacity: 0.6 }} />
-            <div style={{ font: "600 15px var(--ss-fd)", color: "var(--ss-ink2)" }}>No decks yet</div>
+            <div style={{ font: "600 15px var(--ss-fb)", color: "var(--ss-ink2)" }}>No decks yet</div>
             <div style={{ font: "400 13px var(--ss-fb)", marginTop: 6 }}>
               Create a starter deck, or import a .smdeck / .deck.tsx / AI answer.
             </div>
@@ -261,7 +261,7 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
       <Dialog open={newOpen} onOpenChange={setNewOpen}>
         <DialogContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)", borderRadius: 18 }}>
           <DialogHeader>
-            <DialogTitle style={{ color: "var(--ss-ink)", font: "700 17px var(--ss-fd)", letterSpacing: "-.01em" }}>New deck</DialogTitle>
+            <DialogTitle style={{ color: "var(--ss-ink)", font: "italic 600 17px var(--ss-fbrand)", letterSpacing: "-.01em" }}>New deck</DialogTitle>
           </DialogHeader>
           <div style={{ display: "grid", gap: 12, padding: "4px 0" }}>
             <div className="ss-label">Deck title</div>
@@ -291,7 +291,7 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
         <DialogContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)", borderRadius: 18, maxWidth: 560 }}>
           <DialogHeader>
-            <DialogTitle style={{ color: "var(--ss-ink)", font: "700 17px var(--ss-fd)", letterSpacing: "-.01em" }}>Import a deck</DialogTitle>
+            <DialogTitle style={{ color: "var(--ss-ink)", font: "italic 600 17px var(--ss-fbrand)", letterSpacing: "-.01em" }}>Import a deck</DialogTitle>
           </DialogHeader>
           <div style={{ display: "grid", gap: 16, padding: "4px 0" }}>
             <div>
@@ -339,12 +339,12 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
   );
 }
 
-/** Slidesmith-style brand mark — two overlapping rounded rects */
+/** Chassé brand mark — two overlapping rounded rects (amber + rose) */
 export function BrandLogo({ size = 23 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="8.5" y="3.5" width="12" height="12" rx="3" stroke="#3fe0c0" strokeWidth="1.8" />
-      <rect x="3.5" y="8.5" width="12" height="12" rx="3" stroke="#4da8ff" strokeWidth="1.8" style={{ fill: "var(--ss-panel, #0d1322)" }} />
+      <rect x="8.5" y="3.5" width="12" height="12" rx="3" stroke="#ffb454" strokeWidth="1.8" />
+      <rect x="3.5" y="8.5" width="12" height="12" rx="3" stroke="#ff8fa3" strokeWidth="1.8" style={{ fill: "var(--ss-panel, #1a1723)" }} />
     </svg>
   );
 }

@@ -733,14 +733,14 @@ function CodeFileList({
                   gap: 8,
                   padding: "6px 8px",
                   borderRadius: 4,
-                  background: "var(--ss-surface2, rgba(255,255,255,0.04))",
+                  background: "var(--ss-panel2)",
                 }}
               >
                 <span
                   style={{
                     flex: 1,
                     font: "500 12px var(--ss-mono)",
-                    color: "var(--ss-fg)",
+                    color: "var(--ss-ink2)",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
@@ -832,15 +832,15 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
     fontWeight: 600,
     cursor: "pointer",
     border: "none",
-    background: subTab === t ? "var(--ss-accent, #6366f1)" : "transparent",
-    color: subTab === t ? "#fff" : "var(--ss-mut)",
+    background: subTab === t ? "var(--ss-acc)" : "transparent",
+    color: subTab === t ? "var(--ss-acc-ink)" : "var(--ss-mut)",
     letterSpacing: "0.02em",
   });
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {/* Sub-tab bar */}
-      <div style={{ display: "flex", gap: 4, padding: "8px 14px 0", borderBottom: "1px solid var(--ss-border, rgba(255,255,255,0.08))", paddingBottom: 8 }}>
+      <div style={{ display: "flex", gap: 4, padding: "8px 14px 0", borderBottom: "1px solid var(--ss-line)", paddingBottom: 8 }}>
         <button style={subTabStyle("assets")} onClick={() => setSubTab("assets")}>Assets</button>
         <button style={subTabStyle("overlay")} onClick={() => setSubTab("overlay")}>Overlay</button>
         <button style={subTabStyle("bg")} onClick={() => setSubTab("bg")}>Background</button>

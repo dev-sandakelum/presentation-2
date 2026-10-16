@@ -102,3 +102,25 @@ Stage Summary:
 - The code pane now has a PanelRight/PanelBottom dock toggle in its header (screenshot section): one click moves the code block into a right-side panel — full-height, scrollable CodeMirror editor, drag-resizable (300–1000px, preview guaranteed 420px+), persisted across sessions (position + width).
 - Key artifacts: src/components/stagesmith/DashboardView.tsx, src/components/stagesmith/CodePane.tsx, src/app/stagesmith.css, eslint.config.mjs (repaired), package.json (eslint-config-next@16.4.2).
 - Note: the decks folder currently holds "hi" and "slidesmith-theme-test" (nextjs-unlocked was removed in an earlier session); the stagelink external project still exists.
+
+---
+Task ID: 5
+Agent: main (Super Z)
+Task: Apply the Chassé studio theme (upload/chasse-studio-fixed.html) entirely to the Stagesmith app — clone dev-sandakelum/presentation-2 and re-theme the whole chrome, editor, deck defaults, runtime and brand.
+
+Work Log:
+- Cloned the repo into the project root; fixed decks/.registry.json Windows paths → Linux; started dev server (:3000) + stagesmith-sync (:3003) via .zscripts/dev.sh; rebuilt public/vendor/stagesmith.js.
+- Chrome theme (src/app/stagesmith.css, full rewrite): Chassé design system — dark plum (#12101a/#1a1723/#211e2d, lines #2e2a3c/#3b3650) + light lavender (#e9e7f0/#f7f6fb/#ffffff), amber accent #ffb454 (light #c75a00, acc-ink #2a1700), ok #6fd6a0 / warn #ffc77a / err #ff7a90, checkerboards (--ss-chk1/2), Chassé shadow/frame tokens, --ss-fbrand (Fraunces); component styles ported from the Chassé HTML: 48px topbar, 26px statusbar (new .ss-statusbar with kbd hints), 184px filmstrip (7px-radius thumbs, amber sel ring, bottom-left number chip), segmented .ss-mode-tabs, Chassé menu/dotnav/overview/remote/QR/popovers, 12px Chassé scrollbars (thumb → amber on hover).
+- globals.css: shadcn tokens re-paletteed to Chassé dark (default) + html[data-ss-theme="light"] set; body font Instrument Sans.
+- layout.tsx: added Fraunces (italic 500/600) via next/font as --font-fraunces, font variables moved from <body> to <html> so :root-level --ss-f* chains resolve (fixed italic brand not applying); metadata/title/themeColor re-branded to Chassé.
+- Editor: new src/components/stagesmith/editor/chasseTheme.ts — CodeMirror 6 theme pair (dark plum paper + light), Chassé syntax palette (keywords #ff8fa3/#b4234a, strings #9be3b8/#16764a, tags #ffc77a/#a24a00, numbers #8fc5ff/#1558b0, italic comments, amber caret/selection); CmEditor uses it instead of oneDark.
+- Deck defaults (templates.ts): Chassé theme.css tokens (--acc #ffb454, warm glow/glow2, bg #100e17 / light #f6f4fa, Fraunces --fbrand); starter bg = Glow + GridLines + Vignette; starter overlay = CornerMarks + Footer + Progress.
+- Runtime (vendor-src/stagesmith.tsx + rebuilt bundle): added <Glow> (amber/rose dual glow), <Footer> (italic Fraunces brand + NN / NN counter), <Progress> (amber bar); GridLines default 64px + opacity; Vignette light-aware (×0.4); CornerMarks + size/opacity per Chassé.
+- Brand/views: Chassé wordmark (italic Fraunces) in Library/Dashboard/Present chrome titles/overview/boot loader; BrandLogo re-colored amber+rose; tagline "Slides written as code"; ~/chasse/decks path label; fixPrompt re-branded; status bar added to DashboardView.
+- Bug fixes along the way: CSS var drift in CodePane/NewProjectDialog (--ss-accent/--ss-card/--ss-fg/--ss-surface2/--ss-border → real tokens); PreviewPane checkerboard behind Content/Overlay layer modes + transparent #root injection; StageFrame heal heartbeat (SSR-rendered iframes that finish loading before React attaches onLoad, and boot-ok messages that beat the listener, now get the render config re-posted — fixed missing module fetch/config delivery in Present view); stale Turbopack chunk shipping the old white --background purged (.next reset).
+- Verified with agent-browser + VLM: library (Chassé header, amber New deck, italic serif brand), dashboard dark + light (Fraunces brand confirmed via document.fonts, amber selection ring, bottom-left 01 chip, status bar with kbd hints, Chassé syntax colors in editor), present chrome panels; tsc clean, eslint 0 problems.
+- Known issue (pre-existing in 1878b6d, unchanged by the theme): the Present view stage canvases rasterize white in this sandbox's headless browsers even though all three sandboxed iframes boot, receive configs, fetch modules and render correct DOM/CSS (verified via Playwright frame dumps); a hand-driven replica of the exact stage structure paints correctly. Dashboard previews of the same StageFrame component paint fine.
+
+Stage Summary:
+- The Chassé studio theme is applied app-wide: chrome (dark+light), typography (Fraunces brand + Space Grotesk + Instrument Sans + JetBrains Mono), CodeMirror syntax theme, deck theme defaults, runtime kit (Glow/Footer/Progress), brand strings and status bar.
+- Deliverable: /home/z/my-project/download/chasse-theme.patch — `git diff 1878b6d -- src/ public/vendor/stagesmith.js worklog.md` (apply with `git apply chasse-theme.patch` on top of 1878b6d).
