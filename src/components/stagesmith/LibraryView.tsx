@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderOpen, FolderPlus, Home, Import, Layers, Play, Plus, ArrowUp, RefreshCw, HardDrive } from "lucide-react";
-import { api, type FsBrowse } from "@/lib/stagesmith/client";
+import { api, getCapabilities, type FsBrowse } from "@/lib/stagesmith/client";
 import type { DeckSummary } from "@/lib/stagesmith/types";
+import { openDeviceProject, supportsDeviceFolders } from "@/lib/stagesmith/device";
 import { NewProjectDialog } from "./NewProjectDialog";
-import { ThumbImg } from "./ThumbImg";
+import { LiveThumb } from "./LiveThumb";
 import { download, formatWhen, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -79,7 +80,16 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
     const title = newTitle.trim() || "Untitled deck";
     setBusy(true);
     try {
-      const deck = await api.createDeck(title);
+      const caps = await getCapabilities();
+      const store = caps.fsWritable ? "server" : "browser";
+      const deck = await api.createDeck(title, { store });
+      toast({
+        title: `Deck “${deck.title}” created`,
+        description:
+          store === "browser"
+            ? "Saved in this browser — this site can’t write server files (use Export for a portable copy)."
+            : undefined,
+      });
       nav.deck(deck.id);
     } catch (e) {
       toast({ title: "Could not create deck", description: (e as Error).message, variant: "destructive" });
@@ -238,15 +248,16 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
             style={{
               border: "1.5px dashed var(--ss-line-strong)",
               borderRadius: 16,
-              padding: "60px 20px",
+              padding: "56px 20px",
               textAlign: "center",
               color: "var(--ss-mut)",
             }}
           >
             <Layers size={30} style={{ margin: "0 auto 14px", display: "block", opacity: 0.6 }} />
-            <div style={{ font: "600 15px var(--ss-fb)", color: "var(--ss-ink2)" }}>No decks yet</div>
-            <div style={{ font: "400 13px var(--ss-fb)", marginTop: 6 }}>
-              Create a starter deck, or import a .smdeck / .deck.tsx / AI answer.
+            <div style={{ font: "600 15px var(--ss-fb)", color: "var(--ss-ink2)" }}>No decks yet — the studio starts empty</div>
+            <div style={{ font: "400 13px/1.7 var(--ss-fb)", marginTop: 6, maxWidth: 460, marginInline: "auto" }}>
+              Create a starter deck with <b>New deck</b>, place a full project folder on your device with{" "}
+              <b>File → New project…</b>, or load an existing one with <b>File → Load .smdeck…</b>.
             </div>
           </div>
         ) : (
@@ -360,15 +371,27 @@ function OpenFolderDialog({
   nav: SsNav;
 }) {
   const { toast } = useToast();
+  const [fsWritable, setFsWritable] = useState<boolean | null>(null);
+  const [deviceSupported, setDeviceSupported] = useState(false);
+  const [opening, setOpening] = useState(false);
+
+  // server browser state (local runs only)
   const [dir, setDir] = useState<string | null>(null);
   const [browse, setBrowse] = useState<FsBrowse | null>(null);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
-  const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setDeviceSupported(supportsDeviceFolders());
+    getCapabilities()
+      .then((c) => setFsWritable(c.fsWritable))
+      .catch(() => setFsWritable(false));
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !fsWritable) return;
     let cancelled = false;
     (async () => {
       setBusy(true);
@@ -387,20 +410,40 @@ function OpenFolderDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, dir]);
+  }, [open, dir, fsWritable]);
 
-  const open_folder = async () => {
+  /** open a folder from the USER'S device (File System Access API) */
+  const openDeviceFolder = async () => {
+    setOpening(true);
+    try {
+      const res = await openDeviceProject();
+      if (!res) return; // user cancelled the picker
+      toast({
+        title: `Opened “${res.title}”`,
+        description: "Loaded from your device folder — edits are saved back to it while this tab has access.",
+      });
+      onOpenChange(false);
+      nav.deck(res.deckId);
+    } catch (e) {
+      toast({
+        title: "Could not open folder",
+        description: (e as Error).message,
+        variant: "destructive",
+      });
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  /** open a server-side folder (local runs — the server is this machine) */
+  const openServerFolder = async () => {
     if (!browse?.path) return;
     setOpening(true);
     try {
-      // Try to open the selected folder as a project
-      // If it's already a valid presentation folder, it should work
       const result = await api.createProject("", browse.path);
       toast({
         title: `Opened "${result.deck.title}"`,
-        description: result.external
-          ? `Linked: ${result.root}`
-          : `${result.root}`,
+        description: result.external ? `Linked: ${result.root}` : `${result.root}`,
       });
       onOpenChange(false);
       nav.deck(result.deckId);
@@ -425,154 +468,179 @@ function OpenFolderDialog({
         </DialogHeader>
 
         <div style={{ display: "grid", gap: 14, padding: "2px 0 6px" }}>
-          {/* location browser */}
+          {/* device folder — the primary path */}
           <div>
-            <div className="ss-label" style={{ marginBottom: 6 }}>Select a folder containing a presentation</div>
-            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
-              <button
-                className="ss-btn ss-btn-icon"
-                style={{ height: 28, width: 28, flex: "none" }}
-                title="Up one folder"
-                disabled={!browse?.parent || busy}
-                onClick={() => browse?.parent && setDir(browse.parent)}
-              >
-                <ArrowUp size={13} />
-              </button>
-              <button
-                className="ss-btn ss-btn-icon"
-                style={{ height: 28, width: 28, flex: "none" }}
-                title="Home"
-                disabled={busy}
-                onClick={() => setDir(null)}
-              >
-                <Home size={13} />
-              </button>
-              <button
-                className="ss-btn ss-btn-icon"
-                style={{ height: 28, width: 28, flex: "none" }}
-                title="Default decks folder"
-                disabled={busy}
-                onClick={() => browse && setDir(browse.decksRoot)}
-              >
-                <HardDrive size={13} />
-              </button>
-              <div
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  font: "500 12px var(--ss-mono)",
-                  color: "var(--ss-ink2)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  padding: "6px 8px",
-                  border: "1px solid var(--ss-line)",
-                  borderRadius: 8,
-                  background: "var(--ss-panel2)",
-                }}
-                title={browse?.path ?? ""}
-              >
-                {busy ? "…" : browse?.path ?? ""}
-              </div>
-              <button
-                className="ss-btn ss-btn-icon"
-                style={{ height: 28, width: 28, flex: "none" }}
-                title="Refresh"
-                disabled={busy}
-                onClick={() => setDir(browse?.path ?? null)}
-              >
-                <RefreshCw size={13} />
-              </button>
-            </div>
-
-            {/* subfolder list */}
-            <div
-              className="ss-scroll"
-              style={{
-                border: "1px solid var(--ss-line)",
-                borderRadius: 10,
-                background: "var(--ss-panel2)",
-                maxHeight: 168,
-                overflowY: "auto",
-                padding: 4,
-              }}
-            >
-              {busy && !browse ? (
-                <div className="ss-label" style={{ padding: "14px 10px" }}>Loading…</div>
-              ) : browse && browse.dirs.length === 0 ? (
-                <div className="ss-label" style={{ padding: "14px 10px" }}>No subfolders here</div>
-              ) : (
-                browse?.dirs.map((d) => (
-                  <button
-                    key={d}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      width: "100%",
-                      padding: "6px 10px",
-                      borderRadius: 7,
-                      border: "none",
-                      background: "transparent",
-                      color: "var(--ss-ink2)",
-                      font: "400 13px var(--ss-sans)",
-                      cursor: "pointer",
-                      textAlign: "left",
-                    }}
-                    onClick={() => setDir(`${browse.path}/${d}`)}
-                  >
-                    <FolderOpen size={13} style={{ color: "var(--ss-acc)", flex: "none" }} />
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d}</span>
-                  </button>
-                ))
-              )}
-            </div>
-
-            {/* manual path */}
-            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-              <input
-                className="ss-input"
-                style={{ flex: 1, minWidth: 0, font: "400 12px var(--ss-mono)" }}
-                value={typed}
-                placeholder="/absolute/path/to/folder"
-                spellCheck={false}
-                onChange={(e) => setTyped(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && typed.trim()) setDir(typed.trim());
-                }}
-              />
-              <button
-                className="ss-btn"
-                style={{ height: 34, flex: "none" }}
-                disabled={busy || !typed.trim()}
-                onClick={() => setDir(typed.trim())}
-              >
-                Go
-              </button>
-            </div>
-
-            {error && (
-              <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-err)", marginTop: 6 }}>
-                {error}
+            <div className="ss-label" style={{ marginBottom: 6 }}>A folder on this device</div>
+            {deviceSupported ? (
+              <>
+                <button
+                  className="ss-btn ss-btn-acc"
+                  style={{ width: "100%", height: 40, justifyContent: "center", gap: 8 }}
+                  disabled={opening}
+                  onClick={openDeviceFolder}
+                >
+                  <FolderOpen size={15} />
+                  {opening ? "Opening…" : "Choose a folder with a deck.json…"}
+                </button>
+                <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-mut)", marginTop: 7 }}>
+                  Your browser asks for permission to read the folder you pick. The project opens from
+                  your device and edits are mirrored back to it.
+                </div>
+              </>
+            ) : (
+              <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-mut)" }}>
+                This browser can&rsquo;t pick device folders (Chromium browsers support it). Use{" "}
+                <b>File &rarr; Load .smdeck…</b> to open a project archive instead.
               </div>
             )}
           </div>
 
+          {/* server-side browser — only meaningful when the app runs locally */}
+          {fsWritable && (
+            <div>
+              <div className="ss-label" style={{ marginBottom: 6 }}>Server folders (this machine)</div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                <button
+                  className="ss-btn ss-btn-icon"
+                  style={{ height: 28, width: 28, flex: "none" }}
+                  title="Up one folder"
+                  disabled={!browse?.parent || busy}
+                  onClick={() => browse?.parent && setDir(browse.parent)}
+                >
+                  <ArrowUp size={13} />
+                </button>
+                <button
+                  className="ss-btn ss-btn-icon"
+                  style={{ height: 28, width: 28, flex: "none" }}
+                  title="Home"
+                  disabled={busy}
+                  onClick={() => setDir(null)}
+                >
+                  <Home size={13} />
+                </button>
+                <button
+                  className="ss-btn ss-btn-icon"
+                  style={{ height: 28, width: 28, flex: "none" }}
+                  title="Default decks folder"
+                  disabled={busy}
+                  onClick={() => browse && setDir(browse.decksRoot)}
+                >
+                  <HardDrive size={13} />
+                </button>
+                <div
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    font: "500 12px var(--ss-mono)",
+                    color: "var(--ss-ink2)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    padding: "6px 8px",
+                    border: "1px solid var(--ss-line)",
+                    borderRadius: 8,
+                    background: "var(--ss-panel2)",
+                  }}
+                  title={browse?.path ?? ""}
+                >
+                  {busy ? "…" : browse?.path ?? ""}
+                </div>
+                <button
+                  className="ss-btn ss-btn-icon"
+                  style={{ height: 28, width: 28, flex: "none" }}
+                  title="Refresh"
+                  disabled={busy}
+                  onClick={() => setDir(browse?.path ?? null)}
+                >
+                  <RefreshCw size={13} />
+                </button>
+              </div>
+
+              <div
+                className="ss-scroll"
+                style={{
+                  border: "1px solid var(--ss-line)",
+                  borderRadius: 10,
+                  background: "var(--ss-panel2)",
+                  maxHeight: 150,
+                  overflowY: "auto",
+                  padding: 4,
+                }}
+              >
+                {busy && !browse ? (
+                  <div className="ss-label" style={{ padding: "14px 10px" }}>Loading…</div>
+                ) : browse && browse.dirs.length === 0 ? (
+                  <div className="ss-label" style={{ padding: "14px 10px" }}>No subfolders here</div>
+                ) : (
+                  browse?.dirs.map((d) => (
+                    <button
+                      key={d}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        width: "100%",
+                        padding: "6px 10px",
+                        borderRadius: 7,
+                        border: "none",
+                        background: "transparent",
+                        color: "var(--ss-ink2)",
+                        font: "400 13px var(--ss-sans)",
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                      onClick={() => setDir(`${browse.path}/${d}`)}
+                    >
+                      <FolderOpen size={13} style={{ color: "var(--ss-acc)", flex: "none" }} />
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <input
+                  className="ss-input"
+                  style={{ flex: 1, minWidth: 0, font: "400 12px var(--ss-mono)" }}
+                  value={typed}
+                  placeholder="/absolute/path/to/folder"
+                  spellCheck={false}
+                  onChange={(e) => setTyped(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && typed.trim()) setDir(typed.trim());
+                  }}
+                />
+                <button
+                  className="ss-btn"
+                  style={{ height: 34, flex: "none" }}
+                  disabled={busy || !typed.trim()}
+                  onClick={() => setDir(typed.trim())}
+                >
+                  Go
+                </button>
+              </div>
+
+              {error && (
+                <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-err)", marginTop: 6 }}>
+                  {error}
+                </div>
+              )}
+              <button
+                className="ss-btn"
+                style={{ marginTop: 8, height: 34, justifyContent: "center" }}
+                disabled={opening || busy || !browse?.path || !!error}
+                onClick={openServerFolder}
+              >
+                <FolderOpen size={15} />
+                {opening ? "Opening…" : "Open this server folder"}
+              </button>
+            </div>
+          )}
+
           <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-mut)" }}>
-            Select a folder with a deck.json file to open it as a project.
+            The folder must contain a deck.json file (a Chassé/Stagesmith project).
           </div>
         </div>
-
-        <DialogFooter>
-          <button
-            className="ss-btn ss-btn-acc"
-            disabled={opening || busy || !browse?.path || !!error}
-            onClick={open_folder}
-          >
-            <FolderOpen size={15} />
-            {opening ? "Opening…" : "Open folder"}
-          </button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -609,6 +677,8 @@ function DeckCard({
     setSig(deck.signature);
   }, [deck.signature]);
 
+  const isBrowserDeck = deck.store === "browser";
+
   return (
     <div className="ss-card">
       <div
@@ -617,11 +687,16 @@ function DeckCard({
         onClick={() => nav.deck(deck.id)}
         title={`Open ${deck.title}`}
       >
-        {inView ? (
-          <ThumbImg
-            src={api.thumbUrl(deck.id, "cover", { w: 480, v: sig })}
-            alt={`${deck.title} — cover`}
-            fetchPriority="low"
+        {inView && deck.cover?.slideId ? (
+          <LiveThumb
+            deckId={deck.id}
+            slideId={deck.cover.slideId}
+            slideTheme={deck.cover.mode}
+            deckDefaultMode={deck.cover.mode}
+            deckBg={deck.cover.bg}
+            deckOverlay={deck.cover.overlay}
+            themeCss={deck.cover.themeCss}
+            version={sig}
           />
         ) : (
           <span className="ss-shimmer" aria-hidden />
@@ -650,6 +725,31 @@ function DeckCard({
               <ExternalLink size={10} /> linked
             </span>
           )}
+          {isBrowserDeck && (
+            <span
+              title={
+                deck.device
+                  ? "Stored in this browser, mirrored to a folder on your device"
+                  : "Stored in this browser (this deployment can't write server files)"
+              }
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 3,
+                marginLeft: 7,
+                verticalAlign: "middle",
+                font: "500 10px var(--ss-fm)",
+                color: "var(--ss-mut)",
+                border: "1px solid var(--ss-line)",
+                borderRadius: 99,
+                padding: "1px 7px",
+                letterSpacing: ".06em",
+              }}
+            >
+              {deck.device ? <HardDrive size={10} /> : <Layers size={10} />}
+              {deck.device ? "device" : "this browser"}
+            </span>
+          )}
         </div>
         <div className="ss-card-meta">
           {deck.slideCount} slides · {deck.id} · modified {formatWhen(deck.modified)}
@@ -673,7 +773,7 @@ function DeckCard({
             <DropdownMenuItem
               onClick={async () => {
                 try {
-                  await api.createDeck(`${deck.title} (copy)`, deck.id);
+                  await api.createDeck(`${deck.title} (copy)`, { duplicateOf: deck.id });
                   onDuplicated();
                   toast({ title: "Deck duplicated" });
                 } catch (e) {
@@ -683,10 +783,28 @@ function DeckCard({
             >
               <Copy size={14} /> Duplicate
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => download(api.exportUrl(deck.id, "smdeck"), `${deck.id}.smdeck`)}>
+            <DropdownMenuItem
+              onClick={async () => {
+                try {
+                  const { url, filename } = await api.exportDeck(deck.id, "smdeck");
+                  download(url, filename);
+                } catch (e) {
+                  toast({ title: "Export failed", description: (e as Error).message, variant: "destructive" });
+                }
+              }}
+            >
               <Import size={14} /> Export .smdeck
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => download(api.exportUrl(deck.id, "deck.tsx"), `${deck.id}.deck.tsx`)}>
+            <DropdownMenuItem
+              onClick={async () => {
+                try {
+                  const { url, filename } = await api.exportDeck(deck.id, "deck.tsx");
+                  download(url, filename);
+                } catch (e) {
+                  toast({ title: "Export failed", description: (e as Error).message, variant: "destructive" });
+                }
+              }}
+            >
               <Import size={14} /> Export .deck.tsx
             </DropdownMenuItem>
             <DropdownMenuSeparator />

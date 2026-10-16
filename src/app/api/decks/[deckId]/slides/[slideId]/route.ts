@@ -27,19 +27,6 @@ export async function PATCH(
     if (body.bg !== undefined) patch.bg = body.bg;
     if (body.overlay !== undefined) patch.overlay = body.overlay;
     const deck = await updateSlideEntry(deckId, slideId, patch as never);
-    
-    // Clean up thumbnails if visual properties changed (theme, bg, overlay)
-    if (body.theme !== undefined || body.bg !== undefined || body.overlay !== undefined) {
-      setImmediate(async () => {
-        try {
-          const { cleanupSlideThumbs } = await import("@/lib/stagesmith/thumbs");
-          await cleanupSlideThumbs(deckId, slideId);
-        } catch {
-          /* best effort cleanup */
-        }
-      });
-    }
-    
     return Response.json({ deck, signature: await deckSignature(deckId) });
   } catch (e) {
     return Response.json({ error: (e as Error).message }, { status: 400 });

@@ -23,6 +23,8 @@ export interface StageRuntimeState {
   staticMode: boolean;
   mode: "dark" | "light";
   assetBase: string;
+  /** deck asset URL — never base64, always a path inside the deck (plan §9) */
+  assetMap: Record<string, string> | null;
   slideIndex: number;
   slideTotal: number;
   declaredSteps: number;
@@ -35,6 +37,7 @@ let state: StageRuntimeState = {
   staticMode: false,
   mode: "dark",
   assetBase: "",
+  assetMap: null,
   slideIndex: 0,
   slideTotal: 0,
   declaredSteps: 1,
@@ -129,14 +132,23 @@ export function useMode(): "dark" | "light" {
   return useRuntime((s) => s.mode);
 }
 
-/** deck asset URL — never base64, always a path inside the deck (plan §9) */
+/** deck asset URL — never base64, always a path inside the deck (plan §9).
+ *  Browser-stored decks pass a name → data-URL map (sandboxed iframes can't
+ *  fetch parent blob/asset URLs), which wins over assetBase. */
 export function asset(name: string): string {
   const clean = String(name).replace(/^\/+/, "");
+  const mapped = state.assetMap ? state.assetMap[clean] : undefined;
+  if (mapped) return mapped;
   return `${state.assetBase}/${clean.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 export function useSlideInfo(): { index: number; total: number } {
-  return useRuntime((s) => ({ index: s.slideIndex, total: s.slideTotal }));
+  // Select the two primitives SEPARATELY — a selector returning a fresh
+  // object would give useSyncExternalStore an unstable snapshot and throw
+  // React error #185 (maximum update depth exceeded).
+  const index = useRuntime((s) => s.slideIndex);
+  const total = useRuntime((s) => s.slideTotal);
+  return { index, total };
 }
 
 /* ------------------------------------------------------------------ */
@@ -146,9 +158,12 @@ export function useSlideInfo(): { index: number; total: number } {
 export function Step({ at, children }: { at: number; children: ReactNode }) {
   const step = useRuntime((s) => s.step);
   const staticMode = useRuntime((s) => s.staticMode);
+  // deps are [at] only — `children` is a fresh object every render, which
+  // would re-run this effect on every pass (and with a state-writing
+  // listener in the loop can spiral into React #185)
   useEffect(() => {
-    if (at > 1) __declareSteps(at + (children === undefined ? 0 : 1));
-  }, [at, children]);
+    if (at > 1) __declareSteps(at + 1);
+  }, [at]);
   if (staticMode || step >= at) return <>{children}</>;
   return null;
 }

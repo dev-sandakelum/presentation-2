@@ -798,6 +798,9 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
   const { toast } = useToast();
   const [assets, setAssets] = useState<FileRow[] | null>(null);
   const [subTab, setSubTab] = useState<AssetsSubTab>("assets");
+  /** store-aware preview URLs (Problem 06): browser decks serve IndexedDB
+   *  blobs as object URLs — the /api/assets route 404s for them. */
+  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -824,6 +827,27 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
   };
 
   const rows = useMemo(() => assets ?? [], [assets]);
+
+  // resolve image preview URLs for whichever store the deck lives in
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const out: Record<string, string> = {};
+      for (const a of rows) {
+        if (/\.(png|jpe?g|svg|webp|gif|avif)$/i.test(a.path)) {
+          try {
+            out[a.path] = await api.assetUrl(deckId, a.path);
+          } catch {
+            /* fall back to the route URL below */
+          }
+        }
+      }
+      if (!cancelled) setPreviewUrls(out);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deckId, rows]);
 
   const subTabStyle = (t: AssetsSubTab): React.CSSProperties => ({
     padding: "3px 10px",
@@ -875,7 +899,7 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
                   return (
                     <div key={a.path} className="ss-asset">
                       {isImage ? (
-                        <img src={`/api/assets/${deckId}/${a.path}`} alt={a.path} loading="lazy" />
+                        <img src={previewUrls[a.path] ?? `/api/assets/${deckId}/${a.path}`} alt={a.path} loading="lazy" />
                       ) : (
                         <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", font: "500 10px var(--ss-mono)", color: "var(--ss-mut)" }}>
                           {a.path.split(".").pop()?.toUpperCase()}

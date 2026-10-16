@@ -74,7 +74,9 @@ const errMsg = document.getElementById("errmsg");
 
 let cfg = null;                 // last render config
 const modules = { slide: null, bg: null, overlay: null, commonOverlay: null };
-const moduleUrls = { slide: null, bg: null, overlay: null, commonOverlay: null };
+/* module identity per layer — "url:<url>" for server decks, "ver:<hash>"
+   for inline code modules (browser-stored decks) */
+const moduleKeys = { slide: null, bg: null, overlay: null, commonOverlay: null };
 let stepsReported = -1;
 
 /* ---------------- helpers ---------------- */
@@ -98,6 +100,70 @@ async function loadModule(url) {
   // The parent pre-flighted this URL via &meta=1, so import directly.
   return import(url);
 }
+
+/** import a module shipped as raw compiled JS (browser-stored decks —
+ *  the parent compiled it via POST /api/compile and passes the code in
+ *  the render config). Blob URLs work inside the opaque-origin sandbox. */
+async function loadCodeModule(code) {
+  const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+  try {
+    return await import(url);
+  } finally {
+    URL.revokeObjectURL(url); // module is evaluated — the URL is spent
+  }
+}
+
+/** normalize a layer of the config to { key, url? , code? } | null */
+function layerRef(next, kind) {
+  if (next[kind]) return { key: "url:" + next[kind], url: next[kind] };
+  const code = next[kind + "Code"];
+  if (code) return { key: "ver:" + (next[kind + "Ver"] || String(code.length)), code };
+  return null;
+}
+
+/* ---------------- asset load healing (Problem 06) ----------------
+   Slide/overlay code may reference images by RAW paths ("assets/bg.png")
+   or by a stale /api/assets/<other-deck>/... URL copied from another deck.
+   In the sandbox those resolve against /runtime and 404. When a resource
+   fails, retry it through the deck's asset map (browser decks: data URLs)
+   or the deck's own asset route (assetBase). Runs once per element. */
+(function () {
+  var healed = new WeakSet();
+  function candidatePath(rawUrl) {
+    var u;
+    try { u = new URL(rawUrl, location.href); } catch (e) { return null; }
+    var p = decodeURIComponent(u.pathname).replace(/\/+$/, "");
+    var m = p.match(/^\/api\/assets\/[^/]+\/(.+)$/); // /api/assets/<deckId>/<rest>
+    if (m) return m[1];
+    return p.replace(/^\//, "");                      // site-relative path
+  }
+  window.addEventListener("error", function (e) {
+    var el = e.target;
+    if (!el || el === window || healed.has(el)) return;
+    var tag = el.tagName;
+    var attr = tag === "IMG" || tag === "VIDEO" || tag === "AUDIO" || tag === "SOURCE" || tag === "SCRIPT" || tag === "IMAGE"
+      ? "src" : tag === "LINK" ? "href" : null;
+    if (!attr) return;
+    var raw = el.getAttribute && el.getAttribute(attr);
+    if (!raw || /^(data|blob):/i.test(raw)) return;
+    healed.add(el);
+    var path = candidatePath(raw);
+    if (!path) return;
+    var map = cfg && cfg.assetMap;
+    var mapped = map ? map[path] : undefined;
+    if (mapped) { el.setAttribute(attr, mapped); return; }
+    // fall back to THIS deck's asset route (server decks; differs from the failed URL)
+    var base = cfg && cfg.assetBase;
+    if (base && path.indexOf("..") < 0 && !path.startsWith("/")) {
+      var next = base + "/" + path.split("/").map(encodeURIComponent).join("/");
+      var abs;
+      try { abs = new URL(next, location.href).href; } catch (err) { return; }
+      var failed;
+      try { failed = new URL(raw, location.href).href; } catch (err) { return; }
+      if (abs !== failed) el.setAttribute(attr, next);
+    }
+  }, true);
+})();
 
 /* ---------------- image layers (plan §8: image source) ---------------- */
 
@@ -202,29 +268,31 @@ async function applyConfig(next) {
     staticMode: !!next.static,
     mode: next.mode,
     assetBase: next.assetBase || "",
+    assetMap: next.assetMap || null,
     step: next.static ? 9999 : 0,
     slideIndex: next.slideIndex ?? 0,
     slideTotal: next.slideTotal ?? 0,
     declaredSteps: 1,
   });
 
-  // hot-swap only changed modules (plan §5.1)
+  // hot-swap only changed modules (plan §5.1) — layers arrive either as a
+  // compile URL (server decks) or as inline code + version hash (browser
+  // decks); both are compared by stable key so unchanged layers never reload
+  const refs = {
+    bg: layerRef(next, "bg"),
+    commonOverlay: layerRef(next, "commonOverlay"),
+    overlay: layerRef(next, "overlay"),
+    slide: layerRef(next, "slide"),
+  };
   try {
-    if (next.bg !== moduleUrls.bg) {
-      modules.bg = next.bg ? (await loadModule(next.bg)).default : null;
-      moduleUrls.bg = next.bg;
-    }
-    if (next.commonOverlay !== moduleUrls.commonOverlay) {
-      modules.commonOverlay = next.commonOverlay ? (await loadModule(next.commonOverlay)).default : null;
-      moduleUrls.commonOverlay = next.commonOverlay;
-    }
-    if (next.overlay !== moduleUrls.overlay) {
-      modules.overlay = next.overlay ? (await loadModule(next.overlay)).default : null;
-      moduleUrls.overlay = next.overlay;
-    }
-    if (next.slide !== moduleUrls.slide) {
-      modules.slide = next.slide ? (await loadModule(next.slide)).default : null;
-      moduleUrls.slide = next.slide;
+    for (const kind of ["bg", "commonOverlay", "overlay", "slide"]) {
+      const ref = refs[kind];
+      const key = ref ? ref.key : null;
+      if (moduleKeys[kind] === key) continue;
+      modules[kind] = ref
+        ? ((ref.url ? await loadModule(ref.url) : await loadCodeModule(ref.code)).default ?? null)
+        : null;
+      moduleKeys[kind] = key;
     }
   } catch (e) {
     // keep last good modules; show compile/import error (plan: preview keeps last good version)
@@ -234,7 +302,9 @@ async function applyConfig(next) {
 
   // when an overlay override is active, <Common/> renders the common one
   stagesmith.__setCommonOverlay(
-    next.overlay && next.overlay !== next.commonOverlay ? modules.commonOverlay : null,
+    refs.overlay && refs.commonOverlay && refs.overlay.key !== refs.commonOverlay.key
+      ? modules.commonOverlay
+      : null,
   );
 
   // compile error with no last-good module → error card (fix-list item 4);

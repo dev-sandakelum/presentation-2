@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { DeckBundle, DeckSummary } from "@/lib/stagesmith/types";
 import { LibraryView } from "./LibraryView";
 import { DashboardView } from "./DashboardView";
 import { PresentView } from "./PresentView";
 import { RemoteView } from "./RemoteView";
+import { installDeviceMirror } from "@/lib/stagesmith/device";
 import type { SsNav } from "./shared";
 
 /**
@@ -33,6 +34,11 @@ export function ViewsShell({
   initialRemoteBundle: DeckBundle | null;
 }) {
   const router = useRouter();
+
+  // device-folder write-through (File System Access API) — installed once
+  useEffect(() => {
+    installDeviceMirror();
+  }, []);
   const go = useCallback(
     (url: string) => {
       router.push(url, { scroll: false });

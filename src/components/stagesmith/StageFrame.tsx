@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { RuntimeMessage, SlideEntry, Source, ThemeMode } from "@/lib/stagesmith/types";
+import { resolveModule, getAssetMap, type ModuleInfo } from "@/lib/stagesmith/client";
 
 /**
  * The sandboxed Stage Runtime wrapper (plan §5.1).
- * Fixed 1280×720 stage scaled to the container; module URLs are pre-flighted
- * through /api/compile?meta=1 so compile errors keep the last good preview.
+ * Fixed 1280×720 stage scaled to the container. Layers arrive either as a
+ * compile URL (server decks) or as inline compiled code + version hash
+ * (browser decks, POST /api/compile) — both hot-swap on change.
  */
 
 export interface StageFrameProps {
@@ -31,31 +33,11 @@ export interface StageFrameProps {
   onRuntimeError?: (err: { phase: string; message: string }) => void;
 }
 
-interface MetaInfo {
-  url: string | null;
-  steps: number;
-  error: string | null;
-}
+export type MetaInfo = ModuleInfo;
 
-const metaCache = new Map<string, MetaInfo>();
-
+/** resolve a deck layer to a loadable module (URL or inline code) */
 export async function resolveCode(deckId: string, path: string, version: string | number): Promise<MetaInfo> {
-  const key = `${deckId}:${path}:${version}`;
-  const hit = metaCache.get(key);
-  if (hit) return hit;
-  try {
-    const res = await fetch(`/api/compile?deck=${encodeURIComponent(deckId)}&file=${encodeURIComponent(path)}&meta=1`);
-    const data = (await res.json()) as { ok: boolean; url?: string; steps?: number; error?: string };
-    const info: MetaInfo = { url: data.ok ? data.url! : null, steps: data.steps || 1, error: data.ok ? null : data.error || "Compile failed" };
-    metaCache.set(key, info);
-    if (metaCache.size > 500) {
-      const first = metaCache.keys().next().value;
-      if (first) metaCache.delete(first);
-    }
-    return info;
-  } catch (e) {
-    return { url: null, steps: 1, error: (e as Error).message };
-  }
+  return resolveModule(deckId, path, version);
 }
 
 export function imageSourceUrl(deckId: string, source: Extract<Source, { type: "image" }>): string {
@@ -77,7 +59,7 @@ export function useResolvedSources(
         if (e.source && e.source.type === "code") {
           out[e.kind] = await resolveCode(deckId, e.source.path, version);
         } else {
-          out[e.kind] = { url: null, steps: 1, error: null };
+          out[e.kind] = { url: null, code: null, ver: "", steps: 1, error: null };
         }
       }
       if (!cancelled) setMetas(out);
@@ -85,7 +67,6 @@ export function useResolvedSources(
     return () => {
       cancelled = true;
     };
-     
   }, [deckId, version, sig]);
   return metas;
 }
@@ -121,33 +102,47 @@ export function StageFrame(props: StageFrameProps) {
     { kind: "commonOverlay", source: commonOverlaySource && commonOverlaySource.type === "code" ? commonOverlaySource : null },
   ]);
 
-  // last-good slide URL: compile errors keep the preview (plan §5.1).
+  // browser decks ship assets as data URLs (the sandbox can't fetch /api/assets)
+  const [assetMap, setAssetMap] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getAssetMap(deckId, version)
+      .then((m) => {
+        if (!cancelled) setAssetMap(m);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [deckId, version]);
+
+  // last-good slide module: compile errors keep the preview (plan §5.1).
   // Must be STATE: a ref updated in an effect would never re-render the
-  // config memo, so the slide URL would never be posted.
-  const [lastGoodSlide, setLastGoodSlide] = useState<string | null>(null);
+  // config memo, so the slide module would never be posted.
+  const [lastGoodSlide, setLastGoodSlide] = useState<MetaInfo | null>(null);
   const slideMeta = metas.slide;
   useEffect(() => {
     if (slide?.id) setLastGoodSlide(null);
   }, [slide?.id]);
   useEffect(() => {
-    if (slideMeta?.url) setLastGoodSlide(slideMeta.url);
+    if (slideMeta?.url || slideMeta?.code) setLastGoodSlide(slideMeta);
   }, [slideMeta]);
 
   // simple memo deps (lint requires plain expressions)
   const bgKey = JSON.stringify(bgSource);
   const overlayKey = JSON.stringify(overlaySource);
   const showKey = JSON.stringify(show);
-  const slideUrl = slide ? lastGoodSlide : null;
-  const bgUrl = metas.bg?.url;
-  const overlayUrl = metas.overlay?.url;
-  const commonOverlayUrl = metas.commonOverlay?.url;
+  const slideMod = slide ? lastGoodSlide : null;
+  const bgMod = metas.bg;
+  const overlayMod = metas.overlay;
+  const commonOverlayMod = metas.commonOverlay;
   const slideId = slide?.id;
 
   const configJson = useMemo(() => {
     const bgSrc = bgSource && bgSource.type === "image" ? bgSource : null;
     const ovSrc = overlaySource && overlaySource.type === "image" ? overlaySource : null;
-    const bgImage = bgSrc ? { url: imageSourceUrl(deckId, bgSrc), ...bgSrc } : null;
-    const overlayImage = ovSrc ? { url: imageSourceUrl(deckId, ovSrc), ...ovSrc } : null;
+    const bgImage = bgSrc ? { url: assetMap?.[bgSrc.path] ?? imageSourceUrl(deckId, bgSrc), ...bgSrc } : null;
+    const overlayImage = ovSrc ? { url: assetMap?.[ovSrc.path] ?? imageSourceUrl(deckId, ovSrc), ...ovSrc } : null;
     return JSON.stringify({
       type: "render",
       frameId,
@@ -156,22 +151,31 @@ export function StageFrame(props: StageFrameProps) {
       static: staticMode,
       scale,
       assetBase: `/api/assets/${deckId}`,
-      slide: slideUrl || null,
+      assetMap: assetMap && Object.keys(assetMap).length ? assetMap : undefined,
+      slide: slideMod?.url || null,
+      slideCode: slideMod?.code || null,
+      slideVer: slideMod?.ver || null,
       // no last-good version to keep → the runtime shows the error card
-      slideError: slideId && !slideUrl && slideMeta?.error ? slideMeta.error : null,
-      bg: bgUrl || null,
+      slideError: slideId && !slideMod && slideMeta?.error ? slideMeta.error : null,
+      bg: bgMod?.url || null,
+      bgCode: bgMod?.code || null,
+      bgVer: bgMod?.ver || null,
       bgImage,
-      overlay: overlayUrl || null,
+      overlay: overlayMod?.url || null,
+      overlayCode: overlayMod?.code || null,
+      overlayVer: overlayMod?.ver || null,
       overlayImage,
-      commonOverlay: commonOverlayUrl || null,
+      commonOverlay: commonOverlayMod?.url || null,
+      commonOverlayCode: commonOverlayMod?.code || null,
+      commonOverlayVer: commonOverlayMod?.ver || null,
       show,
       slideIndex,
       slideTotal,
     });
   }, [
     frameId, themeCss, mode, staticMode, scale, deckId,
-    slideId, slideUrl, slideMeta?.error, bgUrl, overlayUrl, commonOverlayUrl,
-    bgKey, overlayKey, showKey, slideIndex, slideTotal,
+    slideId, slideMod, slideMeta?.error, bgMod, overlayMod, commonOverlayMod,
+    bgKey, overlayKey, showKey, slideIndex, slideTotal, assetMap,
   ]);
 
   // measure container → scale

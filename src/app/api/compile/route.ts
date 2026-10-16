@@ -1,9 +1,13 @@
-import { compileFile, compileUrlFor } from "@/lib/stagesmith/compile";
+import { compileFile, compileUrlFor, compileVirtual } from "@/lib/stagesmith/compile";
 import { deckExists, validDeckId } from "@/lib/stagesmith/store";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
 };
+
+/** limits for the stateless POST compile (browser-stored decks) */
+const MAX_FILES = 600;
+const MAX_TOTAL_CHARS = 12 * 1024 * 1024;
 
 /**
  * GET /api/compile?deck=<id>&file=<rel>&meta=1 → compile result (JSON)
@@ -57,5 +61,51 @@ export async function GET(req: Request) {
   } catch (e) {
     const msg = (e as Error)?.message || "Compile failed";
     return Response.json({ ok: false, error: msg }, { status: 400, headers: CORS });
+  }
+}
+
+/**
+ * POST /api/compile — STATELESS compile for browser-stored decks.
+ * body: { files: Record<relPath, content>, entry: relPath }
+ * → { ok, js, steps, ver } — a single self-contained ESM module the runtime
+ * imports from a blob URL. No disk access, so it works on read-only
+ * serverless deployments.
+ */
+export async function POST(req: Request) {
+  try {
+    const body = (await req.json()) as { files?: unknown; entry?: unknown };
+    const files = body.files as Record<string, string> | undefined;
+    const entry = String(body.entry || "");
+    if (!files || typeof files !== "object" || Array.isArray(files)) {
+      return Response.json({ ok: false, error: "Bad request" }, { status: 400, headers: CORS });
+    }
+    const keys = Object.keys(files);
+    if (keys.length === 0 || keys.length > MAX_FILES) {
+      return Response.json(
+        { ok: false, error: `Project must have 1–${MAX_FILES} files` },
+        { status: 400, headers: CORS },
+      );
+    }
+    let total = 0;
+    for (const [k, v] of Object.entries(files)) {
+      if (typeof k !== "string" || k.length > 200 || k.includes("\\") || k.includes("\0") || k.startsWith("/") || k.split("/").some((s) => s === "" || s === "." || s === "..")) {
+        return Response.json({ ok: false, error: `Illegal path: ${k}` }, { status: 400, headers: CORS });
+      }
+      if (typeof v !== "string") {
+        return Response.json({ ok: false, error: `File ${k} is not text` }, { status: 400, headers: CORS });
+      }
+      total += v.length;
+    }
+    if (total > MAX_TOTAL_CHARS) {
+      return Response.json({ ok: false, error: "Project too large to compile" }, { status: 400, headers: CORS });
+    }
+
+    const result = await compileVirtual(files, entry);
+    return Response.json(result, { headers: CORS });
+  } catch (e) {
+    return Response.json(
+      { ok: false, error: (e as Error)?.message || "Compile failed" },
+      { status: 400, headers: CORS },
+    );
   }
 }

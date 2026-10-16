@@ -1,10 +1,20 @@
 "use client";
 
 import type { DeckJson, DeckBundle, DeckSummary, FileRow, Source, ThemeMode } from "./types";
+import * as local from "./browser-store";
+import * as transfer from "./transfer";
 
 export type { DeckBundle };
 
-/** Typed fetch helpers for the Stagesmith API */
+/**
+ * Typed data layer for the whole studio.
+ *
+ * Decks live in ONE of two stores and every call below dispatches on it:
+ *   - "server"  — the app's decks/ folder (only possible when the server's
+ *                 file system is writable, i.e. local runs)
+ *   - "browser" — THIS browser's IndexedDB (hosted/read-only deployments and
+ *                 device-folder projects). No database, no backend storage.
+ */
 
 async function j<T>(res: Response): Promise<T> {
   let body: unknown = null;
@@ -21,6 +31,120 @@ async function j<T>(res: Response): Promise<T> {
   }
   return body as T;
 }
+
+/* ------------------------------------------------------------------ */
+/* capabilities                                                        */
+/* ------------------------------------------------------------------ */
+
+export interface Capabilities {
+  /** can the server store decks in its own decks/ folder? (local runs: yes) */
+  fsWritable: boolean;
+}
+
+let capsPromise: Promise<Capabilities> | null = null;
+
+export function getCapabilities(): Promise<Capabilities> {
+  if (!capsPromise) {
+    capsPromise = fetch("/api/capabilities", { cache: "no-store" })
+      .then((r) => j<Capabilities>(r))
+      .catch(() => ({ fsWritable: false })); // unreachable server → browser store
+  }
+  return capsPromise;
+}
+
+/** where NEW decks go when the caller doesn't specify */
+export async function defaultStore(): Promise<"server" | "browser"> {
+  const caps = await getCapabilities();
+  return caps.fsWritable ? "server" : "browser";
+}
+
+async function isLocalDeck(deckId: string): Promise<boolean> {
+  return local.hasDeck(deckId);
+}
+
+/* ------------------------------------------------------------------ */
+/* module resolution (StageFrame)                                      */
+/* ------------------------------------------------------------------ */
+
+/** deck asset data-URL map for the runtime config (browser decks only) */
+export async function getAssetMap(deckId: string, version: string | number): Promise<Record<string, string> | null> {
+  if (await isLocalDeck(deckId)) return local.getAssetMap(deckId, version);
+  return null;
+}
+
+export interface ModuleInfo {
+  /** compile URL (server decks) */
+  url: string | null;
+  /** inline compiled ESM (browser decks) */
+  code: string | null;
+  /** version key — output hash */
+  ver: string;
+  steps: number;
+  error: string | null;
+}
+
+const moduleCache = new Map<string, ModuleInfo>();
+
+/**
+ * Resolve a deck layer (slide/bg/overlay) to a loadable module.
+ * Server decks → compile URL (GET /api/compile?meta=1).
+ * Browser decks → stateless POST /api/compile with the whole file map;
+ * the returned bundle is self-contained and is imported by the runtime
+ * from a blob URL.
+ */
+export async function resolveModule(deckId: string, path: string, version: string | number): Promise<ModuleInfo> {
+  const key = `${deckId}:${path}:${version}`;
+  const hit = moduleCache.get(key);
+  if (hit) return hit;
+  try {
+    let info: ModuleInfo;
+    if (await isLocalDeck(deckId)) {
+      const rec = await local.getRecord(deckId);
+      if (!rec) throw new Error("Deck not found");
+      const res = await fetch("/api/compile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: rec.files, entry: path }),
+      });
+      const data = (await j<{ ok: boolean; js?: string; steps?: number; ver?: string; error?: string }>(res)) as {
+        ok: boolean;
+        js?: string;
+        steps?: number;
+        ver?: string;
+        error?: string;
+      };
+      info = data.ok
+        ? { url: null, code: data.js ?? "", ver: data.ver ?? String(data.js?.length ?? 0), steps: data.steps || 1, error: null }
+        : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
+    } else {
+      const res = await fetch(
+        `/api/compile?deck=${encodeURIComponent(deckId)}&file=${encodeURIComponent(path)}&meta=1`,
+      );
+      const data = (await j<{ ok: boolean; url?: string; steps?: number; error?: string; hash?: string }>(res)) as {
+        ok: boolean;
+        url?: string;
+        steps?: number;
+        error?: string;
+        hash?: string;
+      };
+      info = data.ok
+        ? { url: data.url ?? null, code: null, ver: data.hash ?? "", steps: data.steps || 1, error: null }
+        : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
+    }
+    moduleCache.set(key, info);
+    if (moduleCache.size > 800) {
+      const first = moduleCache.keys().next().value;
+      if (first) moduleCache.delete(first);
+    }
+    return info;
+  } catch (e) {
+    return { url: null, code: null, ver: "err", steps: 1, error: (e as Error).message };
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* view types                                                          */
+/* ------------------------------------------------------------------ */
 
 export type DeckBundleView = DeckBundle;
 
@@ -61,7 +185,7 @@ export interface DeleteDeckResult {
   root: string;
 }
 
-/** /api/import result row */
+/** import result row */
 export interface ImportReport {
   deckId: string;
   slides: number;
@@ -69,32 +193,92 @@ export interface ImportReport {
   warnings: string[];
 }
 
+export type DeckStore = "server" | "browser";
+
+/* ------------------------------------------------------------------ */
+/* the api facade                                                      */
+/* ------------------------------------------------------------------ */
+
 export const api = {
+  /* ---------------- listing / bundles ---------------- */
+
   listDecks: async (): Promise<DeckSummary[]> => {
-    const res = await fetch("/api/decks", { cache: "no-store" });
-    return (await j<{ decks?: DeckSummary[] }>(res)).decks ?? [];
+    const [serverDecks, browserDecks] = await Promise.all([
+      fetch("/api/decks", { cache: "no-store" })
+        .then((r) => j<{ decks?: DeckSummary[] }>(r))
+        .then((b) => (b.decks ?? []).map((d) => ({ ...d, store: "server" as DeckStore })))
+        .catch(() => [] as DeckSummary[]),
+      local.listDecks().catch(() => [] as DeckSummary[]),
+    ]);
+    // browser decks win on id collisions (they're the newer, writable copy)
+    const seen = new Set(browserDecks.map((d) => d.id));
+    return [...browserDecks, ...serverDecks.filter((d) => !seen.has(d.id))].sort((a, b) =>
+      a.modified < b.modified ? 1 : -1,
+    );
   },
 
   getDeck: async (deckId: string): Promise<DeckBundle> => {
+    if (await isLocalDeck(deckId)) {
+      const b = await local.getBundle(deckId);
+      if (b) return b;
+    }
     const res = await fetch(`/api/decks/${deckId}`);
     return j<DeckBundle>(res);
   },
 
-  createDeck: async (title: string, duplicateOf?: string): Promise<DeckJson> => {
+  /** where does this deck live? (used by UI chips + routing) */
+  storeOf: async (deckId: string): Promise<DeckStore> => {
+    return (await isLocalDeck(deckId)) ? "browser" : "server";
+  },
+
+  /* ---------------- create / delete ---------------- */
+
+  createDeck: async (
+    title: string,
+    opts: { duplicateOf?: string; store?: DeckStore } = {},
+  ): Promise<DeckJson> => {
+    const store = opts.store ?? (await defaultStore());
+    if (store === "browser") {
+      if (opts.duplicateOf) {
+        if (await isLocalDeck(opts.duplicateOf)) {
+          return (await local.duplicateDeck(opts.duplicateOf, title)).deck;
+        }
+        // duplicate a server deck into the browser store
+        const b = await api.getDeck(opts.duplicateOf);
+        const files: Record<string, string> = {};
+        for (const f of b.files) {
+          try {
+            files[f.path] = await api.readFile(opts.duplicateOf, f.path);
+          } catch {
+            /* skip unreadable */
+          }
+        }
+        if (!files["deck.json"]) throw new Error("Source deck could not be read");
+        return (await local.createDeck(title, files)).deck;
+      }
+      return (await local.createStarterDeck(title)).deck;
+    }
     const res = await fetch("/api/decks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, duplicateOf }),
+      body: JSON.stringify({ title, duplicateOf: opts.duplicateOf }),
     });
     return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   deleteDeck: async (deckId: string): Promise<DeleteDeckResult> => {
+    if (await isLocalDeck(deckId)) {
+      await local.deleteDeck(deckId);
+      return { ok: true, removed: true, external: false, root: "this browser" };
+    }
     const res = await fetch(`/api/decks/${deckId}`, { method: "DELETE" });
     return j<DeleteDeckResult>(res);
   },
 
+  /* ---------------- files ---------------- */
+
   readFile: async (deckId: string, path: string): Promise<string> => {
+    if (await isLocalDeck(deckId)) return local.readFile(deckId, path);
     const res = await fetch(`/api/decks/${deckId}/files?path=${encodeURIComponent(path)}`, { cache: "no-store" });
     const body = await j<{ content?: string }>(res);
     if (typeof body.content !== "string") throw new Error("Empty file response");
@@ -102,6 +286,7 @@ export const api = {
   },
 
   saveFile: async (deckId: string, path: string, content: string): Promise<string> => {
+    if (await isLocalDeck(deckId)) return local.saveFile(deckId, path, content);
     const res = await fetch(`/api/decks/${deckId}/files`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -111,14 +296,18 @@ export const api = {
   },
 
   deleteFile: async (deckId: string, path: string): Promise<void> => {
+    if (await isLocalDeck(deckId)) return local.deleteFile(deckId, path);
     const res = await fetch(`/api/decks/${deckId}/files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
     await j(res);
   },
+
+  /* ---------------- slides ---------------- */
 
   addSlide: async (
     deckId: string,
     opts: { template?: string; label?: string; position?: number; code?: string },
   ): Promise<DeckJson> => {
+    if (await isLocalDeck(deckId)) return local.addSlide(deckId, opts);
     const res = await fetch(`/api/decks/${deckId}/slides`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -130,13 +319,9 @@ export const api = {
   patchSlide: async (
     deckId: string,
     slideId: string,
-    patch: {
-      label?: string;
-      theme?: ThemeMode | null;
-      bg?: Source | null;
-      overlay?: Source | null;
-    },
+    patch: { label?: string; theme?: ThemeMode | null; bg?: Source | null; overlay?: Source | null },
   ): Promise<DeckJson> => {
+    if (await isLocalDeck(deckId)) return local.patchSlide(deckId, slideId, patch);
     const res = await fetch(`/api/decks/${deckId}/slides/${slideId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -146,16 +331,19 @@ export const api = {
   },
 
   deleteSlide: async (deckId: string, slideId: string): Promise<DeckJson> => {
+    if (await isLocalDeck(deckId)) return local.deleteSlide(deckId, slideId);
     const res = await fetch(`/api/decks/${deckId}/slides/${slideId}`, { method: "DELETE" });
     return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   duplicateSlide: async (deckId: string, slideId: string): Promise<DeckJson> => {
+    if (await isLocalDeck(deckId)) return local.duplicateSlide(deckId, slideId);
     const res = await fetch(`/api/decks/${deckId}/slides/${slideId}/duplicate`, { method: "POST" });
     return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   reorder: async (deckId: string, order: string[]): Promise<DeckJson> => {
+    if (await isLocalDeck(deckId)) return local.reorderSlides(deckId, order);
     const res = await fetch(`/api/decks/${deckId}/reorder`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -168,6 +356,7 @@ export const api = {
     deckId: string,
     patch: { title?: string; bg?: Source; overlay?: Source; settings?: Partial<DeckJson["settings"]> },
   ): Promise<DeckJson> => {
+    if (await isLocalDeck(deckId)) return local.patchDeck(deckId, patch);
     const res = await fetch(`/api/decks/${deckId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -176,17 +365,38 @@ export const api = {
     return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
+  /* ---------------- polling ---------------- */
+
   poll: async (deckId: string): Promise<string> => {
+    if (await isLocalDeck(deckId)) {
+      const rec = await local.getRecord(deckId);
+      return rec ? local.signatureOf(rec) : "";
+    }
     const res = await fetch(`/api/decks/${deckId}/poll`, { cache: "no-store" });
     return (await j<{ signature?: string }>(res)).signature ?? "";
   },
 
+  /* ---------------- assets + code files ---------------- */
+
+  /** preview URL for a deck asset — store-aware (Problem 06): browser decks
+   *  have no /api/assets route, so their IndexedDB blobs are served as
+   *  object URLs; server decks keep the /api/assets route. */
+  assetUrl: async (deckId: string, path: string): Promise<string> => {
+    if (await isLocalDeck(deckId)) {
+      const url = await local.getAssetUrl(deckId, path);
+      if (url) return url;
+    }
+    return `/api/assets/${deckId}/${path.split("/").map(encodeURIComponent).join("/")}`;
+  },
+
   listAssets: async (deckId: string): Promise<FileRow[]> => {
+    if (await isLocalDeck(deckId)) return local.listAssets(deckId);
     const res = await fetch(`/api/decks/${deckId}/assets`, { cache: "no-store" });
     return (await j<{ assets?: FileRow[] }>(res)).assets ?? [];
   },
 
   uploadAssets: async (deckId: string, files: File[]): Promise<Array<{ path: string }>> => {
+    if (await isLocalDeck(deckId)) return local.uploadAssets(deckId, files);
     const form = new FormData();
     for (const f of files) form.append("file", f);
     const res = await fetch(`/api/decks/${deckId}/assets`, { method: "POST", body: form });
@@ -194,11 +404,13 @@ export const api = {
   },
 
   listCodeFiles: async (deckId: string, dir: "overlay" | "bg"): Promise<FileRow[]> => {
+    if (await isLocalDeck(deckId)) return local.listCodeFiles(deckId, dir);
     const res = await fetch(`/api/decks/${deckId}/code-files?dir=${dir}`, { cache: "no-store" });
     return (await j<{ files?: FileRow[] }>(res)).files ?? [];
   },
 
   uploadCodeFile: async (deckId: string, dir: "overlay" | "bg", files: File[]): Promise<Array<{ path: string }>> => {
+    if (await isLocalDeck(deckId)) return local.uploadCodeFile(deckId, dir, files);
     const form = new FormData();
     for (const f of files) form.append("file", f);
     const res = await fetch(`/api/decks/${deckId}/code-files?dir=${dir}`, { method: "POST", body: form });
@@ -206,16 +418,21 @@ export const api = {
   },
 
   deleteCodeFile: async (deckId: string, path: string): Promise<void> => {
+    if (await isLocalDeck(deckId)) return local.deleteCodeFile(deckId, path);
     const res = await fetch(`/api/decks/${deckId}/code-files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
     await j(res);
   },
 
+  /* ---------------- snapshots ---------------- */
+
   listSnapshots: async (deckId: string): Promise<string[]> => {
+    if (await isLocalDeck(deckId)) return local.listSnapshots(deckId);
     const res = await fetch(`/api/decks/${deckId}/snapshots`, { cache: "no-store" });
     return (await j<{ snapshots?: string[] }>(res)).snapshots ?? [];
   },
 
   snapshot: async (deckId: string, tag: string): Promise<string> => {
+    if (await isLocalDeck(deckId)) return local.snapshotDeck(deckId, tag);
     const res = await fetch(`/api/decks/${deckId}/snapshots`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -225,6 +442,7 @@ export const api = {
   },
 
   restoreSnapshot: async (deckId: string, name: string): Promise<void> => {
+    if (await isLocalDeck(deckId)) return local.restoreSnapshot(deckId, name);
     const res = await fetch(`/api/decks/${deckId}/snapshots`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -233,14 +451,20 @@ export const api = {
     await j(res);
   },
 
-  importFile: async (file: File): Promise<ImportReport> => {
+  /* ---------------- import / export ---------------- */
+
+  importFile: async (file: File, opts: { store?: DeckStore } = {}): Promise<ImportReport> => {
+    const store = opts.store ?? (await defaultStore());
+    if (store === "browser") return transfer.importFileToBrowser(file);
     const form = new FormData();
     form.append("file", file);
     const res = await fetch("/api/import", { method: "POST", body: form });
     return (await j<{ report: ImportReport }>(res)).report;
   },
 
-  importText: async (text: string, name: string): Promise<ImportReport> => {
+  importText: async (text: string, name: string, opts: { store?: DeckStore } = {}): Promise<ImportReport> => {
+    const store = opts.store ?? (await defaultStore());
+    if (store === "browser") return transfer.importTextToBrowser(text, name);
     const res = await fetch("/api/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -249,46 +473,26 @@ export const api = {
     return (await j<{ report: ImportReport }>(res)).report;
   },
 
-  exportUrl: (deckId: string, format: "smdeck" | "deck.tsx") =>
-    `/api/decks/${deckId}/export?format=${encodeURIComponent(format)}`,
-
-  /** auto-generated static thumbnail of a slide ("cover" = first slide) */
-  thumbUrl: (
-    deckId: string,
-    slideId: string,
-    opts?: { w?: number; mode?: ThemeMode; v?: string | number; layers?: "full" | "content"; np?: boolean },
-  ) => {
-    const q = new URLSearchParams();
-    q.set("w", String(opts?.w ?? 480));
-    if (opts?.mode) q.set("mode", opts.mode);
-    if (opts?.layers) q.set("layers", opts.layers);
-    if (opts?.v !== undefined) q.set("v", String(opts.v));
-    if (opts?.np) q.set("np", "1");
-    return `/api/decks/${deckId}/thumb/${encodeURIComponent(slideId)}?${q.toString()}`;
-  },
-
-  /** warm all slide thumbnails of a deck in the background (fire & forget) */
-  warmThumbs: async (deckId: string, v?: string | number, mode?: ThemeMode): Promise<void> => {
-    try {
-      await fetch(api.thumbUrl(deckId, "_warm", { v, mode }));
-    } catch {
-      /* background nicety */
+  /** export a deck from either store as a downloadable object URL */
+  exportDeck: async (deckId: string, format: "smdeck" | "deck.tsx"): Promise<{ url: string; filename: string }> => {
+    let blob: Blob;
+    let filename: string;
+    if (await isLocalDeck(deckId)) {
+      const rec = await local.getRecord(deckId);
+      if (!rec) throw new Error("Deck not found");
+      const out = await transfer.exportDeck(rec, format);
+      blob = out.blob;
+      filename = out.filename;
+    } else {
+      const res = await fetch(`/api/decks/${deckId}/export?format=${encodeURIComponent(format)}`);
+      if (!res.ok) throw new Error("Export failed");
+      blob = await res.blob();
+      filename = `${deckId}.${format === "smdeck" ? "smdeck" : "deck.tsx"}`;
     }
+    return { url: URL.createObjectURL(blob), filename };
   },
 
-  /** cleanup stale thumbnails for a deck or specific slide */
-  cleanupThumbs: async (deckId: string, slideId?: string): Promise<{ ok: boolean; deleted?: number }> => {
-    try {
-      const res = await fetch(`/api/decks/${deckId}/files`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "cleanup-thumbs", slideId }),
-      });
-      return j(res);
-    } catch {
-      return { ok: false };
-    }
-  },
+  /* ---------------- server-only helpers ---------------- */
 
   browseFs: async (dirPath?: string): Promise<FsBrowse> => {
     const q = dirPath ? `?path=${encodeURIComponent(dirPath)}` : "";

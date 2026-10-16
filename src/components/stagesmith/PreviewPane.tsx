@@ -1,8 +1,8 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import type { DeckJson, SlideEntry, Source } from "@/lib/stagesmith/types";
+import { ChevronLeft, ChevronRight, Moon, Sun } from "lucide-react";
+import type { DeckJson, SlideEntry, Source, ThemeMode } from "@/lib/stagesmith/types";
 import { StageFrame, resolveCode } from "./StageFrame";
 
 type PreviewMode = "final" | "bg" | "content" | "overlay";
@@ -54,8 +54,11 @@ export const PreviewPane = memo(function PreviewPane(props: {
   themeCss: string;
   version: string;
   onOverride: (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => void;
+  /** set the deck-wide default theme mode (readability fix: a light deck
+   *  authored in dark mode has faint light ink — Problem 07) */
+  onDeckMode?: (mode: ThemeMode) => void;
 }) {
-  const { deckId, deck, sel, themeCss, version } = props;
+  const { deckId, deck, sel, themeCss, version, onDeckMode } = props;
   const [mode, setMode] = useState<PreviewMode>("final");
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState(0);
@@ -87,6 +90,8 @@ export const PreviewPane = memo(function PreviewPane(props: {
   }, []);
 
   const idx = deck.slides.findIndex((s) => s.id === sel?.id);
+  const deckMode: ThemeMode = deck.settings.defaultMode ?? "dark";
+  const slideMode: ThemeMode = sel?.theme ?? deckMode;
 
   /* transparent stage behind layer-only previews — shows the Chassé checkerboard */
   const frameThemeCss =
@@ -108,6 +113,16 @@ export const PreviewPane = memo(function PreviewPane(props: {
           ))}
         </div>
         <div style={{ flex: 1 }} />
+        {onDeckMode && (
+          <button
+            className="ss-btn ss-btn-icon"
+            style={{ height: 24, width: 24 }}
+            onClick={() => onDeckMode(deckMode === "dark" ? "light" : "dark")}
+            title={`Deck theme: ${deckMode}${sel?.theme ? ` (this slide overrides with ${slideMode})` : ""} — click to switch the deck default`}
+          >
+            {deckMode === "dark" ? <Moon size={13} /> : <Sun size={13} />}
+          </button>
+        )}
         {steps > 1 && mode !== "bg" && (
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span className="ss-label" style={{ letterSpacing: ".1em" }}>

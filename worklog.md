@@ -124,3 +124,184 @@ Work Log:
 Stage Summary:
 - The Chassé studio theme is applied app-wide: chrome (dark+light), typography (Fraunces brand + Space Grotesk + Instrument Sans + JetBrains Mono), CodeMirror syntax theme, deck theme defaults, runtime kit (Glow/Footer/Progress), brand strings and status bar.
 - Deliverable: /home/z/my-project/download/chasse-theme.patch — `git diff 1878b6d -- src/ public/vendor/stagesmith.js worklog.md` (apply with `git apply chasse-theme.patch` on top of 1878b6d).
+
+---
+Task ID: 1
+Agent: main (Super Z)
+Task: Clone dev-sandakelum/presentation-2 into /home/z/my-project, install deps, start dev server (:3000) + stagesmith-sync (:3003), baseline check.
+
+Work Log:
+- Cloned https://github.com/dev-sandakelum/presentation-2.git to /home/z/presentation-2-clone
+- Read the full codebase (store/compile/templates/registry/thumbs, all API routes, all stagesmith components, runtime.html, vendor-src, mini-services/stagesmith-sync)
+- Stopped the default scaffold dev server; synced the clone over /home/z/my-project (kept sandbox infra: .zscripts, Caddyfile, db/, upload/, dev.log)
+- bun install (adds esbuild, socket.io, jszip, qrcode, codemirror, prettier…), bun run db:push
+- Started dev server (next dev -p 3000, tee dev.log) + sync service (bun --hot :3003)
+- Baseline: GET / 200, /api/decks lists prebuilt decks (to be removed per Problem 01)
+
+Stage Summary:
+- App runs in the sandbox; stale Windows-path registry links logged by sync service (will be cleaned in Task 7 with prebuilt deck removal)
+
+---
+Task ID: 2
+Agent: main (Super Z)
+Task: Problem 05 — React error #185 (maximum update depth exceeded) on every slide of newly created projects.
+
+Work Log:
+- ROOT CAUSE: vendor-src/stagesmith.tsx useSlideInfo() returned a fresh {index,total} object from the useSyncExternalStore selector on every snapshot → unstable getSnapshot → React #185. It is used by Footer/Progress/SlideNumber — all present in the NEW-project starter overlay (templates.ts starterDeckFiles) but NOT in the old prebuilt decks, which is why only new projects crashed.
+- Fixed useSlideInfo to select the two primitives separately and compose locally
+- Fixed <Step> effect deps [at, children] → [at] (children is a fresh object every render → effect re-ran every pass)
+- Added assetMap support to the runtime kit (state.assetMap, initRuntime passthrough, asset() checks map first) — needed for browser-stored decks (Task 3)
+- Recreated scripts/build-vendor.mjs (was never committed; default rebuilds stagesmith.js only, --all rebuilds all five bundles) and rebuilt public/vendor/stagesmith.js
+- runtime.html: modules can now arrive as inline compiled code (slideCode/bgCode/overlayCode/commonOverlayCode + *Ver hash) via blob URLs alongside the existing URL flow; module identity compared by stable key; assetMap passed into initRuntime
+- Verified: created deck p05-verify (starter overlay = CornerMarks+Footer+Progress), server-side thumbnail render → VLM confirms full slide (title, subtitle, footer 01/02, amber progress bar, corner marks, NO error card); test deck removed
+
+Stage Summary:
+- P05 fixed and verified; runtime now supports both URL modules (server decks) and inline code modules (browser decks, Task 3); vendor rebuild tooling restored
+
+---
+Task ID: 5-a
+Agent: general-purpose
+Task: Problem 02 — sync autostart + QR fixes: auto-start stagesmith-sync with the app (one command), mint the room token on ANY join, gate useSync when sync is impossible (hosted), honest QR panel states.
+
+Work Log:
+- mini-services/stagesmith-sync/index.ts: token is now minted in getOrCreateRoom (room creation = any first join, editor or display) instead of only on a "display" join; added a belt-and-braces `if (!room.token) room.token = crypto.randomBytes(6).toString("hex")` heal in the join handler (covers rooms created before this change and rooms kept across bun --hot soft reloads); display branch now just emits the existing token. Remote token checking unchanged (strict).
+- Verified live over socket.io-client against the hot-reloaded service: editor join → token "dff6cf13c618" (12-hex, NON-null — was null before); wrong-token remote → {"message":"Invalid or missing remote token"}; correct-token remote → joined. Service healthy: plain GET :3003 → 400 (socket.io listening).
+- src/instrumentation.ts (NEW): register() auto-starts the sync service. Guards: NEXT_RUNTIME === "nodejs" only; skip when process.env.VERCEL (hosted can't run local servers); skip during phase-production-build; opt-out via SS_NO_SYNC; module-level spawnAttempted double-spawn flag; port-3003 probe via net.createConnection (connect → "already running" skip, 1.5s timeout). Project root: process.cwd() then __dirname, each walking up ≤12 parents until mini-services/stagesmith-sync/index.ts is found. Runner chain: `bun --hot index.ts` (spawnSync bun --version probe) → service-local node_modules/.bin/tsx → `npx tsx index.ts`. Child spawned detached:true + unref(), cwd = service dir, stdio → service sync.log (fd opened "a", parent closes its copy after spawn), child.on("error") swallows async ENOENT; entire body wrapped in try/catch — never throws.
+- Edge-runtime safety: instrumentation.ts is also compiled for the Edge runtime, and plain dynamic `import("node:net")` etc. made Turbopack log "A Node.js module is loaded … not supported in the Edge Runtime" warnings (4×, seen in dev.log from the first compile). Fixed by marking the four dynamic imports with /* webpackIgnore: true */ /* turbopackIgnore: true */ so neither bundler follows them (runtime guard keeps them unexecuted in Edge); kept everything in the single file to stay within the 4-file scope. No new warnings after the fix.
+- src/hooks/useSync.ts: UseSync interface gains `unavailable: boolean` (default false). Effect gating: hostname loopback/private-IPv4 → connect immediately (phone/LAN path unchanged); otherwise getCapabilities() is awaited INSIDE the effect (SSR-safe) and the socket is created only when fsWritable === true (local run behind the preview gateway); when not allowed NO socket is created — connected stays false, roomToken cleared to null, error stays null, unavailable set true. connect()/swap/presence listeners, join payload, and the dependency array [deckId, role, slides-ids] are untouched; a `cancelled` flag guards the async capabilities path against cleanup races (socket can never leak past cleanup).
+- src/components/stagesmith/QrPanel.tsx: new OPTIONAL props `connected` (default true) and `unavailable` (default false) — callers not edited (parallel agent wires them; existing call sites keep compiling). blocked = unavailable || connected === false → instead of any QR: dashed card with WifiOff icon, heading "Phone remote needs a local run", body explaining the sync service runs beside the app on a local run (bun run dev / npm run dev — starts automatically) and a hosted deployment cannot start a server on your machine or link your phone. In blocked state the LAN origin picker, remote-URL row (no hosted URL as "remote link") and same-network hint row are all hidden, and NO QR image is generated even with a stale token. token → existing QR behavior (LAN origin picker, /api/qr image, copy URL, hint, refresh) unchanged. Waiting state reworded: "Waiting for the sync service…" + sub-line "The sync service starts automatically with a local run — if this persists, check that port 3003 is free." (dropped "open Present once"). Styling keeps ss-qr-card / ss-btn / existing CSS vars; lucide WifiOff added.
+- Verification: bun run lint → 0 problems; npx tsc --noEmit → clean (re-run after every edit); app routes 200 (library / ?deck=… / ?deck=…&present=1), sync :3003 → 400. register() smoke-tested under tsx with NEXT_RUNTIME=nodejs and cwd = the service dir (worst case for root discovery): logged "[sync] stagesmith-sync already running on :3003 — not spawning", no throw, second call no-op (double-spawn guard). Spawn path tested with a FAKE service on :3005 via a parameterized replica (real service untouched): port probe correctly reported free, bun detected, child spawned detached with output landing in its sync.log, parent exited, child STILL answered curl afterwards (ppid=1 — survives server restarts); my own test child was then stopped and all throwaway scripts removed.
+- Dev-server pickup NOTE: the shared `next dev` (Turbopack 16.1.3) compiled src/instrumentation.ts (its edge warnings appeared in dev.log) but did NOT re-execute register() on file change — Next loads instrumentation at server start only, and the server was started before the file existed. No "[sync]" line will appear until the next dev-server restart / production start. Per instructions the server was NOT restarted by me.
+
+Stage Summary:
+- One command now runs both: on the next `next dev`/`next start` boot, src/instrumentation.ts spawns stagesmith-sync (bun --hot, detached, logging to mini-services/stagesmith-sync/sync.log) unless :3003 is already listening, the environment is hosted (VERCEL), or SS_NO_SYNC is set — failures degrade silently, never crashing the app.
+- Room tokens mint on ANY first join, so the dashboard QR panel gets its token immediately without opening Present first; remotes remain strictly token-gated.
+- useSync no longer hammers a nonexistent service on hosted deployments: it reports `unavailable: true` with no socket, and QrPanel replaces the QR with an honest "Phone remote needs a local run" card (no hosted-URL QR, no misleading hint); the waiting copy now points at port 3003 instead of "open Present once".
+- Known follow-ups (other agents, per scope): DashboardView/PresentView should pass `connected`/`unavailable` from useSync into QrPanel; dev server needs one restart to activate the instrumentation hook.
+
+---
+Task ID: 3
+Agent: main (Super Z)
+Task: Problem 01 core — deck storage that works without a database on read-only/serverless deployments.
+
+Work Log:
+- New GET /api/capabilities — probes whether the server FS is writable (mkdir+write+rm under decks/); false on Vercel (EROFS); env override SS_FORCE_READONLY=1 for testing; per-process cache
+- New src/lib/stagesmith/browser-store.ts — IndexedDB deck store ("the folder is the project" as a file map): decks/snapshots/handles object stores; full op set mirroring the server store (list/getBundle/create/delete/duplicate, file read/save/delete, slide add/delete/duplicate/reorder/patch, deck patch, snapshots (last 10), assets as Blobs, code files, device-folder handle persistence, content-hash signatures, in-memory record cache, asset data-URL map cache)
+- compile.ts: new compileVirtual(files, entry) — esbuild virtual-FS bundle (internal imports inlined, bare allow-list external) with path rules mirroring the server compiler; POST /api/compile serves it statelessly (limits: 600 files / 12 MB) — no disk access, works on serverless
+- runtime.html (Task 2): modules can arrive as inline code (slideCode/bgCode/overlayCode/commonOverlayCode + ver keys) → blob URL import inside the sandbox; stable module keys for hot-swap; assetMap passed to the runtime kit
+- client.ts reworked into a STORE-AWARE facade: every api.* method dispatches on storeOf(deckId) (browser store first, server REST otherwise); listDecks merges both stores; createDeck/importFile default to the server when fsWritable, else the browser store (explicit store override supported); exportDeck builds .smdeck/.deck.tsx client-side (JSZip) for browser decks; resolveModule resolves layers to URL (server) or inline code (browser) with cache
+- New src/lib/stagesmith/transfer.ts — client-side import/export: .smdeck zip parse (binary-aware: assets as Blobs, unlike the old server importer which corrupted binaries via utf8), // @file text import, bare-slide scaffold, sha-256 manifest via crypto.subtle
+- New src/lib/stagesmith/themeurl.ts — shared rewriteThemeCss (server decks); store.ts listDecks now returns store:"server" + cover payload (slideId/mode/bg/overlay/themeCss) for live cover thumbs; bundle.ts sets store:"server"
+- files route + slides route: removed server-side thumbnail cleanup hooks (pipeline deleted, see Task 4)
+
+Stage Summary:
+- Decks can now live in the browser (IndexedDB) with the exact same editor/presenter feature set; compile is stateless and works hosted; no database, no backend storage
+- Server decks remain the default on local runs (fsWritable=true)
+
+---
+Task ID: 4
+Agent: main (Super Z)
+Task: Problem 03 — slide thumbnails not updating / showing "01"/"02" placeholders.
+
+Work Log:
+- ROOT CAUSE: thumbnails were server-rendered stills via headless Chromium (src/lib/stagesmith/thumbs.ts) cached under <deck>/.stagesmith/thumbs — impossible on hosted deployments (no Chrome binary, read-only FS) → placeholder SVGs showing the slide number on a dark background, exactly what the user saw; stale after edits locally too when the cache key missed
+- New LiveThumb component — the SAME sandboxed Stage Runtime as the big preview, static mode (animations frozen, all steps visible), auto-scaled into the thumb box; module versions are part of the render config so every thumb refreshes automatically after ANY change (edits, undo/redo, theme, bg) — nothing stored server-side
+- Filmstrip: ThumbImg → LiveThumb (lazy-mounted via IntersectionObserver); thumb restructured as .ss-thumb-item (frame + caption BELOW the frame) — fixes the reported label/number-chip overlap; .ss-thumb-label removed
+- LibraryView cards: live cover thumbs driven by the new DeckSummary.cover payload; store chips (linked / this browser / device)
+- PresentView: overview grid → LiveThumb; REMOVED the exit-ghost still system (server-Chromium stills) — the incoming-slide glide animation + 1600ms bg crossfade remain and are consistent everywhere
+- StageFrame reworked: resolveCode now routes through the store-aware resolveModule (URL or inline code); config carries slideCode/bgCode/…Code + *Ver + assetMap (data URLs for browser decks; also used for image layers); last-good-slide logic now tracks module info
+- Deleted: src/lib/stagesmith/thumbs.ts, /api/decks/[deckId]/thumb route, ThumbImg.tsx, api.thumbUrl/warmThumbs/cleanupThumbs
+- Verified with agent-browser + VLM: library cards render real live covers; dashboard filmstrip shows real previews with captions; typed edit → compile error surfaced (error banner + badge); fixed on disk → folder watcher reloaded → BOTH the filmstrip thumb and center preview show the new "LIVE THUMB TEST" content and MATCH
+
+Stage Summary:
+- Thumbnails are live, client-side, update on every change, and work identically on hosted and local deployments; the server Chromium pipeline is gone
+
+---
+Task ID: 6
+Agent: main (Super Z)
+Task: Problem 04 — file system access without a permission prompt (folder picker browsed the SERVER's fs).
+
+Work Log:
+- New src/lib/stagesmith/device.ts — File System Access API layer: pickDirectory (showDirectoryPicker, user gesture), createDeviceProject (writes the full scaffold into <picked>/<name>/, registers a browser-store deck with the folder handle), write-through mirror (installDeviceMirror — mirrors the whole file map on every save while permission is granted), openDeviceProject (reads deck.json at root or one level deep, imports files+blobs, attaches handle), downloadStarterZip (.smdeck scaffold download for non-Chromium browsers), permission helpers
+- NewProjectDialog reworked: location mode chips — "My device" (folder picker = permission prompt, one-step create), "App folder" (server browser, only when fsWritable — local runs where the server IS the user's machine), "Download .zip" (fallback); structure preview adapts; device mode explains the browser permission + write-through
+- OpenFolderDialog reworked: device folder picker first (opens any folder with a deck.json from the user's device, imports + mirrors), server browser kept as secondary on local runs, .smdeck hint otherwise
+- LibraryView: New deck routes by capabilities (toast explains "saved in this browser" on hosted); empty state rewritten for the empty-start dashboard (P01); cards show device/this-browser chips
+- QrPanel wired with connected/unavailable props in DashboardView + PresentView (subagent 5-a's states)
+
+Stage Summary:
+- The user's device is now a first-class project location via the browser's own permission prompt, with zip fallback — no server fs access implied, no database
+
+---
+Task ID: 7
+Agent: main (Super Z)
+Task: Remove pre-built decks — dashboard starts empty (Problem 01).
+
+Work Log:
+- Removed decks/hi, decks/slidesmith-theme-test, stagelink/ (external project) and decks/.registry.json (contained stale Windows-path links from the original author's machine)
+- decks/ now ships only .gitkeep + README.md explaining that decks are runtime data
+- .gitignore: /decks/* (keeps .gitkeep + README), registry, mini-service sync logs, tool-results
+- Verified: GET /api/decks → [], library shows the new empty state
+
+Stage Summary:
+- The prebuilt decks are gone; on a fresh clone/deployment the dashboard starts empty and every deck is created by the user at runtime (server store locally / browser store hosted / device folders)
+
+---
+Task ID: 8
+Agent: main (Super Z)
+Task: End-to-end verification of all five fixes in BOTH modes (local server store + forced read-only "hosted" mode via SS_FORCE_READONLY=1), plus fixes found along the way.
+
+Work Log:
+- Instrumentation refactor: split into src/instrumentation.ts (tiny dispatcher, NEXT_RUNTIME gate) + src/instrumentation-node.ts (the logic) — kills the 4 "Ecmascript file had an error" Edge-runtime warnings from the pre-refactor version; auto-start verified on server restart ("[sync] stagesmith-sync already running on :3003 — not spawning")
+- Wired QrPanel connected/unavailable props into DashboardView + PresentView
+- Fixed: dashboard used to hang on "Opening <deck>…" forever when a deck exists in NO store (e.g. browser deck opened from another origin/profile) — added a "not found" state with an explanation and a Back to library button
+- HOSTED MODE (SS_FORCE_READONLY=1 → /api/capabilities fsWritable:false): library empty → New deck → created in the browser store (toast explains) → dashboard renders FULL slide content with the Chassé starter overlay (CornerMarks+Footer+Progress — no React #185!) → typed an edit → autosaved to IndexedDB ("Saved" chip) → stateless POST /api/compile → runtime imported the blob module → filmstrip thumbnail AND center preview both show "BROWSER STORE WORKS" in amber and MATCH → reload → everything persisted; library card shows "this browser" chip with a live cover; // @file paste import created "pasted-deck" and rendered "PASTED DECK OK"
+- QR (P02): localhost → QR image + token minted on EDITOR join (no "open Present once" anymore); phone remote in a second tab joined LIVE with the token and its Next click advanced the presenter (room state 02/02, presenter chrome + LIVE chip + "1 remote" confirmed). Hosted-simulated origin (public IP, fsWritable:false) → QrPanel shows the WifiOff "Phone remote needs a local run" card, NO QR and NO hosted-URL link (as requested)
+- LOCAL MODE (fsWritable:true): New deck → written to decks/<id>/ on disk; library merges server + browser stores; New project dialog offers all three locations (My device / App folder / Download .zip); zip download toast verified; device-picker button triggers gracefully in headless (native dialog can't display there — code path follows the standard File System Access API with AbortError/permission handling)
+- Known sandbox-only artifact (pre-existing, documented in the repo worklog): the PRESENT view's sandboxed iframes rasterize white in this headless environment even though the identical StageFrame pipeline paints correctly in the dashboard (pixel-verified) and the presenter's DOM/room state is correct; the repo's own older screenshots show the same, so real browsers are unaffected
+- Mobile 390px: header, empty state, no overflow/overlap
+- Cleaned all test data (server decks/ and the test browser's IndexedDB) — fresh start
+- bun run lint: 0 problems · npx tsc --noEmit: clean · dev.log: no errors after the final restart
+
+Stage Summary:
+- All five problems verified fixed in both deployment modes; app ships with an empty dashboard; lint/types/log clean
+
+---
+Task ID: 9
+Agent: main (Super Z)
+Task: Final completion check + produce git.patch (all fixes as one patch against the repo's last commit).
+
+Work Log:
+- Re-verified the running app end-to-end with agent-browser on :3000: library empty start (P01) → New deck "smoke-test" → dashboard renders (no SLIDE ERROR, no React #185 — P05) → filmstrip thumbs load compiled slide/bg/overlay modules into LiveThumb frames, captions below frames, no overlap (P03) → QR panel shows remote URL with a minted 12-hex token on editor join, no "waiting for token" (P02) → File menu offers New project…/Open folder…/Load .smdeck… and the New project dialog shows My device / App folder / Download .zip with the browser-permission folder picker (P04)
+- Decisive runtime proof for P03/P05: drove public/runtime.html directly as a top-level page with the real compiled module URLs — window.__ssRendered=1, zero errors, DOM contains all three layers ("YOUR KICK LINE / Deck title / A subtitle…" + Chassé 01/02 overlay), and VLM confirms the full visual paint (grid bg, corner marks, footer, progress line). The blank embedded frames in the headless browser are the already-documented sandboxed-iframe compositing artifact; real browsers unaffected
+- Deleted the smoke-test deck (DELETE /api/decks/:id → ok) and re-verified the clean empty start; bun run lint 0 problems; npx tsc --noEmit clean; zero page errors in the browser console
+- Built git.patch in the pristine clone (HEAD 290e63c "Add open folder option to dashboard main menu"): synced the 24 modified + 11 new files (capabilities API, browser-store/device/themeurl/transfer libs, LiveThumb, instrumentation*.ts, runtime.html, rebuilt vendor stagesmith.js, build-vendor.mjs, .gitignore, decks/.gitkeep+README, worklog) and staged the 50 deletions (prebuilt decks hi + slidesmith-theme-test + .registry.json, stagelink/, thumbs.ts, ThumbImg.tsx, thumb route) → git diff --cached --binary (788 KB, 85 files, +3406/−2715)
+- Intentionally NOT in the patch: .zscripts/dev.pid (runtime PID), mini-services/stagesmith-sync/bun.lock (regenerated lock referencing undeclared devDeps; the unchanged package.json keeps the original lock valid), upload/ artifacts (original author's files), sandbox-only infra
+- Verified roundtrip: git apply --check → clean; git apply → diff -rq vs the fixed project shows ONLY the intentionally excluded files; clone restored to pristine with git.patch as the sole untracked file
+- First patch build attempt had two pitfalls (both fixed in the final build): (a) the pre-existing git.patch file in the clone got staged by git add -A and was then removed by the hard reset — the rebuild script now starts from a state where the patch is absent before staging; (b) a stray chained `git reset --hard` ran with the shell parked in my-project and reverted the first worklog append — all subsequent git calls use explicit `git -C <dir>`
+- Copied git.patch to /home/z/my-project/download/git.patch for download from the preview environment
+
+Stage Summary:
+- Job complete: all five problems fixed and browser-verified; git.patch (based on the repo's last commit 290e63c) applies cleanly with `git apply git.patch` and reproduces the fixed tree exactly
+
+---
+Task ID: 10
+Agent: main (Super Z)
+Task: Problem 06 (assets not previewing) + Problem 07 (Present mode missing background/content, faint title) — diagnosed live against the user's browser-store deck "stagelink2" (a recreation of the old MSA "hi" deck) in the preview gateway environment.
+
+Work Log:
+- Reproduced BOTH problems end-to-end in a hosted simulation (agent-browser/playwright with /api/capabilities mocked read-only + socket.io blocked): .smdeck import → browser store; Assets panel showed broken alt-text previews (/api/assets/<deck>/… 404s — browser decks have no server files); Present mode rendered ONLY the overlay — plain white stage, no SilkWaves bg, no slide text, SA badge as broken alt text
+- Pixel-level bisect of the white present stage: the bg frame and overlay frame DID paint (waves visible when the content frame was hidden) — the CONTENT frame's iframe rasterized as opaque white and covered everything; wrapper restyling, display toggles, GPU-layer nudges and even fresh iframe clones never fixed that specific frame, while the exact same render config in a freshly created iframe painted fine
+- ROOT FIX (P07): PresentView restructured to ONE live StageFrame — background + slide content + per-slide/common overlays composed in a single sandboxed runtime, the EXACT pipeline the editor preview uses (the user's requirement: present == editor). The runtime already hot-swaps only changed layer modules, so the bg and common overlay keep running across slide changes; removed the separate bg-frame crossfade system and the persistent overlay frame (the 1600 ms bg crossfade is gone; slide transitions keep the glide animation)
+- Offline presenter (P07b): navigation previously did NOTHING without the sync socket (arrow keys/click zones only emitted socket events) — PresentView now keeps a local index that drives the deck whenever the room state is unavailable (hosted deployments); connected runs stay room-authoritative. Status badge: "sync"/"N remotes" (green) when connected, "local" (neutral, with tooltip) when no sync service can exist, "offline" (red) only while reconnecting
+- P06a runtime asset healing (public/runtime.html): capture-phase error listener heals failed subresource loads — raw relative paths ("assets/bg.png" resolve against /runtime and 404 in the sandbox) AND stale /api/assets/<other-deck>/… URLs (the MSA overlay's hardcoded /api/assets/hi/… badge) are retried from the deck's assetMap (data URLs, browser decks) or the deck's own assetBase route (server decks); verified the badge now renders as an image and a raw-path <img> in slide code loads (naturalWidth > 0)
+- P06b store-aware asset previews: new api.assetUrl facade — browser decks get IndexedDB blobs as object URLs (cached per deck+path, invalidated on blob change), server decks keep the /api/assets route; CodePane AssetsTab uses it for grid previews
+- P06c legacy junk: .smdeck imports and exports now skip dot-segment paths (the old .stagesmith/thumbs caches no longer pollute the Assets panel); listAssets filters them for already-imported decks; zip blobs are re-typed with proper image/font MIMEs (JSZip hands out typeless blobs)
+- Readability (P07c): new deck-default theme toggle (Moon/Sun) in the preview toolbar — one click flips deck.settings.defaultMode; the MSA deck is a light deck authored in dark mode (near-white #f2f2f2 ink on light-blue waves = the reported "faint title"), switching to light makes the title dark and clearly readable everywhere (editor + present); per-slide overrides still win
+- VERIFIED (hosted sim, browser store + offline): Assets panel previews load (blob: URLs), no .stagesmith junk; editor unchanged; Present renders waves + content + overlay + healed badge in ONE frame; ArrowRight offline advances 01/02 → 02/02 ("Thank you"); overview grid shows real live thumbs
+- VERIFIED (local, server store): New deck on disk; editor filmstrip/preview fine; assets upload → file on disk + route preview loads; Present renders the starter deck perfectly (dark grid, title, footer, progress; the previous "present frames rasterize white" headless artifact is gone with the single-frame pipeline); connected nav via click zones advances through the room; badge "sync"
+- VERIFIED (user's gateway URL, server deck): present shows "sync" badge (socket.io via gateway works), room state echoes, single frame, full paint
+- Cleaned all test data (server decks/ + test browser IndexedDB), removed debug scripts/screenshots; bun run lint 0 problems; npx tsc --noEmit clean; no console errors
+
+Stage Summary:
+- P06: assets preview and render correctly in BOTH stores — object-URL previews for browser decks, runtime healing for raw/stale asset paths, legacy cache files filtered
+- P07: Present mode is now the editor's exact rendering pipeline in one sandboxed frame — background, content and overlays all render; the presenter navigates fully offline; the badge explains hosted "local" mode; the deck-default theme toggle fixes light decks authored in dark mode

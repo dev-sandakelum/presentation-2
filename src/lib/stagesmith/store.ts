@@ -2,7 +2,8 @@ import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import { deckRootOf, listLinks, refreshLinks, unlinkDeck } from "./registry";
-import type { DeckJson, DeckSummary, FileRow, SlideEntry, Source } from "./types";
+import { rewriteThemeCss } from "./themeurl";
+import type { DeckCover, DeckJson, DeckSummary, FileRow, SlideEntry, Source } from "./types";
 
 /**
  * Stagesmith deck store — the folder IS the project (plan §2).
@@ -126,6 +127,24 @@ export async function deckExists(deckId: string): Promise<boolean> {
   }
 }
 
+/** minimal payload a live cover thumbnail needs (LibraryView cards) */
+async function coverOf(deck: DeckJson, deckId: string): Promise<DeckCover> {
+  const coverSlide = deck.slides[0] ?? null;
+  let themeCss = "";
+  try {
+    themeCss = rewriteThemeCss(await fs.readFile(deckPath(deckId, "theme.css"), "utf8"), deckId);
+  } catch {
+    themeCss = "";
+  }
+  return {
+    slideId: coverSlide?.id ?? null,
+    mode: coverSlide?.theme ?? deck.settings.defaultMode,
+    bg: coverSlide?.bg !== undefined ? coverSlide.bg : deck.bg,
+    overlay: coverSlide?.overlay !== undefined ? coverSlide.overlay : deck.overlay,
+    themeCss,
+  };
+}
+
 export async function listDecks(): Promise<DeckSummary[]> {
   refreshLinks(); // always list from the freshest registry on disk
   let entries;
@@ -148,6 +167,8 @@ export async function listDecks(): Promise<DeckSummary[]> {
         modified: deck.modified,
         signature: await deckSignature(e.name),
         external: false,
+        store: "server",
+        cover: await coverOf(deck, e.name),
       });
     } catch {
       /* not a deck folder — skip */
@@ -166,6 +187,8 @@ export async function listDecks(): Promise<DeckSummary[]> {
         modified: deck.modified,
         signature: await deckSignature(id),
         external: true,
+        store: "server",
+        cover: await coverOf(deck, id),
       });
     } catch {
       /* moved or deleted on disk — skip */
@@ -226,10 +249,6 @@ export async function deleteSlide(deckId: string, slideId: string): Promise<Deck
   if (idx < 0) throw new Error("Slide not found");
 
   await snapshotDeck(deckId, `before-delete-${slideId}`);
-
-  // Clean up thumbnails for this slide BEFORE removing it
-  const { deleteSlideThumbs } = await import("./thumbs");
-  await deleteSlideThumbs(deckId, slideId).catch(() => {});
 
   // collect override files referenced only by this slide
   const entry = deck.slides[idx];

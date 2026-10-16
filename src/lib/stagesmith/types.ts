@@ -80,6 +80,23 @@ export interface DeckSummary {
   signature: string;
   /** true when the project folder lives outside decks/ (linked project) */
   external?: boolean;
+  /** where this deck lives: "server" (app folder, local runs) or "browser"
+   *  (this browser's storage — hosted/read-only deployments) */
+  store?: "server" | "browser";
+  /** true when the deck mirrors into a folder on the user's device
+   *  (File System Access API — Chromium browsers) */
+  device?: boolean;
+  /** minimal payload to render a live cover thumbnail without loading the deck */
+  cover?: DeckCover;
+}
+
+/** everything a live cover/thumb needs, without a full bundle fetch */
+export interface DeckCover {
+  slideId: string | null;
+  mode: ThemeMode;
+  bg: Source;
+  overlay: Source;
+  themeCss: string;
 }
 
 /** full deck payload used by the editor / presenter / remote (client + SSR) */
@@ -88,6 +105,10 @@ export interface DeckBundle {
   files: FileRow[];
   signature: string;
   themeCss: string;
+  /** "browser" decks live in this browser's storage (hosted deployments) */
+  store?: "server" | "browser";
+  /** device-folder mirror is attached (File System Access API) */
+  device?: boolean;
 }
 
 export interface CompileResult {

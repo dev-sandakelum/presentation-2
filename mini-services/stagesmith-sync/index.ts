@@ -66,7 +66,10 @@ function getOrCreateRoom(deckId: string): Room {
       steps: 1,
       order: [],
       stepsMap: new Map(),
-      token: null,
+      // Minted at room creation (Problem 02): the dashboard QR panel joins as
+      // an EDITOR, so the token must exist on ANY first join — not only after
+      // a presenter (role "display") opens Present. Remotes stay token-checked.
+      token: crypto.randomBytes(6).toString("hex"),
       remotes: new Map(),
       updatedAt: Date.now(),
     };
@@ -180,8 +183,11 @@ io.on("connection", (socket) => {
       }
       clampToRoom(room);
 
+      // belt-and-braces: rooms created before this change (or kept across a
+      // bun --hot soft reload) may still carry a null token — heal on any join
+      if (!room.token) room.token = crypto.randomBytes(6).toString("hex");
+
       if (role === "display") {
-        if (!room.token) room.token = crypto.randomBytes(6).toString("hex");
         socket.emit("joined", { state: roomState(room), token: room.token });
       } else if (role === "remote") {
         if (!data.token || data.token !== room.token) {

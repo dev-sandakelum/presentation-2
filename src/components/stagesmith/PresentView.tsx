@@ -1,36 +1,34 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Grid2X2, Maximize2, Moon, QrCode, Sun, X } from "lucide-react";
 import { api } from "@/lib/stagesmith/client";
 import type { DeckBundle } from "@/lib/stagesmith/client";
 import type { DeckJson, Source, ThemeMode } from "@/lib/stagesmith/types";
 import { StageFrame } from "./StageFrame";
 import { QrPanel } from "./QrPanel";
-import { ThumbImg } from "./ThumbImg";
+import { LiveThumb } from "./LiveThumb";
 import { useDeckUpdated, useSync } from "@/hooks/useSync";
 import { BrandLogo } from "./LibraryView";
-import type { SsNav } from "./shared";
+import { download, type SsNav } from "./shared";
 
 /**
- * The presenter display (plan §7) — layered for buttery transitions:
+ * The presenter display (plan §7).
  *
- *   z0  background   live StageFrame, 1600 ms crossfade on change
- *   z2  content      live StageFrame (slide + per-slide overlay override),
- *                    animated on every slide change, with a static "ghost"
- *                    still of the OUTGOING slide gliding out on top
- *   z4  deck overlay a SEPARATE persistent StageFrame that never mounts
- *                    inside the animated wrapper — slide changes don't
- *                    re-render, re-animate or refresh it
+ * ONE live StageFrame renders the full composed stage — background, slide
+ * content and overlays — exactly like the editor's "Final" preview (Problem 07:
+ * present must match the editor pixel-for-pixel). The runtime hot-swaps only
+ * the layer modules that changed, so the background and common overlay keep
+ * running (no reload, no animation restart) across slide changes.
  *
- * Server-resolved nav via WS; live edit hot-swap; keyboard / swipe /
- * click zones / overview / QR.
+ * Navigation is room-synced when the sync service is reachable (local runs)
+ * and falls back to fully local navigation when it isn't (hosted deployments)
+ * — the presenter always works, with or without a phone remote.
  */
 
 /** transition defaults (deck settings override the duration) */
 const T_EASE = "cubic-bezier(.22,1,.36,1)";
 const T_MS = 430;
-const GHOST_MS = 460;
 
 export function PresentView({
   deckId,
@@ -60,7 +58,14 @@ export function PresentView({
   // sync — the display is the presenter: it owns the token
   const sync = useSync(deckId, "display", null, slides);
   const state = sync.state;
-  const index = Math.max(0, Math.min(state?.index ?? 0, Math.max(0, slides.length - 1)));
+
+  // local navigation state — drives the deck whenever the room state is not
+  // available (offline / hosted): the presenter never gets stuck (Problem 07)
+  const start = fromParam ? Math.max(0, Number(fromParam) || 0) : 0;
+  const [localIndex, setLocalIndex] = useState(start);
+  const roomIndex =
+    sync.connected && state ? Math.max(0, Math.min(state.index ?? 0, Math.max(0, slides.length - 1))) : null;
+  const index = roomIndex ?? Math.max(0, Math.min(localIndex, Math.max(0, slides.length - 1)));
   const step = state?.step ?? 0;
   const current = slides[index] ?? null;
 
@@ -75,11 +80,11 @@ export function PresentView({
 
   // jump into position when the room state is missing (fresh room)
   const didInitRef = useRef(false);
-  const start = fromParam ? Math.max(0, Number(fromParam) || 0) : 0;
   useEffect(() => {
     if (!sync.connected || !state || didInitRef.current) return;
     didInitRef.current = true;
     if (fromParam !== null && slides[start]?.id) {
+      setLocalIndex(start);
       sync.sendSlide(slides[start].id, 0);
     }
   }, [sync.connected, state, slides, fromParam]);
@@ -90,24 +95,6 @@ export function PresentView({
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
-
-  // warm the stills of the current + adjacent slides (transition ghosts)
-  useEffect(() => {
-    if (!current) return;
-    const around = [slides[index - 1]?.id, current.id, slides[index + 1]?.id].filter(Boolean);
-    for (const id of around) {
-      const s = slides.find((x) => x.id === id);
-      if (!s) continue;
-      const img = new Image();
-      img.src = api.thumbUrl(deckId, id, {
-        w: 1280,
-        layers: "content",
-        mode: s.theme ?? deck?.settings.defaultMode,
-        v: version,
-        np: true,
-      });
-    }
-  }, [deckId, current?.id, version, deck?.settings.defaultMode, index, slides, current]);
 
   // live edit (plan: hot-swap the changed slide, stay in place)
   useDeckUpdated(sync.socket, useCallback(() => {
@@ -122,16 +109,21 @@ export function PresentView({
   const lastIndexRef = useRef(index);
   const navNext = useCallback(() => {
     setDir("next");
+    setLocalIndex((i) => Math.min(i + 1, Math.max(0, slides.length - 1)));
     sync.sendNav("next");
-  }, [sync]);
+  }, [sync, slides.length]);
   const navPrev = useCallback(() => {
     setDir("prev");
+    setLocalIndex((i) => Math.max(0, i - 1));
     sync.sendNav("prev");
   }, [sync]);
 
   const goSlide = useCallback((slideId: string) => {
     const to = slides.findIndex((s) => s.id === slideId);
-    if (to >= 0) setDir(to > lastIndexRef.current ? "next" : "prev");
+    if (to >= 0) {
+      setDir(to > lastIndexRef.current ? "next" : "prev");
+      setLocalIndex(to);
+    }
     sync.sendSlide(slideId, 0);
     setUi((u) => ({ ...u, overview: false }));
   }, [sync, slides]);
@@ -215,8 +207,8 @@ export function PresentView({
   }, [bump]);
 
   /* ---------- smooth slide transition (incoming) ----------
-     The live content frame glides in from the navigation direction —
-     transform + opacity only, so it stays on the compositor at 60fps. */
+     The live stage glides in from the navigation direction — transform +
+     opacity only, so it stays on the compositor at 60fps. */
   const frameWrapRef = useRef<HTMLDivElement | null>(null);
   const lastSlideIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -244,94 +236,7 @@ export function PresentView({
       ],
       { duration: Math.max(300, deck?.settings.transitionMs ?? T_MS), easing: T_EASE, fill: "backwards" },
     );
-     
   }, [current?.id, dir, deck?.settings.transitionMs]);
-
-  /* ---------- exit ghost (outgoing static still) ----------
-     A pre-generated transparent still of the outgoing slide glides OUT
-     above the incoming frame — a true two-layer cross transition without
-     keeping two live runtimes around. */
-  const [ghost, setGhost] = useState<{ slideId: string; src: string; key: number } | null>(null);
-  const ghostRef = useRef<HTMLImageElement | null>(null);
-  const prevSlideRef = useRef<{ id: string; mode: ThemeMode } | null>(null);
-
-  useEffect(() => {
-    const t0 = Date.now();
-    const prev = prevSlideRef.current;
-    const cur = current ? { id: current.id, mode: current.theme ?? deck?.settings.defaultMode ?? "dark" } : null;
-    prevSlideRef.current = cur;
-    if (!prev || !cur || prev.id === cur.id) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) {
-      setGhost(null);
-      return;
-    }
-    // fire the ghost only when its still is already warm in the cache —
-    // never block or flicker the live swap (np=1 → 404 while cold)
-    const src = api.thumbUrl(deckId, prev.id, { w: 1280, layers: "content", mode: prev.mode, v: version, np: true });
-    const probe = new Image();
-    probe.onload = () => {
-      // too late — the transition is over, a ghost would look out of place
-      if (Date.now() - t0 > 650) return;
-      setGhost({ slideId: prev.id, src, key: Date.now() });
-      requestAnimationFrame(() => {
-        const el = ghostRef.current;
-        if (!el) return;
-        const toX = dir === "next" ? -40 : 40;
-        el.animate(
-          [
-            { opacity: 0.98, transform: "translateX(0px) scale(1)" },
-            { opacity: 0, transform: `translateX(${toX}px) scale(1.012)` },
-          ],
-          { duration: GHOST_MS, easing: T_EASE, fill: "forwards" },
-        );
-      });
-    };
-    probe.src = src;
-    const t = setTimeout(() => setGhost(null), GHOST_MS + 60);
-    return () => clearTimeout(t);
-  }, [current?.id, deckId, dir, version, deck?.settings.defaultMode]);
-
-  /* ---------- 1600ms bg crossfade (plan §8) ----------
-     No change → no fade. On change: incoming below zooms 1.045→1 and fades
-     in, outgoing stays above and fades out. Common bg across consecutive
-     slides never remounts (running effects never restart). */
-  const bgSource: Source | undefined = current?.bg !== undefined ? current.bg : deck?.bg;
-  const bgKey = bgSource ? JSON.stringify(bgSource) : "none";
-  const [fade, setFade] = useState<{ key: string; src: Source | undefined } | null>(null);
-  const lastBgRef = useRef<{ key: string; src: Source | undefined } | null>(null);
-  const fadeInRef = useRef<HTMLDivElement | null>(null);
-  const fadeOutRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const prev = lastBgRef.current;
-    lastBgRef.current = { key: bgKey, src: bgSource };
-    if (!prev || prev.key === bgKey || prev.key === "none" || bgKey === "none") {
-      setFade(null);
-      return;
-    }
-    setFade(prev);
-    const ms = deck?.settings.bgCrossfadeMs ?? 1600;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!reduced) {
-      fadeInRef.current?.animate(
-        [
-          { opacity: 0, transform: "scale(1.045)" },
-          { opacity: 1, transform: "scale(1)" },
-        ],
-        { duration: ms, easing: "cubic-bezier(.16,1,.3,1)" },
-      );
-      fadeOutRef.current?.animate(
-        [
-          { opacity: 1, transform: "scale(1)" },
-          { opacity: 0, transform: "scale(1.012)" },
-        ],
-        { duration: ms, easing: "cubic-bezier(.16,1,.3,1)" },
-      );
-    }
-    const t = setTimeout(() => setFade(null), reduced ? 60 : ms);
-    return () => clearTimeout(t);
-  }, [bgKey]);
 
   /* ---------- report steps ---------- */
   const onSteps = useCallback(
@@ -342,53 +247,27 @@ export function PresentView({
   );
 
   const themeCss = bundle?.themeCss ?? "";
-  const themeCssTransparent = themeCss + "\n#root { background: transparent !important; }";
   const total = slides.length;
   const progress = total ? ((index + 1) / total) * 100 : 0;
-
-  /* layer sources — the common overlay renders in its OWN persistent frame */
-  const contentOverlay: Source | undefined = current?.overlay !== undefined ? current.overlay : { type: "none" };
-  const commonOverlay: Source | undefined = deck?.overlay;
-  const slideOverridesOverlay = Boolean(current?.overlay && current.overlay.type !== "none");
-
-  const bgLayer = (src: Source | undefined, key: string, innerRef?: React.RefObject<HTMLDivElement | null>) => (
-    <div key={key} style={{ position: "absolute", inset: 0 }}>
-      <div ref={innerRef} style={{ position: "absolute", inset: 0 }}>
-        <StageFrame
-          deckId={deckId}
-          slide={null}
-          deckBg={src}
-          deckOverlay={{ type: "none" }}
-          themeCss={themeCss}
-          mode={effectiveMode}
-          show={{ bg: true, content: false, overlay: false }}
-          version={version}
-        />
-      </div>
-    </div>
-  );
 
   return (
     <div className={`ss-display ${chromeHidden ? "hide-chrome" : ""}`} onMouseMove={bump}>
       {/* stage */}
       <div className="ss-display-stage">
         <div style={{ position: "relative", width: "min(100vw, calc(100vh * 16 / 9))", aspectRatio: "16/9" }}>
-          {/* z0 — incoming background (below), crossfades on change */}
-          {bgKey !== "none" && <div style={{ position: "absolute", inset: 0, zIndex: 0 }}>{bgLayer(bgSource, `bg-${bgKey}`, fade ? fadeInRef : undefined)}</div>}
-          {/* z0 — outgoing background (above, fading out during crossfade) */}
-          {fade && fade.key !== "none" && (
-            <div style={{ position: "absolute", inset: 0, zIndex: 1 }}>{bgLayer(fade.src, `bg-old-${fade.key}`, fadeOutRef)}</div>
-          )}
-
-          {/* z2 — content + per-slide overlay (single mounted slide, animated) */}
+          {/* the live stage — background + content + overlays in ONE sandboxed
+              runtime, the exact pipeline the editor preview uses (Problem 07).
+              Slide changes hot-swap only the slide module; the background and
+              common overlay modules are reused, so their animations keep
+              running across slides. */}
           <div ref={frameWrapRef} style={{ position: "absolute", inset: 0, zIndex: 2, isolation: "isolate" }}>
             <StageFrame
               deckId={deckId}
               slide={current}
-              deckBg={{ type: "none" }}
-              deckOverlay={contentOverlay}
+              deckBg={deck?.bg}
+              deckOverlay={deck?.overlay}
               commonOverlay={deck?.overlay}
-              themeCss={themeCssTransparent}
+              themeCss={themeCss}
               mode={effectiveMode}
               version={version}
               step={step}
@@ -397,42 +276,6 @@ export function PresentView({
               onSteps={onSteps}
             />
           </div>
-
-          {/* z3 — outgoing ghost still (transparent, glides out on top of content) */}
-          {ghost && (
-            <img
-              key={ghost.key}
-              ref={ghostRef}
-              src={ghost.src}
-              alt=""
-              aria-hidden
-              draggable={false}
-              style={{
-                position: "absolute",
-                inset: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "fill",
-                zIndex: 3,
-                pointerEvents: "none",
-                willChange: "transform, opacity",
-              }}
-            />
-          )}
-
-          {/* z4 — deck common overlay: persistent, NEVER inside the animated
-              wrapper — slide changes don't re-render, animate or refresh it */}
-          {commonOverlay && commonOverlay.type !== "none" && (
-            <CommonOverlayFrame
-              key="common-overlay"
-              deckId={deckId}
-              source={commonOverlay}
-              themeCss={themeCssTransparent}
-              mode={effectiveMode}
-              version={version}
-              hidden={slideOverridesOverlay}
-            />
-          )}
         </div>
       </div>
 
@@ -479,9 +322,18 @@ export function PresentView({
           </span>
         </div>
         <div className="ss-chrome-panel">
-          <span className="ss-chip" style={{ height: 22 }}>
-            <span className="dot" style={{ background: sync.connected ? "var(--ss-ok)" : "var(--ss-err)" }} />
-            {sync.connected ? (sync.remotes ? `${sync.remotes} remote${sync.remotes > 1 ? "s" : ""}` : "sync") : "offline"}
+          <span className="ss-chip" style={{ height: 22 }} title={sync.unavailable ? "Presenting from this browser — phone remote needs a local run" : sync.connected ? "Synced with the phone remote service" : "Reconnecting to the sync service…"}>
+            <span
+              className="dot"
+              style={{ background: sync.connected ? "var(--ss-ok)" : sync.unavailable ? "var(--ss-mut)" : "var(--ss-err)" }}
+            />
+            {sync.connected
+              ? sync.remotes
+                ? `${sync.remotes} remote${sync.remotes > 1 ? "s" : ""}`
+                : "sync"
+              : sync.unavailable
+                ? "local"
+                : "offline"}
           </span>
           <span className="ss-label" style={{ letterSpacing: ".1em", fontVariantNumeric: "tabular-nums" }}>
             {now
@@ -544,7 +396,10 @@ export function PresentView({
                 index={i}
                 current={i === index}
                 version={version}
-                mode={s.theme ?? effectiveMode}
+                deckBg={deck?.bg}
+                deckOverlay={deck?.overlay}
+                defaultMode={effectiveMode}
+                themeCss={themeCss}
                 onJump={() => goSlide(s.id)}
               />
             ))}
@@ -558,6 +413,8 @@ export function PresentView({
           deckId={deckId}
           token={sync.token}
           remotes={sync.remotes}
+          connected={sync.connected}
+          unavailable={sync.unavailable}
           onClose={() => setUi((u) => ({ ...u, qr: false }))}
           absolute
         />
@@ -565,58 +422,6 @@ export function PresentView({
     </div>
   );
 }
-
-/* ------------------------------------------------------------------ */
-/* persistent common overlay frame                                     */
-/* ------------------------------------------------------------------ */
-
-/**
- * The deck-wide overlay in its own sandbox layer, OUTSIDE any animated
- * wrapper. Memoized hard: slide changes change none of its props, so the
- * iframe never re-receives a config — its animations keep running untouched
- * across slide transitions. A slide-level overlay override hides it with
- * CSS (the runtime DOM survives, so returning slides don't restart it).
- */
-const CommonOverlayFrame = memo(function CommonOverlayFrame({
-  deckId,
-  source,
-  themeCss,
-  mode,
-  version,
-  hidden,
-}: {
-  deckId: string;
-  source: Source;
-  themeCss: string;
-  mode: ThemeMode;
-  version: string;
-  hidden: boolean;
-}) {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 4,
-        pointerEvents: "none",
-        opacity: hidden ? 0 : 1,
-        transition: "opacity .18s linear",
-        willChange: "opacity",
-      }}
-    >
-      <StageFrame
-        deckId={deckId}
-        slide={null}
-        deckBg={{ type: "none" }}
-        deckOverlay={source}
-        themeCss={themeCss}
-        mode={mode}
-        show={{ bg: false, content: false, overlay: true }}
-        version={version}
-      />
-    </div>
-  );
-});
 
 function isOnButton(target: EventTarget | null): boolean {
   return Boolean(target instanceof Element && target.closest("button, a, input, textarea, [contenteditable]"));
@@ -633,10 +438,13 @@ function OvItem(props: {
   index: number;
   current: boolean;
   version: string;
-  mode: ThemeMode;
+  deckBg?: Source;
+  deckOverlay?: Source;
+  defaultMode: ThemeMode;
+  themeCss: string;
   onJump: () => void;
 }) {
-  const { deckId, entry, index, mode } = props;
+  const { deckId, entry, index, defaultMode } = props;
   const { ref, inView } = useInViewLite<HTMLButtonElement>();
   return (
     <button ref={ref} className={`ss-ov-item ${props.current ? "cur" : ""}`} onClick={props.onJump}>
@@ -647,9 +455,15 @@ function OvItem(props: {
       </span>
       <span className="ss-ov-thumb">
         {inView ? (
-          <ThumbImg
-            src={api.thumbUrl(deckId, entry.id, { w: 320, mode, v: props.version })}
-            alt={`${entry.label} — slide ${index + 1}`}
+          <LiveThumb
+            deckId={deckId}
+            slideId={entry.id}
+            slideTheme={entry.theme}
+            deckDefaultMode={defaultMode}
+            deckBg={props.deckBg}
+            deckOverlay={props.deckOverlay}
+            themeCss={props.themeCss}
+            version={props.version}
           />
         ) : (
           <span className="ss-shimmer" aria-hidden />

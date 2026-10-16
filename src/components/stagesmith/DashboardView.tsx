@@ -88,6 +88,8 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   const [qrOpen, setQrOpen] = useState(false);
   const [snapshots, setSnapshots] = useState<string[]>([]);
   const [gotoError, setGotoError] = useState<GotoError | null>(null);
+  /** deck missing from every store (wrong browser profile / deleted) */
+  const [notFound, setNotFound] = useState(false);
 
   // app chrome theme (fix-list item 8) — hydrate once per mount
   const [uiTheme, setUiTheme] = useUiTheme();
@@ -185,15 +187,20 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   }, [deckId]);
 
   const load = useCallback(async () => {
-    const b = await api.getDeck(deckId);
-    setBundle(b);
-    setDeck(b.deck);
-    setThemeCss(b.themeCss);
-    setVersion(b.signature);
-    setSelId((prev) => (prev && b.deck.slides.some((s) => s.id === prev) ? prev : b.deck.slides[0]?.id ?? null));
-    setBuffers({});
-    setDirty({});
-    refreshSnapshots();
+    try {
+      const b = await api.getDeck(deckId);
+      setNotFound(false);
+      setBundle(b);
+      setDeck(b.deck);
+      setThemeCss(b.themeCss);
+      setVersion(b.signature);
+      setSelId((prev) => (prev && b.deck.slides.some((s) => s.id === prev) ? prev : b.deck.slides[0]?.id ?? null));
+      setBuffers({});
+      setDirty({});
+      refreshSnapshots();
+    } catch {
+      setNotFound(true);
+    }
   }, [deckId, refreshSnapshots]);
 
   // SSR already delivered the bundle — hydrate selection, then only reload
@@ -204,14 +211,8 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
       refreshSnapshots();
       return;
     }
-    load().catch((e) => toast({ title: "Could not open deck", description: (e as Error).message, variant: "destructive" }));
+    load();
   }, [deckId]);
-
-  // warm the auto-generated filmstrip thumbnails in the background
-  useEffect(() => {
-    if (!deck) return;
-    api.warmThumbs(deckId, version);
-  }, [deckId, version, deck]);
 
   /* ---------- folder watching (plan §2: VS Code edits appear live) ---------- */
   const ownSaveRef = useRef(false);
@@ -414,6 +415,19 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
     [deckId, applyDeck, toast],
   );
 
+  /** deck-wide default theme mode — one click fixes light decks authored
+   *  in dark mode (faint light ink on a light background — Problem 07) */
+  const setDeckMode = useCallback(
+    async (mode: ThemeMode) => {
+      try {
+        applyDeck(await api.patchDeck(deckId, { settings: { defaultMode: mode } }));
+      } catch (e) {
+        toast({ title: "Could not set deck theme", description: (e as Error).message, variant: "destructive" });
+      }
+    },
+    [deckId, applyDeck, toast],
+  );
+
   const setSlideOverride = useCallback(
     async (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => {
       try {
@@ -495,6 +509,20 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   const anyDirty = Object.values(dirty).some(Boolean);
 
   if (!deck) {
+    if (notFound) {
+      return (
+        <div className="ss-app" style={{ placeItems: "center", display: "grid", justifyItems: "center", gap: 14, padding: 30, textAlign: "center" }}>
+          <div style={{ font: "italic 600 30px var(--ss-fbrand)", letterSpacing: "-.01em" }}>“{deckId}” not found</div>
+          <div style={{ font: "400 13px/1.7 var(--ss-fb)", color: "var(--ss-mut)", maxWidth: 480 }}>
+            This deck isn’t on the server and isn’t in this browser’s storage. Browser-stored decks live in the
+            browser and profile that created them — open it there, or load a .smdeck export.
+          </div>
+          <button className="ss-btn ss-btn-acc" onClick={nav.library}>
+            Back to library
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="ss-app" style={{ placeItems: "center", display: "grid" }}>
         <div className="ss-label" style={{ letterSpacing: ".3em" }}>Opening {deckId}…</div>
@@ -586,10 +614,28 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)" }}>
-            <DropdownMenuItem onClick={() => download(api.exportUrl(deckId, "smdeck"), `${deckId}.smdeck`)}>
+            <DropdownMenuItem
+              onClick={async () => {
+                try {
+                  const { url, filename } = await api.exportDeck(deckId, "smdeck");
+                  download(url, filename);
+                } catch (e) {
+                  toast({ title: "Export failed", description: (e as Error).message, variant: "destructive" });
+                }
+              }}
+            >
               .smdeck (zip with manifest)
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => download(api.exportUrl(deckId, "deck.tsx"), `${deckId}.deck.tsx`)}>
+            <DropdownMenuItem
+              onClick={async () => {
+                try {
+                  const { url, filename } = await api.exportDeck(deckId, "deck.tsx");
+                  download(url, filename);
+                } catch (e) {
+                  toast({ title: "Export failed", description: (e as Error).message, variant: "destructive" });
+                }
+              }}
+            >
               .deck.tsx (single text file)
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -687,6 +733,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
               themeCss={themeCss}
               version={version}
               onOverride={setSlideOverride}
+              onDeckMode={setDeckMode}
             />
           </div>
           {codeSide && !codeMinimized && (
@@ -728,6 +775,8 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
           deckId={deckId}
           token={sync.token}
           remotes={sync.remotes}
+          connected={sync.connected}
+          unavailable={sync.unavailable}
           onClose={() => setQrOpen(false)}
         />
       )}

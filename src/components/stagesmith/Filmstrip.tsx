@@ -17,8 +17,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { Copy, GripVertical, Moon, Plus, Sun, Trash2 } from "lucide-react";
 import type { DeckJson, ThemeMode } from "@/lib/stagesmith/types";
-import { api } from "@/lib/stagesmith/client";
-import { ThumbImg } from "./ThumbImg";
+import { LiveThumb } from "./LiveThumb";
 import { useInView } from "./LibraryView";
 import { resolveCode } from "./StageFrame";
 import {
@@ -201,7 +200,6 @@ const SortableThumb = memo(function SortableThumb(props: {
   // fix-list item 5: the dot means a *background* override — nothing else
   const hasBgOverride = Boolean(entry.bg && entry.bg.type !== "none");
   const count = error ? errorCount(error) : 0;
-  const mode = entry.theme ?? deck.settings.defaultMode;
   const onSelect = useCallback(() => props.onSelect(entry.id), [entry.id, props.onSelect]);
   const onDuplicate = useCallback(() => props.onDuplicate(entry.id), [entry.id, props.onDuplicate]);
   const onDelete = useCallback(() => props.onDelete(entry.id), [entry.id, props.onDelete]);
@@ -223,96 +221,104 @@ const SortableThumb = memo(function SortableThumb(props: {
         <ContextMenuTrigger asChild>
           <div
             ref={ref}
-            className={`ss-thumb ${selected ? "sel" : ""}`}
+            className={`ss-thumb-item ${selected ? "sel" : ""}`}
             onClick={onSelect}
             title={entry.label}
           >
-            {inView ? (
-              <ThumbImg
-                src={api.thumbUrl(deckId, entry.id, { w: 480, mode, v: props.version })}
-                alt={`${entry.label} — slide ${index + 1}`}
-                fetchPriority={index < 3 ? "high" : "low"}
-              />
-            ) : (
-              <span className="ss-shimmer" aria-hidden />
-            )}
-            <span className="ss-thumb-num">{String(index + 1).padStart(2, "0")}</span>
-            {error && (
-              <button
-                className="ss-thumb-err"
-                style={{ right: hasBgOverride ? 30 : 6 }}
-                title={`${error}\n— click to open the first error line`}
-                onClick={onJumpToError}
-              >
-                {count}
-              </button>
-            )}
-            {hasBgOverride && <span className="ss-thumb-dot" style={{ right: 6 }} title="Background override" />}
-            <span className="ss-thumb-label">{renaming ? "" : entry.label}</span>
-            <div className="ss-thumb-acts">
-              <span
-                className="ss-thumb-act"
-                title="Drag to reorder"
-                {...attributes}
-                {...listeners}
-                onClick={(e) => e.stopPropagation()}
-                style={{ cursor: "grab" }}
-              >
-                <GripVertical size={13} />
-              </span>
-              <span
-                className="ss-thumb-act"
-                title="Duplicate"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDuplicate();
-                }}
-              >
-                <Copy size={12} />
-              </span>
-              <span
-                className="ss-thumb-act del"
-                title="Delete"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete();
-                }}
-              >
-                <Trash2 size={12} />
-              </span>
-            </div>
-            {renaming && (
-              <input
-                autoFocus
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onClick={(e) => e.stopPropagation()}
-                onBlur={() => {
-                  setRenaming(false);
-                  if (draft.trim() && draft !== entry.label) props.onRename(entry.id, draft.trim());
-                  else setDraft(entry.label);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                  if (e.key === "Escape") {
-                    setDraft(entry.label);
+            <div className="ss-thumb">
+              {inView ? (
+                <LiveThumb
+                  deckId={deckId}
+                  slideId={entry.id}
+                  slideTheme={entry.theme}
+                  deckDefaultMode={deck.settings.defaultMode}
+                  deckBg={deck.bg}
+                  deckOverlay={deck.overlay}
+                  themeCss={props.themeCss}
+                  version={props.version}
+                />
+              ) : (
+                <span className="ss-shimmer" aria-hidden />
+              )}
+              <span className="ss-thumb-num">{String(index + 1).padStart(2, "0")}</span>
+              {error && (
+                <button
+                  className="ss-thumb-err"
+                  style={{ right: hasBgOverride ? 30 : 6 }}
+                  title={`${error}\n— click to open the first error line`}
+                  onClick={onJumpToError}
+                >
+                  {count}
+                </button>
+              )}
+              {hasBgOverride && <span className="ss-thumb-dot" style={{ right: 6 }} title="Background override" />}
+              <div className="ss-thumb-acts">
+                <span
+                  className="ss-thumb-act"
+                  title="Drag to reorder"
+                  {...attributes}
+                  {...listeners}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ cursor: "grab" }}
+                >
+                  <GripVertical size={13} />
+                </span>
+                <span
+                  className="ss-thumb-act"
+                  title="Duplicate"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDuplicate();
+                  }}
+                >
+                  <Copy size={12} />
+                </span>
+                <span
+                  className="ss-thumb-act del"
+                  title="Delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                  }}
+                >
+                  <Trash2 size={12} />
+                </span>
+              </div>
+              {renaming && (
+                <input
+                  autoFocus
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  onBlur={() => {
                     setRenaming(false);
-                  }
-                }}
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  zIndex: 5,
-                  background: "rgba(0,0,0,.85)",
-                  border: "1px solid var(--ss-acc)",
-                  borderRadius: 9,
-                  color: "#fff",
-                  font: "500 12px var(--ss-sans)",
-                  padding: "0 10px",
-                  outline: "none",
-                }}
-              />
-            )}
+                    if (draft.trim() && draft !== entry.label) props.onRename(entry.id, draft.trim());
+                    else setDraft(entry.label);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                    if (e.key === "Escape") {
+                      setDraft(entry.label);
+                      setRenaming(false);
+                    }
+                  }}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    zIndex: 5,
+                    background: "rgba(0,0,0,.85)",
+                    border: "1px solid var(--ss-acc)",
+                    borderRadius: 9,
+                    color: "#fff",
+                    font: "500 12px var(--ss-sans)",
+                    padding: "0 10px",
+                    outline: "none",
+                  }}
+                />
+              )}
+            </div>
+            {/* caption BELOW the frame — never overlaps the live preview */}
+            <div className="ss-thumb-cap">{entry.label}</div>
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>

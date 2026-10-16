@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Copy, RefreshCw, Wifi, X } from "lucide-react";
+import { Copy, RefreshCw, Wifi, WifiOff, X } from "lucide-react";
 import { api, type NetworkInfo } from "@/lib/stagesmith/client";
 import { copyText } from "./shared";
 import { useToast } from "@/hooks/use-toast";
@@ -12,6 +12,13 @@ import { useToast } from "@/hooks/use-toast";
  * browsed from localhost / a LAN IP, the QR encodes http://<lan-ip>:<port>
  * so a phone on the same Wi-Fi network can join; behind a public preview
  * gateway the origin itself is used.
+ *
+ * Honest states (Problem 02):
+ *  - `unavailable` (hosted deployment) or `connected === false` → no QR at
+ *    all, an explanatory card instead: the phone remote needs a LOCAL run.
+ *  - token → QR + copy + network hint (as before).
+ *  - no token yet → waiting state (the token now mints on any join, so no
+ *    "open Present once" advice — just a hint about port 3003).
  */
 export function QrPanel({
   deckId,
@@ -19,16 +26,25 @@ export function QrPanel({
   remotes,
   onClose,
   absolute,
+  connected = true,
+  unavailable = false,
 }: {
   deckId: string;
   token: string | null;
   remotes: number;
   onClose: () => void;
   absolute?: boolean;
+  /** is the sync socket connected? (from useSync) — QR only when true */
+  connected?: boolean;
+  /** sync impossible for this deployment (hosted) — show the local-run card */
+  unavailable?: boolean;
 }) {
   const { toast } = useToast();
   const [net, setNet] = useState<NetworkInfo | null>(null);
   const [sel, setSel] = useState(0);
+
+  // no QR (and no remote link) when the sync service can't exist / isn't up
+  const blocked = unavailable || connected === false;
 
   useEffect(() => {
     let cancelled = false;
@@ -76,8 +92,8 @@ export function QrPanel({
           </button>
         </div>
 
-        {/* LAN origin picker (multiple network interfaces) */}
-        {origins.length > 1 && (
+        {/* LAN origin picker (multiple network interfaces) — QR only */}
+        {!blocked && origins.length > 1 && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%" }}>
             {origins.map((o, i) => (
               <button
@@ -101,63 +117,114 @@ export function QrPanel({
           </div>
         )}
 
-        {token ? (
+        {blocked ? (
+          /* hosted / sync down — explain instead of a broken QR */
+          <div
+            style={{
+              width: 220,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 10,
+              padding: "22px 18px",
+              border: "1px dashed var(--ss-line-strong)",
+              borderRadius: 10,
+              font: "400 12px var(--ss-sans)",
+              color: "var(--ss-mut)",
+              textAlign: "center",
+            }}
+          >
+            <WifiOff size={22} style={{ flex: "none", color: "var(--ss-mut)" }} />
+            <div style={{ font: "600 13px var(--ss-sans)", color: "var(--ss-ink)" }}>
+              Phone remote needs a local run
+            </div>
+            <div>
+              The sync service runs beside the app when you run Chassé Studio locally (bun run dev / npm run
+              dev — it starts automatically). A hosted deployment cannot start a server on your machine or
+              link your phone.
+            </div>
+          </div>
+        ) : token ? (
           <img src={qrSrc} alt="Remote join QR code" />
         ) : (
-          <div style={{ width: 220, height: 220, display: "grid", placeItems: "center", border: "1px dashed var(--ss-line-strong)", borderRadius: 10, font: "400 12px var(--ss-sans)", color: "var(--ss-mut)", textAlign: "center", padding: 20 }}>
-            Waiting for the sync service to issue a token… open Present once if this persists.
+          <div
+            style={{
+              width: 220,
+              height: 220,
+              display: "grid",
+              placeItems: "center",
+              border: "1px dashed var(--ss-line-strong)",
+              borderRadius: 10,
+              font: "400 12px var(--ss-sans)",
+              color: "var(--ss-mut)",
+              textAlign: "center",
+              padding: 20,
+            }}
+          >
+            <span>
+              Waiting for the sync service…
+              <span style={{ display: "block", marginTop: 6, opacity: 0.85 }}>
+                The sync service starts automatically with a local run — if this persists, check that port
+                3003 is free.
+              </span>
+            </span>
           </div>
         )}
 
-        <div className="ss-qr-url">
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{remoteUrl}</span>
-          <button
-            className="ss-btn ss-btn-icon"
-            style={{ height: 26, width: 26, flex: "none" }}
-            title="Copy URL"
-            onClick={async () => {
-              const ok = await copyText(remoteUrl);
-              toast(ok ? { title: "Remote URL copied" } : { title: "Clipboard blocked", variant: "destructive" });
-            }}
-          >
-            <Copy size={12} />
-          </button>
-        </div>
+        {/* remote URL row — hidden when blocked (a hosted URL is not a remote link) */}
+        {!blocked && (
+          <div className="ss-qr-url">
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{remoteUrl}</span>
+            <button
+              className="ss-btn ss-btn-icon"
+              style={{ height: 26, width: 26, flex: "none" }}
+              title="Copy URL"
+              onClick={async () => {
+                const ok = await copyText(remoteUrl);
+                toast(ok ? { title: "Remote URL copied" } : { title: "Clipboard blocked", variant: "destructive" });
+              }}
+            >
+              <Copy size={12} />
+            </button>
+          </div>
+        )}
 
-        {/* same-network hint */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 7,
-            width: "100%",
-            font: "400 11.5px var(--ss-sans)",
-            color: "var(--ss-mut)",
-          }}
-        >
-          <Wifi size={12} style={{ flex: "none" }} />
-          <span>
-            {net?.hint ??
-              "Scan with your phone camera — the remote works as a clicker."}
-          </span>
-          <button
-            className="ss-btn ss-btn-icon"
-            style={{ height: 22, width: 22, flex: "none", marginLeft: "auto" }}
-            title="Re-check network interfaces"
-            onClick={async () => {
-              try {
-                const n = await api.networkInfo();
-                setNet(n);
-                setSel(0);
-                toast({ title: "Network re-checked" });
-              } catch {
-                toast({ title: "Network check failed", variant: "destructive" });
-              }
+        {/* same-network hint — only meaningful when a QR can actually work */}
+        {!blocked && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 7,
+              width: "100%",
+              font: "400 11.5px var(--ss-sans)",
+              color: "var(--ss-mut)",
             }}
           >
-            <RefreshCw size={11} />
-          </button>
-        </div>
+            <Wifi size={12} style={{ flex: "none" }} />
+            <span>
+              {net?.hint ??
+                "Scan with your phone camera — the remote works as a clicker."}
+            </span>
+            <button
+              className="ss-btn ss-btn-icon"
+              style={{ height: 22, width: 22, flex: "none", marginLeft: "auto" }}
+              title="Re-check network interfaces"
+              onClick={async () => {
+                try {
+                  const n = await api.networkInfo();
+                  setNet(n);
+                  setSel(0);
+                  toast({ title: "Network re-checked" });
+                } catch {
+                  toast({ title: "Network check failed", variant: "destructive" });
+                }
+              }}
+            >
+              <RefreshCw size={11} />
+            </button>
+          </div>
+        )}
 
         <div className="ss-qr-count">
           {remotes > 0 ? `${remotes} phone${remotes > 1 ? "s" : ""} connected` : "no phones connected yet"}

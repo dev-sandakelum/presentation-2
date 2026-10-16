@@ -52,3 +52,15 @@ prompt
 server.log
 # Skills directory
 /skills/
+# Chassé runtime data — decks are created at runtime, never committed
+# (the dashboard starts empty; hosted deployments store decks in the browser)
+/decks/*
+!/decks/.gitkeep
+!/decks/README.md
+/decks/.registry.json
+
+# sync service runtime logs
+mini-services/*/sync.log
+
+# agent tooling artifacts
+tool-results/

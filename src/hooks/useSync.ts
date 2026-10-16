@@ -3,10 +3,18 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { io, type Socket } from "socket.io-client";
 import type { DeckJson } from "@/lib/stagesmith/types";
+import { getCapabilities } from "@/lib/stagesmith/client";
 
 /**
  * Socket sync with the stagesmith-sync mini-service (port 3003 via gateway).
  * Roles: display (presenter, holds token), remote (token required), editor.
+ *
+ * Connection gating (Problem 02): the sync service only exists next to a
+ * LOCAL run of the studio. Browsing from loopback / a LAN IP can always
+ * connect directly; any other hostname (hosted deployment or preview
+ * gateway) may connect only when the server is a local run (fsWritable).
+ * Otherwise no socket is created at all — `unavailable: true` tells the UI
+ * to explain that a local run is required instead of reconnecting forever.
  */
 
 export interface SyncState {
@@ -28,6 +36,8 @@ export interface UseSync {
   token: string | null;
   remotes: number;
   error: string | null;
+  /** true when NO sync service can exist for this deployment (e.g. hosted) — no socket is created */
+  unavailable: boolean;
   sendSlide: (slideId: string, step?: number) => void;
   sendNav: (dir: "next" | "prev") => void;
   sendUi: (ui: { qr?: boolean; overview?: boolean }) => void;
@@ -42,6 +52,7 @@ export function useSync(deckId: string | null, role: SyncRole, token?: string | 
   const [roomToken, setRoomToken] = useState<string | null>(null);
   const [remotes, setRemotes] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
   const tokenRef = useRef<string | undefined | null>(token);
 
   useEffect(() => {
@@ -65,10 +76,6 @@ export function useSync(deckId: string | null, role: SyncRole, token?: string | 
     const isPrivateIp =
       /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/.test(hostname);
     const direct = isLoopback || isPrivateIp;
-    const directUrl = `http://${hostname}:3003`;
-    const gatewayUrl = "/?XTransformPort=3003";
-    const primary = direct ? directUrl : gatewayUrl;
-    const secondary = direct ? gatewayUrl : directUrl;
 
     const opts = {
       transports: ["websocket", "polling"] as ("websocket" | "polling")[],
@@ -114,16 +121,50 @@ export function useSync(deckId: string | null, role: SyncRole, token?: string | 
       return sock;
     };
 
-    active = attach(io(primary, opts));
-    setSocket(active);
+    const directUrl = `http://${hostname}:3003`;
+    const gatewayUrl = "/?XTransformPort=3003";
+    const primary = direct ? directUrl : gatewayUrl;
+    const secondary = direct ? gatewayUrl : directUrl;
+
+    const connect = () => {
+      setUnavailable(false);
+      active = attach(io(primary, opts));
+      setSocket(active);
+    };
+
+    let cancelled = false;
+
+    if (direct) {
+      // local / same-network browsing — the sync service is spawnable/reachable
+      connect();
+    } else {
+      // Hosted or preview hostname: only a LOCAL run behind a gateway has a
+      // sync service (fsWritable === true). On serverless hosting neither the
+      // gateway route nor a direct :3003 exists — stay offline and say so.
+      getCapabilities()
+        .then((caps) => {
+          if (cancelled) return;
+          if (caps.fsWritable) {
+            connect();
+          } else {
+            setUnavailable(true);
+            setRoomToken(null);
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setUnavailable(true);
+          setRoomToken(null);
+        });
+    }
 
     return () => {
+      cancelled = true;
       active?.removeAllListeners();
       active?.close();
       setSocket(null);
     };
     // re-join when slide list identity changes (after add/delete/reorder)
-     
   }, [deckId, role, slides?.map((s) => s.id).join(",")]);
 
   const sendSlide = useCallback((slideId: string, step?: number) => {
@@ -153,6 +194,7 @@ export function useSync(deckId: string | null, role: SyncRole, token?: string | 
     token: roomToken,
     remotes,
     error,
+    unavailable,
     sendSlide,
     sendNav,
     sendUi,

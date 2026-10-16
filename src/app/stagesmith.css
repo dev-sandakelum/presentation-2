@@ -271,6 +271,15 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
   gap: 10px;
 }
 
+/* filmstrip item = live thumb frame + caption below it (label never
+   overlaps the preview — Problem 03 report) */
+.ss-thumb-item {
+  position: relative;
+  display: block;
+  width: 100%;
+  cursor: pointer;
+  flex: none;
+}
 .ss-thumb {
   position: relative;
   display: block;
@@ -280,15 +289,23 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
   border-radius: 7px;
   overflow: hidden;
   background: var(--ss-thumbbg);
-  cursor: pointer;
-  flex: none;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-.ss-thumb:hover { border-color: var(--ss-line-strong); }
-.ss-thumb.sel {
+.ss-thumb-item:hover .ss-thumb { border-color: var(--ss-line-strong); }
+.ss-thumb-item.sel .ss-thumb {
   border-color: var(--ss-acc);
   box-shadow: 0 0 0 3px var(--ss-acc-soft);
 }
+.ss-thumb-cap {
+  margin-top: 5px;
+  padding: 0 2px;
+  font: 500 11px var(--ss-fb);
+  color: var(--ss-mut);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ss-thumb-item.sel .ss-thumb-cap { color: var(--ss-ink); }
 .ss-thumb-img {
   position: absolute;
   inset: 0;
@@ -298,7 +315,7 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
   display: block;
   background: var(--ss-thumbbg);
 }
-/* shimmer while a generated thumbnail loads */
+/* shimmer while a thumbnail loads */
 .ss-shimmer {
   position: absolute;
   inset: 0;
@@ -324,7 +341,7 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
   font: 500 10px var(--ss-fm);
   color: #fff;
 }
-.ss-thumb.sel .ss-thumb-num { background: var(--ss-acc); color: var(--ss-acc-ink); }
+.ss-thumb-item.sel .ss-thumb-num { background: var(--ss-acc); color: var(--ss-acc-ink); }
 .ss-thumb-err {
   position: absolute;
   top: 5px;
@@ -364,7 +381,7 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
   opacity: 0;
   transition: opacity 0.18s;
 }
-.ss-thumb:hover .ss-thumb-acts, .ss-thumb:focus-within .ss-thumb-acts { opacity: 1; }
+.ss-thumb-item:hover .ss-thumb-acts, .ss-thumb-item:focus-within .ss-thumb-acts { opacity: 1; }
 .ss-thumb-act {
   width: 22px;
   height: 22px;
@@ -379,20 +396,6 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
 }
 .ss-thumb-act:hover { background: rgba(0, 0, 0, 0.85); }
 .ss-thumb-act.del:hover { color: var(--ss-err); }
-.ss-thumb-label {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 2;
-  padding: 22px 7px 4px;
-  background: linear-gradient(transparent, rgba(10, 8, 16, 0.85));
-  font: 500 11px var(--ss-fb);
-  color: #efeaf7;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .ss-thumb-dropline {
   height: 3px;
   background: var(--ss-acc);

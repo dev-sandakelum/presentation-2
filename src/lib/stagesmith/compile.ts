@@ -260,3 +260,157 @@ export async function compileFile(deckId: string, file: string): Promise<CacheEn
     building.delete(key);
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Virtual (stateless) compile — browser-stored decks                  */
+/* ------------------------------------------------------------------ */
+
+export interface VirtualCompileResult {
+  ok: boolean;
+  /** self-contained ESM bundle (internal deps inlined, bare imports external) */
+  js: string;
+  error?: string;
+  steps: number;
+  /** sha of the output — used as the module version key */
+  ver: string;
+}
+
+/** posix-style helpers — deck paths are always forward-slash relative */
+function vDirname(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i < 0 ? "" : p.slice(0, i);
+}
+function vNormalize(p: string): string {
+  const out: string[] = [];
+  for (const part of p.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") out.pop();
+    else out.push(part);
+  }
+  return out.join("/");
+}
+
+const TEXT_EXT = new Set([".tsx", ".ts", ".jsx", ".js", ".json", ".css", ".md", ".txt", ".gitkeep", ""]);
+
+function resolveInMap(base: string, files: Record<string, string>): string | null {
+  const tries = [
+    base,
+    `${base}.tsx`,
+    `${base}.ts`,
+    `${base}.jsx`,
+    `${base}.js`,
+    `${base}/index.tsx`,
+    `${base}/index.ts`,
+    `${base}/index.jsx`,
+    `${base}/index.js`,
+  ];
+  for (const t of tries) if (files[t] !== undefined) return t;
+  return null;
+}
+
+/**
+ * Compile an entry file from an in-memory file map (no disk access at all —
+ * works on read-only/serverless deployments). Internal imports are INLINED
+ * into the bundle; bare allow-list imports stay external and are resolved by
+ * the runtime import map, so the result is a single self-contained module.
+ */
+export async function compileVirtual(
+  files: Record<string, string>,
+  entry: string,
+): Promise<VirtualCompileResult> {
+  const errOut = (error: string): VirtualCompileResult => ({
+    ok: false,
+    js: "",
+    error,
+    steps: 1,
+    ver: "err",
+  });
+  if (!entry || files[entry] === undefined) {
+    return errOut(`Entry file not found: ${entry || "(none)"}`);
+  }
+
+  const virtual: esbuild.Plugin = {
+    name: "stagesmith-virtual",
+    setup(build) {
+      build.onResolve({ filter: /.*/ }, (args) => {
+        const p = args.path;
+        if (BARE_ALLOWED.has(p)) return { path: p, external: true };
+        if (p === "react-dom") {
+          return { errors: [{ text: `Import "react-dom" is not allowed — use "react-dom/client".` }] };
+        }
+        let candidate: string | null = null;
+        if (p.startsWith("@/")) {
+          candidate = p.slice(2);
+        } else if (p.startsWith("./") || p.startsWith("../")) {
+          const importerDir = args.importer ? vDirname(args.importer) : "";
+          candidate = vNormalize(`${importerDir}/${p}`);
+        } else if (args.kind === "entry-point") {
+          candidate = vNormalize(p);
+        } else {
+          return {
+            errors: [
+              {
+                text: `Import "${p}" is not allowed. Allowed: react, react-dom/client, stagesmith, lucide-react, @/… (deck files) and relative paths.`,
+              },
+            ],
+          };
+        }
+        const resolved = resolveInMap(candidate, files);
+        if (!resolved) {
+          return { errors: [{ text: `Cannot resolve "${p}" — no such file in the project.` }] };
+        }
+        return { path: resolved, namespace: "ss-virtual" };
+      });
+      build.onLoad({ filter: /.*/, namespace: "ss-virtual" }, (args) => {
+        const ext = path.posix.extname(args.path);
+        if (IMAGE_EXT.includes(ext)) {
+          return {
+            errors: [
+              { text: `Importing images is not supported — use <Img name='${args.path}' /> from 'stagesmith' instead.` },
+            ],
+          };
+        }
+        if (ext === ".css") return { contents: "export default {}", loader: "js" };
+        const loader = (ext.replace(/^\./, "") || "js") as "tsx" | "ts" | "jsx" | "js";
+        return { contents: files[args.path] ?? "", loader: TEXT_EXT.has(ext) ? loader : "js" };
+      });
+    },
+  };
+
+  try {
+    const result = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      write: false,
+      format: "esm",
+      jsx: "automatic",
+      target: "es2020",
+      logLevel: "silent",
+      sourcemap: false,
+      minify: false,
+      plugins: [virtual],
+    });
+    const js = result.outputFiles?.[0]?.text ?? "";
+    return {
+      ok: true,
+      js,
+      steps: detectSteps(files[entry]),
+      ver: await sha(js),
+    };
+  } catch (e: unknown) {
+    const err = e as {
+      errors?: Array<{ text?: string; location?: { file?: string; line?: number; column?: number } }>;
+    };
+    const error =
+      err.errors && err.errors.length
+        ? err.errors
+            .map((er) =>
+              er.location
+                ? `${path.posix.basename(er.location.file || entry)}:${er.location.line}:${er.location.column} — ${er.text}`
+                : er.text || "Compile error",
+            )
+            .join("\n")
+        : String((e as Error)?.message || e);
+    return errOut(error);
+  }
+}

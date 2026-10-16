@@ -8,13 +8,14 @@ import {
   deckPath,
   listDecks,
 } from "./store";
+import { rewriteThemeCss } from "./themeurl";
 import type { DeckBundle } from "./types";
-import { rewriteThemeCss } from "./thumbs";
 
 /**
  * Server-side deck bundle builder — shared by the /api/decks/<id> route and
  * the server-rendered pages, so the first paint arrives as real HTML with
  * the deck data already in place (no client-side loading spinner).
+ * Only ever sees SERVER decks — browser decks live in the client's IndexedDB.
  */
 
 export async function getDeckBundle(deckId: string): Promise<DeckBundle | null> {
@@ -28,7 +29,7 @@ export async function getDeckBundle(deckId: string): Promise<DeckBundle | null> 
   } catch {
     themeCss = "";
   }
-  return { deck, files, signature, themeCss };
+  return { deck, files, signature, themeCss, store: "server" };
 }
 
 export async function listDecksSafe(): Promise<Awaited<ReturnType<typeof listDecks>>> {
