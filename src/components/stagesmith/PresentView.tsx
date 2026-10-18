@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Grid2X2, Maximize2, Moon, QrCode, Sun, X } from "lucide-react";
-import { api } from "@/lib/stagesmith/client";
+import { api, getAssetMap, resolveModule } from "@/lib/stagesmith/client";
 import type { DeckBundle } from "@/lib/stagesmith/client";
 import type { DeckJson, Source, ThemeMode } from "@/lib/stagesmith/types";
-import { StageFrame } from "./StageFrame";
+import { StageFrame, type TransitionTiming } from "./StageFrame";
 import { QrPanel } from "./QrPanel";
 import { LiveThumb } from "./LiveThumb";
 import { useDeckUpdated, useSync } from "@/hooks/useSync";
@@ -17,9 +17,24 @@ import { download, type SsNav } from "./shared";
  *
  * ONE live StageFrame renders the full composed stage — background, slide
  * content and overlays — exactly like the editor's "Final" preview (Problem 07:
- * present must match the editor pixel-for-pixel). The runtime hot-swaps only
- * the layer modules that changed, so the background and common overlay keep
- * running (no reload, no animation restart) across slide changes.
+ * present must match the editor pixel-for-pixel). Inside the sandboxed
+ * runtime the stage is three stable layers, and slide changes run the
+ * transition controller (exit → background crossfade → enter) with the
+ * ordering rules from the present-mode spec:
+ *
+ *   - different background: content out → background crossfades (the old
+ *     one kept below until the new one is fully visible) → content in;
+ *     new content is never shown over the old background
+ *   - same background (compared by value): the background layer is not
+ *     touched at all — only the content swaps
+ *   - the overlay layer never animates, never remounts and keeps its own
+ *     state (progress bar, clocks, looping animations keep running)
+ *
+ * Every input path — keyboard, click zones, swipe, dot nav, overview grid
+ * and the phone remote's "go to slide N" — funnels into the same index →
+ * config → controller route; there is no second code path. Neighbouring
+ * slides' modules and background images are preloaded (fetched + decoded)
+ * so transitions never wait on the network.
  *
  * Navigation is room-synced when a sync transport is reachable (the desktop
  * app bridge or the local-run socket service) and falls back to fully local
@@ -27,9 +42,20 @@ import { download, type SsNav } from "./shared";
  * works, with or without a phone remote.
  */
 
-/** transition defaults (deck settings override the duration) */
-const T_EASE = "cubic-bezier(.22,1,.36,1)";
-const T_MS = 430;
+const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+
+/** reactive prefers-reduced-motion (client-only; SSR renders false) */
+function usePrefersReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const apply = () => setReduced(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  return reduced;
+}
 
 export function PresentView({
   deckId,
@@ -51,7 +77,6 @@ export function PresentView({
   // client-only clock — a server-rendered time would always differ from
   // hydration time (hydration mismatch)
   const [now, setNow] = useState<Date | null>(null);
-  const [dir, setDir] = useState<"next" | "prev">("next");
 
   const deck: DeckJson | null = bundle?.deck ?? null;
   const slides = useMemo(() => deck?.slides ?? [], [deck]);
@@ -139,24 +164,18 @@ export function PresentView({
     }).catch(() => {});
   }, [deckId, freeze, sync]));
 
-  const lastIndexRef = useRef(index);
   const navNext = useCallback(() => {
-    setDir("next");
     setLocalIndex((i) => Math.min(i + 1, Math.max(0, slides.length - 1)));
     sync.sendNav("next");
   }, [sync, slides.length]);
   const navPrev = useCallback(() => {
-    setDir("prev");
     setLocalIndex((i) => Math.max(0, i - 1));
     sync.sendNav("prev");
   }, [sync]);
 
   const goSlide = useCallback((slideId: string) => {
     const to = slides.findIndex((s) => s.id === slideId);
-    if (to >= 0) {
-      setDir(to > lastIndexRef.current ? "next" : "prev");
-      setLocalIndex(to);
-    }
+    if (to >= 0) setLocalIndex(to);
     sync.sendSlide(slideId, 0);
     setUi((u) => ({ ...u, overview: false }));
   }, [sync, slides]);
@@ -239,37 +258,82 @@ export function PresentView({
     };
   }, [bump]);
 
-  /* ---------- smooth slide transition (incoming) ----------
-     The live stage glides in from the navigation direction — transform +
-     opacity only, so it stays on the compositor at 60fps. */
-  const frameWrapRef = useRef<HTMLDivElement | null>(null);
-  const lastSlideIdRef = useRef<string | null>(null);
+  /* ---------- transition timing (one config, deck settings tune it) ----------
+     exitMs / enterMs scale off settings.transitionMs, the background
+     crossfade off settings.bgCrossfadeMs — clamped to sane bounds so a
+     deck authored with the old 1600 ms ambient crossfade still feels
+     responsive now that the phase gates the content. */
+  const reducedMotion = usePrefersReducedMotion();
+  const transition = useMemo<TransitionTiming>(
+    () => {
+      const t = deck?.settings.transitionMs ?? 240;
+      return {
+        exitMs: clamp(t, 120, 1200),
+        enterMs: clamp(Math.round(t * 1.4), 140, 1400),
+        bgMs: clamp(deck?.settings.bgCrossfadeMs ?? 450, 200, 1600),
+        reduced: reducedMotion || undefined,
+      };
+    },
+    [deck?.settings.transitionMs, deck?.settings.bgCrossfadeMs, reducedMotion],
+  );
+
+  /* ---------- preload the neighbours ----------
+     Warm the module HTTP cache (server decks) / the compile cache (browser
+     decks) and decode background images for the slides around the current
+     one, plus the current slide's own image background — so the transition
+     never waits on a cold network or an undecoded image. */
   useEffect(() => {
-    const el = frameWrapRef.current;
-    const slideId = current?.id ?? null;
-    if (!el || !slideId) return;
-    const first = lastSlideIdRef.current === null;
-    const changed = lastSlideIdRef.current !== slideId;
-    if (changed) {
-      const to = slides.findIndex((s) => s.id === slideId);
-      if (to >= 0 && lastIndexRef.current !== to) setDir(to > lastIndexRef.current ? "next" : "prev");
-      lastIndexRef.current = to >= 0 ? to : index;
-    } else {
-      lastIndexRef.current = index;
-    }
-    lastSlideIdRef.current = slideId;
-    if (first) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) return;
-    const fromX = dir === "next" ? 44 : -44;
-    el.animate(
-      [
-        { opacity: 0, transform: `translateX(${fromX}px) scale(.988)` },
-        { opacity: 1, transform: "translateX(0px) scale(1)" },
-      ],
-      { duration: Math.max(300, deck?.settings.transitionMs ?? T_MS), easing: T_EASE, fill: "backwards" },
-    );
-  }, [current?.id, dir, deck?.settings.transitionMs]);
+    if (!deck || slides.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const assetMap = await getAssetMap(deckId, version).catch(() => null);
+      if (cancelled) return;
+      const jobs: Promise<unknown>[] = [];
+      const wanted = new Set([index - 1, index, index + 1].filter((i) => i >= 0 && i < slides.length));
+      const warm = (source: Source | undefined) => {
+        if (!source || source.type === "none") return;
+        if (source.type === "code") {
+          jobs.push(
+            resolveModule(deckId, source.path, version)
+              .then((m) => (m.url ? fetch(m.url, { cache: "force-cache" }) : null))
+              .catch(() => {}),
+          );
+        } else if (source.type === "image") {
+          const url = assetMap?.[source.path] ?? `/api/assets/${deckId}/${source.path}`;
+          if (!/^(data|blob):/i.test(url)) {
+            jobs.push(
+              new Promise<void>((res) => {
+                const img = new Image();
+                const done = () => res();
+                img.onload = () => (img.decode ? img.decode().then(done, done) : done());
+                img.onerror = done;
+                img.src = url;
+              }),
+            );
+          }
+        }
+      };
+      for (const i of wanted) {
+        const s = slides[i];
+        jobs.push(
+          resolveModule(deckId, `slides/${s.id}.tsx`, version)
+            .then((m) => (m.url ? fetch(m.url, { cache: "force-cache" }) : null))
+            .catch(() => {}),
+        );
+        warm(s.bg !== undefined ? s.bg : deck.bg);
+        warm(s.overlay !== undefined ? s.overlay : deck.overlay);
+      }
+      try {
+        if (document.fonts?.ready) jobs.push(document.fonts.ready.catch(() => {}));
+      } catch {
+        /* fonts api unavailable */
+      }
+      await Promise.all(jobs);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deck, deckId, index, slides, version]);
 
   /* ---------- report steps ---------- */
   const onSteps = useCallback(
@@ -328,10 +392,11 @@ export function PresentView({
         <div style={{ position: "relative", width: "min(100vw, calc(100vh * 16 / 9))", aspectRatio: "16/9" }}>
           {/* the live stage — background + content + overlays in ONE sandboxed
               runtime, the exact pipeline the editor preview uses (Problem 07).
-              Slide changes hot-swap only the slide module; the background and
-              common overlay modules are reused, so their animations keep
-              running across slides. */}
-          <div ref={frameWrapRef} style={{ position: "absolute", inset: 0, zIndex: 2, isolation: "isolate" }}>
+              The runtime's three layers are stable for the whole deck: slide
+              changes run the exit → bg → enter controller, the background
+              crossfades only when its key changed, and the overlay layer is
+              never touched by transitions. */}
+          <div style={{ position: "absolute", inset: 0, zIndex: 2, isolation: "isolate" }}>
             <StageFrame
               deckId={deckId}
               slide={current}
@@ -344,6 +409,7 @@ export function PresentView({
               step={step}
               slideIndex={index}
               slideTotal={total}
+              transition={transition}
               onSteps={onSteps}
             />
           </div>

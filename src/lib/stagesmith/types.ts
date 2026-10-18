@@ -123,6 +123,20 @@ export interface CompileResult {
 
 export type LayerKind = "slide" | "bg" | "overlay";
 
+/** present-mode transition directive carried by a render config — attached
+ *  only to the config that applies a NEW slide's resolved modules. The
+ *  runtime's controller then runs: exiting → (bgChanging, only when the
+ *  background key differs) → entering. */
+export interface TransitionDirective {
+  dir: "next" | "prev";
+  /** content fade-out, ms */
+  exitMs: number;
+  /** background crossfade, ms */
+  bgMs: number;
+  /** content fade-in, ms */
+  enterMs: number;
+}
+
 export interface RuntimeConfig {
   type: "render";
   frameId: string;
@@ -135,6 +149,7 @@ export interface RuntimeConfig {
   bg?: string | null;
   overlay?: string | null;
   show: { bg: boolean; content: boolean; overlay: boolean };
+  transition?: TransitionDirective;
 }
 
 export type RuntimeMessage =
@@ -149,4 +164,22 @@ export type RuntimeMessage =
       stack?: string;
     }
   | { type: "rendered"; frameId: string; steps?: number }
-  | { type: "steps"; frameId: string; steps: number };
+  | { type: "steps"; frameId: string; steps: number }
+  /** observability: the transition controller's phase changes (verification
+   *  harness + debugging; no UI action required) */
+  | {
+      type: "transition";
+      frameId: string;
+      phase:
+        | "start" // transition begins (exit phase follows immediately)
+        | "bg" // background crossfade started
+        | "enter" // new content glides in
+        | "done" // controller back to idle
+        | "interrupt" // superseded by a newer target (rapid input)
+        | "skip" // directive ignored (reduced motion)
+        | "instant"; // applied without choreography (editor/first config)
+      dir?: "next" | "prev";
+      bgChanged?: boolean;
+      to?: string | null;
+      reason?: string;
+    };

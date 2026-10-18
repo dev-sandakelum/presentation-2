@@ -223,8 +223,10 @@ export function starterDeckFiles(title: string): Record<string, string> {
     settings: {
       size: [1280, 720],
       defaultMode: "dark",
-      transitionMs: 220,
-      bgCrossfadeMs: 1600,
+      // present-mode transition phases: content exit/enter scale off
+      // transitionMs, the background crossfade off bgCrossfadeMs
+      transitionMs: 260,
+      bgCrossfadeMs: 450,
     },
     bg: { type: "code", path: "bg/common.tsx" },
     overlay: { type: "code", path: "overlay/common.tsx" },

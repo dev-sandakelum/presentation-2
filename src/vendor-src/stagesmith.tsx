@@ -66,12 +66,15 @@ function subscribe(l: () => void) {
   return () => listeners.delete(l);
 }
 
-/** called by the runtime bootstrap before rendering */
+/** called by the runtime bootstrap before rendering.
+ *  Subscriptions are intentionally KEPT: listeners.clear() used to sever the
+ *  useSyncExternalStore subscriptions of still-mounted layers (the common
+ *  overlay!) on every render config, so store-driven updates (slideIndex for
+ *  progress bars, steps, …) silently stopped reaching them until the next
+ *  remount. React un/subscriptions are symmetric against this same Set (it is
+ *  never replaced), so leaving listeners alone is both safe and correct — the
+ *  overlay keeps its own live state across slide changes. */
 export function initRuntime(cfg: Partial<StageRuntimeState>) {
-  // Clear existing subscribers (e.g. left over from a previous render config)
-  // rather than replacing the Set reference, which would silently orphan any
-  // useSyncExternalStore subscriptions that are still alive.
-  listeners.clear();
   state = { ...state, ...cfg, declaredSteps: 1 };
   emit();
 }

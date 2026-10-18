@@ -17,12 +17,14 @@
 <style>
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:transparent}
-  #root{position:absolute;top:0;left:0;width:1280px;height:720px;transform-origin:0 0}
+  #root{position:absolute;top:0;left:0;width:1280px;height:720px;transform-origin:0 0;transition:background-color .5s ease}
   .ss-stage{position:absolute;inset:0;overflow:hidden}
   .ss-layer{position:absolute;inset:0}
   .ss-bg{z-index:0}
   .ss-content{z-index:1}
   .ss-overlay{z-index:2;pointer-events:none}
+  /* background crossfade slots — stacked siblings, later ones paint on top */
+  .ss-bg-slot{position:absolute;inset:0}
   .ss-static *{animation:none !important;transition:none !important}
   #errcard{
     position:absolute;left:40px;top:40px;right:40px;z-index:50;
@@ -33,6 +35,9 @@
   #errcard .err-head{
     color:#f87171;font-weight:600;letter-spacing:.18em;text-transform:uppercase;
     font-size:11px;margin-bottom:10px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #root{transition:none}
   }
 </style>
 </head>
@@ -60,6 +65,37 @@ import * as stagesmith from "stagesmith";
 
 try { parent.postMessage({ type: "boot-ok", frameId: new URLSearchParams(location.search).get("f") || "boot" }, "*"); } catch (e) {}
 
+/* ==================================================================
+   Present-mode transitions (three-layer stage).
+
+   The stage is three stable layers that live for the whole deck:
+
+     .ss-bg       background stack (crossfade slots, old below, new above)
+     .ss-content  the slide itself (exit / enter animations)
+     .ss-overlay  header/footer/marks — NEVER animated, never remounted
+
+   A slide change that arrives with a `transition` directive runs a small
+   state machine, driven by ONE controller so every input path (keyboard,
+   click zones, dot nav, overview grid, phone remote) behaves identically:
+
+     idle → exiting → (bgChanging, only when the bg KEY differs) → entering → idle
+
+   Ordering rules:
+     - different background: the old content leaves FIRST, then the
+       background crossfades (old kept below until the new one is fully
+       visible), then the new content enters — never the other way round
+     - same background (key equal by VALUE): the background layer is not
+       touched at all — no fade, no remount, no flicker
+     - the overlay layer is never part of any animation; it is React.memo'd
+       so slide changes don't even re-render it (store subscriptions —
+       progress bar, slide numbers — keep flowing)
+   Rapid input never queues: a newer config interrupts the running
+   transition deterministically (running crossfades snap forward, the exit
+   animation is adopted because it is target-independent) and the machine
+   goes straight to the latest target. Only transform and opacity are
+   animated; will-change is set while animating and cleared when idle.
+   ================================================================== */
+
 // guard against double module execution in the same document
 if (window.__ssInstance) {
   // already booted — re-post ready so the parent can re-send its config
@@ -72,18 +108,36 @@ const root = createRoot(rootEl);
 const errCard = document.getElementById("errcard");
 const errMsg = document.getElementById("errmsg");
 
-let cfg = null;                 // last render config
-const modules = { slide: null, bg: null, overlay: null, commonOverlay: null };
-/* module identity per layer — "url:<url>" for server decks, "ver:<hash>"
-   for inline code modules (browser-stored decks) */
-const moduleKeys = { slide: null, bg: null, overlay: null, commonOverlay: null };
+let cfg = null;                 // last received render config
+const modules = { slide: null, overlay: null, commonOverlay: null };
+const bgStack = [];             // visible background slots, bottom → top
+const modCache = new Map();     // layer module key → Promise<component>
+const memoCache = new WeakMap();// component → React.memo wrapper
 let stepsReported = -1;
+let lastJson = null;            // identical-config guard (heal re-posts)
+let lastApplied = null;         // layer keys of the currently visible world
+
+/* ---------------- transition state ---------------- */
+let transToken = 0;             // bumped by every applyConfig — coroutines bail when superseded
+let run = null;                 // { token, keys, cfg } — the active transition
+let exitAnim = null;            // content → hidden (shared across retargets: target-independent)
+let enterAnim = null;           // content → visible
+let bgFades = [];               // running bg slot fades [{ anim, entry }]
+let queuedStep = null;          // set-step received while a transition runs
+
+const REDUCED = "(prefers-reduced-motion: reduce)";
+function isReduced() { return window.matchMedia(REDUCED).matches; }
 
 /* ---------------- helpers ---------------- */
 
 function post(msg) {
   if (!cfg) return;
   try { parent.postMessage({ ...msg, frameId: cfg.frameId }, "*"); } catch (e) { /* ignore */ }
+}
+
+function showPhase(phase, extra) {
+  post({ type: "transition", phase, ...(extra || {}) });
+  try { console.debug("[ss-transition]", phase, extra || ""); } catch (e) {}
 }
 
 function showError(phase, message, stack) {
@@ -113,12 +167,49 @@ async function loadCodeModule(code) {
   }
 }
 
-/** normalize a layer of the config to { key, url? , code? } | null */
+/** normalize a layer of the config to { key, url?, code? } | null */
 function layerRef(next, kind) {
   if (next[kind]) return { key: "url:" + next[kind], url: next[kind] };
   const code = next[kind + "Code"];
   if (code) return { key: "ver:" + (next[kind + "Ver"] || String(code.length)), code };
   return null;
+}
+
+/** component of a layer module, imported once per key (cached) */
+function ensureMod(ref) {
+  let p = modCache.get(ref.key);
+  if (!p) {
+    p = (ref.url ? loadModule(ref.url) : loadCodeModule(ref.code)).then((m) => m.default ?? null);
+    p.catch(() => modCache.delete(ref.key)); // allow a retry on the next config
+    modCache.set(ref.key, p);
+  }
+  return p;
+}
+
+/** React.memo a layer component once, so re-renders skip unchanged layers */
+function memoComp(Comp) {
+  if (!Comp || typeof Comp !== "function") return Comp;
+  let m = memoCache.get(Comp);
+  if (!m) { m = React.memo(Comp); memoCache.set(Comp, m); }
+  return m;
+}
+
+function refKey(ref) { return ref ? ref.key : null; }
+
+/** value-based layer keys — string comparison, never object identity */
+function keysOf(next) {
+  const bgRef = layerRef(next, "bg");
+  const ovRef = layerRef(next, "overlay");
+  return {
+    slide: refKey(layerRef(next, "slide")),
+    bg: bgRef ? bgRef.key : next.bgImage ? "img:" + JSON.stringify(next.bgImage) : "none",
+    overlay: ovRef ? ovRef.key : next.overlayImage ? "img:" + JSON.stringify(next.overlayImage) : null,
+    commonOverlay: refKey(layerRef(next, "commonOverlay")),
+  };
+}
+
+function sameKeys(a, b) {
+  return !!a && !!b && a.slide === b.slide && a.bg === b.bg && a.overlay === b.overlay && a.commonOverlay === b.commonOverlay;
 }
 
 /* ---------------- asset load healing (Problem 06) ----------------
@@ -205,6 +296,209 @@ function overlayImageLayer(cfgImage) {
   });
 }
 
+/* ---------------- background stack ---------------- */
+
+/** resolve the target background of a config to a mountable descriptor */
+async function ensureBgEntry(next) {
+  if (next.bgImage) {
+    await decodeUrl(next.bgImage.url); // never pop in — decode before mount
+    return { key: "img:" + JSON.stringify(next.bgImage), kind: "image", image: next.bgImage };
+  }
+  const ref = layerRef(next, "bg");
+  if (!ref) return null;
+  const comp = await ensureMod(ref);
+  if (!comp) throw new Error("Background module has no default export");
+  return { key: ref.key, kind: "module", comp };
+}
+
+function makeBgEntry(target) {
+  const entry = {
+    key: target.key,
+    makeNode: target.kind === "image"
+      ? () => bgImageLayer(target.image)
+      : () => React.createElement(memoComp(target.comp)),
+    el: null,
+    fadeStarted: false, // committed once its fade has begun
+    dying: false,       // fading out (target has no background)
+    setEl: null,
+  };
+  entry.setEl = (el) => { entry.el = el; };
+  return entry;
+}
+
+/** key of the topmost visible (not dying) background slot */
+function currentBgKey() {
+  for (let i = bgStack.length - 1; i >= 0; i--) {
+    if (!bgStack[i].dying) return bgStack[i].key;
+  }
+  return "none";
+}
+
+/** fade one bg slot (opacity only) */
+function fadeSlot(entry, from, to, ms) {
+  const el = entry.el;
+  if (!el) return null;
+  el.style.willChange = "opacity";
+  el.style.opacity = String(from);
+  const a = el.animate([{ opacity: from }, { opacity: to }], { duration: ms, easing: "ease" });
+  a.finished.then(() => {
+    el.style.opacity = to === 1 ? "" : "0";
+    el.style.willChange = "";
+    try { a.cancel(); } catch (e) {}
+  }).catch(() => {});
+  return a;
+}
+
+/** snap every running bg fade to its end state and prune the stack:
+ *  keep the topmost slot whose fade has started (or the base slot),
+ *  drop superseded slots below it and never-started incomings above it */
+function settleBg() {
+  for (const a of bgFades) { try { a.finish(); } catch (e) {} }
+  bgFades = [];
+  let keep = -1;
+  for (let i = 0; i < bgStack.length; i++) {
+    const e = bgStack[i];
+    if (e.dying) continue;
+    if (e.fadeStarted) keep = i;
+  }
+  if (keep < 0 && bgStack.length && !bgStack[0].dying) keep = 0;
+  const next = keep >= 0 ? [bgStack[keep]] : [];
+  if (next.length !== bgStack.length) {
+    bgStack.length = 0;
+    bgStack.push(...next);
+    renderTree();
+  }
+}
+
+/* ---------------- content layer animations ---------------- */
+
+let contentEl = null;
+function setContentEl(el) { contentEl = el; }
+
+/** force the content layer back to its visible resting state — used when a
+ *  running transition is superseded by an INSTANT apply (live edit, jumping
+ *  back to the outgoing slide, reduced motion) so a half-finished exit can
+ *  never leave the stage dark. */
+function revealContent() {
+  if (exitAnim) { try { exitAnim.cancel(); } catch (e) {} exitAnim = null; }
+  if (enterAnim) { try { enterAnim.cancel(); } catch (e) {} enterAnim = null; }
+  const el = contentEl;
+  if (el) {
+    el.style.opacity = "";
+    el.style.transform = "";
+    el.style.willChange = "";
+    el.dataset.hidden = "";
+  }
+}
+
+/** exit: content → hidden. Returns the WAAPI animation (or null when
+ *  already hidden). A running exit is ADOPTED by retargeted transitions —
+ *  it is target-independent, so rapid input never restarts it. */
+function startExit(t) {
+  if (exitAnim) return exitAnim;
+  const el = contentEl;
+  if (!el || el.dataset.hidden === "1") return null;
+  const from = {
+    opacity: el.style.opacity || "1",                             // may be a captured mid-enter state
+    transform: el.style.transform || "translateX(0px)",
+  };
+  el.style.willChange = "transform, opacity";
+  const outX = t.dir === "prev" ? 36 : -36;                       // content leaves against the travel direction
+  const a = el.animate(
+    [
+      { opacity: from.opacity, transform: from.transform },
+      { opacity: 0, transform: `translateX(${outX}px)` },
+    ],
+    { duration: t.exitMs, easing: "cubic-bezier(.5,0,.6,1)" },
+  );
+  exitAnim = a;
+  a.finished.then(() => {
+    if (exitAnim === a) {
+      exitAnim = null;
+      el.style.opacity = "0";
+      el.dataset.hidden = "1";
+      el.style.willChange = "";
+      try { a.cancel(); } catch (e) {} // reverts to the inline opacity:0 above
+    }
+  }).catch(() => { if (exitAnim === a) exitAnim = null; });
+  return a;
+}
+
+async function waitExit() {
+  const a = exitAnim;
+  if (!a) return;
+  try { await a.finished; } catch (e) {}
+}
+
+/** enter: content → visible, gliding in from the travel direction */
+async function startEnter(t) {
+  const el = contentEl;
+  if (!el) return;
+  el.dataset.hidden = "";
+  el.style.willChange = "transform, opacity";
+  el.style.opacity = "0"; // hidden until the animation takes over (it wins over inline styles)
+  const inX = t.dir === "next" ? 36 : -36;
+  const a = el.animate(
+    [
+      { opacity: 0, transform: `translateX(${inX}px)` },
+      { opacity: 1, transform: "translateX(0px)" },
+    ],
+    { duration: t.enterMs, easing: "cubic-bezier(.22,1,.36,1)" },
+  );
+  enterAnim = a;
+  try {
+    await a.finished;
+  } catch (e) {
+    return; // cancelled by an interrupt — the interrupt owns the visuals
+  }
+  if (enterAnim === a) {
+    enterAnim = null;
+    el.style.opacity = "";
+    el.style.transform = "";
+    el.style.willChange = "";
+    try { a.cancel(); } catch (e) {}
+  }
+}
+
+/* ---------------- paint readiness (no pop-ins) ---------------- */
+
+function nextPaint() {
+  return new Promise((res) => {
+    if (document.hidden) return res();
+    requestAnimationFrame(() => (document.hidden ? res() : requestAnimationFrame(res)));
+  });
+}
+
+/** decode a URL before it is mounted (image-source backgrounds) */
+function decodeUrl(url) {
+  return new Promise((res) => {
+    if (!url || /^(data|blob):/i.test(url)) return res();
+    const img = new Image();
+    const done = () => res();
+    img.onload = () => (img.decode ? img.decode().then(done, done) : done());
+    img.onerror = done;
+    img.src = url;
+  });
+}
+
+/** wait until a freshly mounted layer is fully paintable:
+ *  fonts loaded + every <img> inside decoded + one committed frame */
+async function ensurePaintable(entry) {
+  try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (e) {}
+  const el = entry && entry.el;
+  if (!el || document.hidden) return;
+  const imgs = Array.from(el.querySelectorAll("img"));
+  await Promise.all(imgs.map((img) => {
+    if (img.complete && img.naturalWidth > 0) return null;
+    return new Promise((res) => {
+      const done = () => res();
+      img.addEventListener("load", () => (img.decode ? img.decode().then(done, done) : done()), { once: true });
+      img.addEventListener("error", done, { once: true });
+    });
+  }));
+  await nextPaint();
+}
+
 /* ---------------- React tree ---------------- */
 
 class Boundary extends React.Component {
@@ -222,101 +516,72 @@ class Boundary extends React.Component {
 function Composed() {
   const mode = cfg ? cfg.mode : "dark";
   const show = (cfg && cfg.show) || { bg: true, content: true, overlay: true };
-  const bgLayer =
-    (modules.bg && React.createElement(modules.bg)) ||
-    (cfg && cfg.bgImage && bgImageLayer(cfg.bgImage)) ||
-    null;
-  const overlayLayer =
-    (modules.overlay && React.createElement(modules.overlay)) ||
-    (cfg && cfg.overlayImage && overlayImageLayer(cfg.overlayImage)) ||
-    null;
-  return React.createElement(
-    "div",
-    { className: "ss-stage", "data-theme": mode },
-    [
-      bgLayer && show.bg && React.createElement("div", { key: "bg", className: "ss-layer ss-bg" }, bgLayer),
-      modules.slide && show.content && React.createElement("div", { key: "content", className: "ss-layer ss-content" }, React.createElement(Boundary, { key: "b" }, React.createElement(modules.slide))),
-      overlayLayer && show.overlay && React.createElement("div", { key: "overlay", className: "ss-layer ss-overlay" }, overlayLayer),
-    ].filter(Boolean),
-  );
+  const kids = [];
+  // background layer — stable stack of slots (old below, new above)
+  if (show.bg && bgStack.length) {
+    kids.push(React.createElement("div", { key: "bg", className: "ss-layer ss-bg" },
+      bgStack.map((e) => React.createElement("div", {
+        key: e.key, className: "ss-bg-slot", ref: e.setEl,
+      }, e.makeNode()))));
+  }
+  // content layer — one stable div; the slide module swaps while it is hidden
+  if (show.content) {
+    kids.push(React.createElement("div", { key: "content", className: "ss-layer ss-content", ref: setContentEl },
+      modules.slide
+        ? React.createElement(Boundary, { key: "b" }, React.createElement(modules.slide))
+        : null));
+  }
+  // overlay layer — never animated, never remounted; React.memo keeps slide
+  // changes from re-rendering it at all (store updates still flow through)
+  const overlayNode = modules.overlay
+    ? React.createElement(memoComp(modules.overlay))
+    : (cfg && cfg.overlayImage ? overlayImageLayer(cfg.overlayImage) : null);
+  if (show.overlay && overlayNode) {
+    kids.push(React.createElement("div", { key: "overlay", className: "ss-layer ss-overlay" }, overlayNode));
+  }
+  return React.createElement("div", { className: "ss-stage", "data-theme": mode }, kids);
 }
 
 function renderTree() {
   root.render(React.createElement(Composed));
+  // paint marker — the headless verification harness waits for this
+  try { window.__ssRendered = (window.__ssRendered || 0) + 1; } catch (e) {}
 }
 
 /* ---------------- apply a render config ---------------- */
 
-async function applyConfig(next) {
-  const prev = cfg;
-  cfg = next;
-
-  // theme css + mode + static + scale always applied
-  const styleEl = document.getElementById("theme-style") || (() => {
+function themeStyle() {
+  return document.getElementById("theme-style") || (() => {
     const s = document.createElement("style");
     s.id = "theme-style";
     document.head.appendChild(s);
     return s;
   })();
+}
+
+/** theme css, mode, static freeze and the runtime store (slide index for
+ *  the overlay's progress bar, step for the incoming slide) */
+function applyChrome(next) {
+  const styleEl = themeStyle();
   styleEl.textContent = next.css || "";
   document.documentElement.dataset.theme = next.mode;
   rootEl.dataset.theme = next.mode;
   rootEl.classList.toggle("ss-static", !!next.static);
-  rootEl.style.transform = `scale(${next.scale || 1})`;
-
   stagesmith.initRuntime({
     staticMode: !!next.static,
     mode: next.mode,
     assetBase: next.assetBase || "",
     assetMap: next.assetMap || null,
-    step: next.static ? 9999 : 0,
+    step: next.static ? 9999 : (queuedStep ?? 0),
     slideIndex: next.slideIndex ?? 0,
     slideTotal: next.slideTotal ?? 0,
     declaredSteps: 1,
   });
+  queuedStep = null;
+}
 
-  // hot-swap only changed modules (plan §5.1) — layers arrive either as a
-  // compile URL (server decks) or as inline code + version hash (browser
-  // decks); both are compared by stable key so unchanged layers never reload
-  const refs = {
-    bg: layerRef(next, "bg"),
-    commonOverlay: layerRef(next, "commonOverlay"),
-    overlay: layerRef(next, "overlay"),
-    slide: layerRef(next, "slide"),
-  };
-  try {
-    for (const kind of ["bg", "commonOverlay", "overlay", "slide"]) {
-      const ref = refs[kind];
-      const key = ref ? ref.key : null;
-      if (moduleKeys[kind] === key) continue;
-      modules[kind] = ref
-        ? ((ref.url ? await loadModule(ref.url) : await loadCodeModule(ref.code)).default ?? null)
-        : null;
-      moduleKeys[kind] = key;
-    }
-  } catch (e) {
-    // keep last good modules; show compile/import error (plan: preview keeps last good version)
-    showError("import", e.message, e.stack);
-    return;
-  }
-
-  // when an overlay override is active, <Common/> renders the common one
-  stagesmith.__setCommonOverlay(
-    refs.overlay && refs.commonOverlay && refs.overlay.key !== refs.commonOverlay.key
-      ? modules.commonOverlay
-      : null,
-  );
-
-  // compile error with no last-good module → error card (fix-list item 4);
-  // reported back with phase "compile" so the filmstrip does not double-count
-  if (next.slideError) showError("compile", next.slideError);
-  else clearError();
-  renderTree();
-
-  // paint marker — the headless thumbnail generator waits for this
-  try { window.__ssRendered = (window.__ssRendered || 0) + 1; } catch (e) {}
-
-  // report literal step count after paint
+function reportSteps() {
+  stepsReported = -1; // report once per applied slide
   requestAnimationFrame(() => {
     const steps = stagesmith.getState().declaredSteps;
     if (steps !== stepsReported) {
@@ -326,18 +591,274 @@ async function applyConfig(next) {
   });
 }
 
+/** crossfade the background to the target key. The old slot keeps running
+ *  below the whole time and is only dropped once the new one is fully
+ *  visible. If the target has no background, the current one fades out. */
+async function crossfadeBg(next, keys, t, my) {
+  settleBg();
+  if (currentBgKey() === keys.bg) return; // defensive — caller already checked
+  let target = null;
+  let failed = null;
+  try {
+    target = await ensureBgEntry(next);
+  } catch (e) {
+    failed = e; // keep the old background, surface the error, continue
+  }
+  if (my !== transToken) return;
+  if (failed) { showError("import", failed.message, failed.stack); return; }
+
+  if (!target) {
+    // target slide has NO background — fade the current one out
+    const top = bgStack.filter((e) => !e.dying).pop();
+    if (top) {
+      top.dying = true;
+      showPhase("bg", { to: "none" });
+      const a = fadeSlot(top, 1, 0, t.bgMs);
+      if (a) { bgFades.push(a); try { await a.finished; } catch (e) {} }
+      if (my !== transToken) { settleBg(); return; }
+    }
+    settleBg();
+    return;
+  }
+
+  // mount the incoming slot hidden, wait until it is paintable, then fade
+  const entry = makeBgEntry(target);
+  bgStack.push(entry);
+  renderTree();
+  await nextPaint(); // refs attached
+  if (my !== transToken) { settleBg(); return; }
+  await ensurePaintable(entry);
+  if (my !== transToken) { settleBg(); return; }
+  entry.fadeStarted = true;
+  showPhase("bg", { to: entry.key });
+  const a = fadeSlot(entry, 0, 1, t.bgMs);
+  if (a) {
+    bgFades.push(a);
+    try { await a.finished; } catch (e) {}
+  }
+  if (my !== transToken) { settleBg(); return; }
+  settleBg(); // drop the old slot — the new one is fully visible
+}
+
+/** assign the target slide/overlay modules (bg already handled by the
+ *  crossfade) and re-render. Imports resolve from the cache warmed during
+ *  the exit phase. */
+async function swapLayers(target, keys, my) {
+  const refs = {
+    slide: layerRef(target, "slide"),
+    overlay: layerRef(target, "overlay"),
+    commonOverlay: layerRef(target, "commonOverlay"),
+  };
+  const comps = {};
+  for (const kind of ["overlay", "commonOverlay", "slide"]) {
+    comps[kind] = refs[kind] ? await ensureMod(refs[kind]) : null;
+  }
+  if (my !== transToken) return; // superseded mid-import — nothing assigned
+  modules.slide = comps.slide;
+  modules.overlay = comps.overlay;
+  modules.commonOverlay = comps.commonOverlay;
+  stagesmith.__setCommonOverlay(
+    refs.overlay && refs.commonOverlay && refs.overlay.key !== refs.commonOverlay.key
+      ? modules.commonOverlay
+      : null,
+  );
+  if (target.slideError) showError("compile", target.slideError);
+  else clearError();
+  renderTree();
+}
+
+/** instant application (editor previews, thumbnails, first config,
+ *  reduced motion, live edits) — the pre-transition behaviour */
+async function applyInstant(next, keys, my) {
+  revealContent(); // a superseded transition may have left the content half-exited
+  applyChrome(next);
+  settleBg();
+  try {
+    const target = await ensureBgEntry(next);
+    if (my !== transToken) return;
+    const refs = {
+      slide: layerRef(next, "slide"),
+      overlay: layerRef(next, "overlay"),
+      commonOverlay: layerRef(next, "commonOverlay"),
+    };
+    const comps = {};
+    for (const kind of ["overlay", "commonOverlay", "slide"]) {
+      comps[kind] = refs[kind] ? await ensureMod(refs[kind]) : null;
+    }
+    if (my !== transToken) return;
+    // assign atomically (bg only when a module/image target resolved)
+    if (target) {
+      bgStack.length = 0;
+      bgStack.push(makeBgEntry(target));
+    } else if (!next.bgImage && !layerRef(next, "bg")) {
+      bgStack.length = 0; // explicit "no background"
+    }
+    modules.slide = comps.slide;
+    modules.overlay = comps.overlay;
+    modules.commonOverlay = comps.commonOverlay;
+    stagesmith.__setCommonOverlay(
+      refs.overlay && refs.commonOverlay && refs.overlay.key !== refs.commonOverlay.key
+        ? modules.commonOverlay
+        : null,
+    );
+    if (next.slideError) showError("compile", next.slideError);
+    else clearError();
+  } catch (e) {
+    // keep the last good layers (plan: preview keeps the last good version)
+    showError("import", e.message, e.stack);
+  }
+  renderTree();
+  reportSteps();
+  showPhase("instant");
+}
+
+/** deterministic take-over when a newer config supersedes the running
+ *  transition: freeze a mid-enter content layer at its CURRENT visuals,
+ *  let the target-independent exit keep running (the next transition
+ *  adopts it), and snap background fades forward to their end state. */
+function interruptTransition() {
+  const r = run;
+  run = null;
+  if (!r) return;
+  r.cancelled = true; // the superseded coroutine bails at its next checkpoint
+  showPhase("interrupt", { from: r.keys.bg });
+  if (enterAnim) {
+    const el = contentEl;
+    if (el) {
+      const cs = getComputedStyle(el);
+      if (cs.opacity !== "") el.style.opacity = cs.opacity;
+      if (cs.transform && cs.transform !== "none") el.style.transform = cs.transform;
+      el.dataset.hidden = "";
+    }
+    try { enterAnim.cancel(); } catch (e) {}
+    enterAnim = null;
+  }
+  settleBg(); // snap running bg fades forward, prune un-started incomings
+}
+
+/** the transition controller — ONE code path for every way of changing
+ *  slides (keyboard, click, dot nav, overview grid, phone remote): they
+ *  all arrive here as a render config with a transition directive. */
+async function runTransition(next, keys, t, my) {
+  run = { token: my, keys, cfg: next };
+  showPhase("start", { dir: t.dir, bgChanged: currentBgKey() !== keys.bg });
+
+  // 1. EXIT — only the content layer leaves; bg and overlay untouched.
+  //    Target modules import concurrently (cache-warm from preloading).
+  const preload = [];
+  for (const kind of ["overlay", "commonOverlay", "slide"]) {
+    const ref = layerRef(next, kind);
+    if (ref) preload.push(ensureMod(ref).catch(() => {}));
+  }
+  startExit(t);
+  await waitExit();
+  if (my !== transToken) return;
+
+  // 2. chrome (theme css, mode, store) applies while the content is hidden,
+  //    so colours never flip under visible content.
+  const target = run.cfg || next; // a chrome refresh during the run wins
+  applyChrome(target);
+
+  // 3. BACKGROUND — crossfade only when the bg key differs (Case A);
+  //    identical keys leave the layer completely untouched (Case B).
+  if (currentBgKey() !== keys.bg) {
+    await crossfadeBg(target, keys, t, my);
+    if (my !== transToken) return;
+  }
+
+  // 4. ENTER — swap the slide module (overlay swaps instantly too, only
+  //    when its key changed), then glide the content in. Re-read run.cfg so
+  //  a chrome refresh posted mid-run is the one applied.
+  try {
+    await swapLayers((run && run.cfg) || target, keys, my);
+  } catch (e) {
+    // an import failed mid-transition: keep the last good layers, show the
+    // error and bring the current content back — never a stuck hidden stage.
+    showError("import", e.message, e.stack);
+  }
+  if (my !== transToken) return;
+  showPhase("enter", { dir: t.dir });
+  await nextPaint(); // React committed, refs attached
+  if (my !== transToken) return;
+  await startEnter(t);
+  if (my !== transToken) return;
+  reportSteps();
+  showPhase("done");
+}
+
+async function applyConfig(next) {
+  const json = JSON.stringify(next);
+  if (json === lastJson) return; // redundant re-post (heal heartbeat) — nothing to do
+
+  // a config matching the RUNNING transition's target is owned by it —
+  // only refresh its chrome (e.g. a mode toggle posted mid-transition);
+  // the visual bits apply right away, the store bits at the next applyChrome.
+  // NOTE: no token is consumed here — the running coroutine must keep
+  // ownership of the world; a chrome refresh must never kill it.
+  const keys = keysOf(next);
+  if (run && sameKeys(run.keys, keys)) {
+    cfg = next;
+    lastJson = json;
+    rootEl.style.transform = `scale(${next.scale || 1})`; // resize is not a slide transition
+    themeStyle().textContent = next.css || "";
+    document.documentElement.dataset.theme = next.mode;
+    rootEl.dataset.theme = next.mode;
+    run.cfg = next;
+    return;
+  }
+  const my = ++transToken;
+  cfg = next;
+  rootEl.style.transform = `scale(${next.scale || 1})`; // resize is not a slide transition
+
+  if (run) {
+    interruptTransition(); // rapid input: finish/skip forward, never queue
+    if (my !== transToken) return;
+  }
+
+  lastJson = json;
+  const t = next.transition;
+  const reduced = isReduced() || !!(t && t.reduced);
+  if (t && lastApplied && !sameKeys(lastApplied, keys) && !reduced) {
+    try {
+      await runTransition(next, keys, t, my);
+    } catch (e) {
+      // safety net — never leave the stage dark because of an internal error
+      showError("runtime", e && e.message ? e.message : String(e), e && e.stack);
+      revealContent();
+      renderTree();
+    }
+    if (run && run.token === my) {
+      run = null;
+      lastApplied = keys;
+    }
+  } else {
+    if (t && reduced) showPhase("skip", { reason: "reduced-motion" });
+    await applyInstant(next, keys, my);
+    if (my !== transToken) return;
+    lastApplied = keys;
+  }
+}
+
 /* ---------------- messages from parent ---------------- */
 
 window.addEventListener("message", (ev) => {
   const m = ev.data;
   if (!m || typeof m !== "object") return;
   if (m.type === "render") applyConfig(m);
-  else if (m.type === "set-step") stagesmith.__setStep(m.step);
-  else if (m.type === "set-mode") {
+  else if (m.type === "set-step") {
+    // during a transition the step belongs to the incoming slide — apply
+    // it in applyChrome, after the store was reset for the new slide
+    if (run) queuedStep = m.step;
+    else stagesmith.__setStep(m.step);
+  } else if (m.type === "set-mode") {
+    if (run) {
+      if (cfg) cfg.mode = m.mode;
+      if (run.cfg) run.cfg.mode = m.mode;
+    }
     document.documentElement.dataset.theme = m.mode;
     if (rootEl) rootEl.dataset.theme = m.mode;
     stagesmith.__setMode(m.mode);
-    renderTree();
+    if (!run) renderTree();
   }
 });
 
@@ -369,7 +890,7 @@ try {
   // SVG expand icon (inline, no external dependency)
   var EXPAND_SVG = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 1.5H10.5V4.5"/><path d="M10.5 1.5L6.5 5.5"/><path d="M4.5 10.5H1.5V7.5"/><path d="M1.5 10.5L5.5 6.5"/></svg>';
   // SVG close icon
-  var CLOSE_SVG = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/></svg>';
+  var CLOSE_SVG = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="1" y1="1" x2="11" y2="11"/><line x1="11" y1="1" x2="1" y2="11"/></svg>';
 
   var viewer = null; // the .code-viewer element when open
 

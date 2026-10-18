@@ -340,3 +340,51 @@ Work Log:
 
 Stage Summary:
 - PROBLEM 09 fixed on both sides of the bridge; event delivery is now string-based per protocol v1.1 with an object-tolerant web handler, a poll fallback, and console logging for future debugging
+
+---
+Task ID: 12
+Agent: main (Super Z)
+Task: ISSUE "Present mode transitions: background order, fixed overlay, smooth movement" — restructure the present stage into three stable layers (bg / content / overlay) and drive slide changes through one transition controller with the ordering rules: different background → content out → background crossfade (old kept below until the new one is fully visible) → content in; same background (compared by VALUE) → background completely untouched; overlay never animated / never remounted.
+
+Work Log:
+- Environment: synced the repository (main @ 55ff235) into /home/z/my-project, bun install, dev server :3000 + stagesmith-sync mini-service :3003 running
+- Architecture decision: the suggested "three iframes" layout would regress Problem 07's single-frame pipeline (present must equal the editor's rendering). Instead the three layers live INSIDE the one sandboxed Stage Runtime as stable DOM: a background slot STACK (crossfade), ONE content layer div, ONE overlay layer div — each mounted for the whole deck, never keyed by slide index
+- public/runtime.html — the transition controller (state machine idle → exiting → bgChanging (only when the bg key differs) → entering → idle):
+  * keysOf(): value-based layer keys (module url/ver hash, image JSON incl. props) — string comparison, never object identity; same file + different props counts as a change
+  * bgStack: crossfade mounts the incoming slot hidden ABOVE the old one, waits for paint readiness (document.fonts.ready + <img> decode + 2 rAF), fades opacity 0→1, and only settles (drops the old slot) when the new one is fully visible; the old background keeps running underneath the whole time; "no background" targets fade the current slot OUT
+  * exit/enter: WAAPI transform+opacity only on the content layer (exit is shared and ADOPTED by retargeted transitions — it is target-independent); will-change set while animating, cleared when idle; inline opacity keeps the layer deterministically hidden between phases so the new content can never flash over the old background
+  * interruption: a newer config bumps a token; the running coroutine bails at checkpoints. interruptTransition() freezes a mid-enter content layer at its computed style, lets the running exit continue, and settleBg() snaps running crossfades forward (finish) + prunes never-started incomings → rapid input goes straight to the latest target, never queues, never two transitions at once
+  * chrome (theme css, mode, store incl. slideIndex/step) applies while content is hidden so colours never flip under visible content; set-step messages arriving mid-transition are queued and applied at applyChrome (fixes the step race with the deferred store reset)
+  * identical-config guard (heal re-posts are pure no-ops now — no step reset, no re-render); a config matching the running target only refreshes its chrome WITHOUT consuming a token (a chrome refresh can never kill the running coroutine); first config / reduced motion / editor configs take the instant path; import failures mid-transition keep last-good layers, show the error card and re-enter the old content (never a stuck dark stage); revealContent() safety net; document.hidden guards in paint waits
+  * Composed renders the three layers with React.memo'd bg/overlay components (slide changes don't re-render unchanged layers; store subscriptions still flow); phase events (start/bg/enter/done/interrupt/skip/instant) post to the parent for observability
+- src/vendor-src/stagesmith.tsx + rebuilt public/vendor/stagesmith.js: removed listeners.clear() from initRuntime — it used to sever the live useSyncExternalStore subscriptions of still-mounted layers (the common overlay!) on every render config, so store-driven updates (progress bar slideIndex, steps) silently stopped reaching them; subscriptions are symmetric against the never-replaced Set, so keeping them is safe → the overlay now keeps its own live state across slide changes
+- StageFrame.tsx:
+  * new `transition` prop (TransitionTiming); the transition directive is injected AT POST TIME (building it into the config memo flipped a dep right after the post and re-posted a directive-less clone, which the runtime treated as a chrome refresh that killed the running transition — the deadlock found in verification)
+  * config posts are HELD until the current sources resolved + asset map loaded (settle-gated): a slide change posts ONE settled config — no intermediate "no content" frame, and rapid A→B→A never posts the middle slide at all; the hold also covers heal re-posts and set-step messages
+  * last-good slide module keyed by slideId AND derived in-render (resolvedSlideMod) — reading it from state alone lagged one render behind `settled` and posted a transition-to-empty; slideError now keyed on the target slide's own resolution so present shows the error card while a last-good module may stay mounted
+  * travel direction derived from the posted slideIndex delta (lastDirRef)
+- PresentView.tsx:
+  * REMOVED the whole-frame glide (it animated bg + content + overlay together — the core of the reported issue)
+  * one timing config: exitMs/enterMs scale off settings.transitionMs, bgMs off settings.bgCrossfadeMs (deck-tunable, clamped); reactive prefers-reduced-motion is passed in the directive so the runtime honours it even when the sandboxed iframe's media state lags the OS setting
+  * neighbour preloading: slides index±1 (+current) get their slide/bg/overlay modules resolved + fetched (server decks warm the immutable compile cache; browser decks warm the compile POST cache) and image backgrounds new Image()+decode()'d, plus document.fonts.ready
+- templates.ts: starter deck defaults 220/1600 → transitionMs 260 / bgCrossfadeMs 450 (the 1600 ms ambient crossfade gated the content for too long now that the phase blocks it); types.ts: TransitionDirective + transition phase RuntimeMessage
+- Test deck "transition-lab" (8 slides: deck bg A / stepped same-bg / aurora override B / same-bg B / bg none / dots C / image bg cover / same image blur+zoom+dim) with an overlay that reports uptime + store state to the parent every 500 ms across the opaque sandbox boundary
+- VERIFIED with agent-browser + VLM (phase events + screenshots):
+  * Case A (2→3 etc.): start → bg → enter → done; screenshots show content gone during the crossfade, A and B both partially visible mid-fade (old below), content only over the new bg; overlay solid
+  * Case B (1→2, 3→4): start → enter → done — NO bg phase; VLM confirms the background pixel-stable across the swap
+  * Overlay: uptime counter ran 646+ seconds CONTINUOUS across ~15 transitions + bursts (never remounted), slide number/progress updated mid-transition via the store (vendor fix), pulsing CSS animation uninterrupted, React.memo skips no-op re-renders
+  * Rapid input: 5 fast presses → start/interrupt/start/bg/enter/done — never two overlapping transitions, latest target wins, single done, final index correct; A→B→A mid-flight never shows B
+  * Phone remote "go to slide N" (second tab, live token): identical phase sequence on the presenter — same controller, same timing
+  * Boundaries: ArrowRight at last slide and ArrowLeft at first are no-ops; Home/End and dot-nav jumps (incl. backwards, several slides, bg→none, none→bg) all follow the rules
+  * Steps: stepping within a slide posts no transition; queued step applies to the incoming slide
+  * Reduced motion: skip → instant (content fully visible immediately)
+  * Cold 825 KB image background: 876 ms decode gate between start and bg — the fade only begins once the image is decoded (no pop-in); same image file with different props (blur/zoom/dim) correctly treated as a bg CHANGE (value-keyed)
+  * Tab hidden mid-transition: completes after the tab is shown again (throttled but ordered), nothing stuck
+  * Performance: rAF deltas during the visible crossfade + enter phases — ZERO frames >33 ms (steady 60 fps); only two 33 ms frames at exit start (store emit, dev mode); only transform/opacity animated
+  * Live edit while presenting: same-slide code change hot-swaps instantly (no transition fired); editor regression: dashboard filmstrip thumbs, preview, selection, code pane, Saved chip all fine
+  * bun run lint: 0 problems · npx tsc --noEmit: clean · dev.log: no errors
+
+Stage Summary:
+- Present mode now has a real three-layer stage with one transition controller (exit → bg crossfade → enter) driven by value-based bg keys; the background is provably untouched on same-bg changes, crossfades with the old layer kept below on changes, and the overlay never animates, never remounts and keeps its own state — identical behaviour from keyboard, click zones, swipe, dot nav, overview grid and the phone remote
+- Key artifacts: public/runtime.html (layers + controller), src/components/stagesmith/StageFrame.tsx (settle-gated posting + directive), src/components/stagesmith/PresentView.tsx (timing config + neighbour preloading), src/vendor-src/stagesmith.tsx + public/vendor/stagesmith.js (subscription fix), types.ts/templates.ts
+- The "Transition Lab" deck (decks/transition-lab, runtime data, not in the patch) stays on the machine as a live demo of every case; delete it from the library if unwanted
