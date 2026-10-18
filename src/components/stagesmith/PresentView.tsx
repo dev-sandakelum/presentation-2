@@ -21,9 +21,10 @@ import { download, type SsNav } from "./shared";
  * the layer modules that changed, so the background and common overlay keep
  * running (no reload, no animation restart) across slide changes.
  *
- * Navigation is room-synced when the sync service is reachable (local runs)
- * and falls back to fully local navigation when it isn't (hosted deployments)
- * — the presenter always works, with or without a phone remote.
+ * Navigation is room-synced when a sync transport is reachable (the desktop
+ * app bridge or the local-run socket service) and falls back to fully local
+ * navigation when it isn't (hosted deployments) — the presenter always
+ * works, with or without a phone remote.
  */
 
 /** transition defaults (deck settings override the duration) */
@@ -88,6 +89,38 @@ export function PresentView({
       sync.sendSlide(slides[start].id, 0);
     }
   }, [sync.connected, state, slides, fromParam]);
+
+  /* ---------- presenter notes → room (desktop bridge only) ----------
+     Phones fetch notes through the Java app's room state, so the presenter
+     pushes the notes of the current slide once per slide (cached, capped). */
+  const notesCache = useRef<Map<string, string>>(new Map());
+  const lastSentNote = useRef<{ slideId: string; text: string } | null>(null);
+  useEffect(() => {
+    if (sync.transport !== "desktop") return;
+    const slideId = current?.id;
+    if (!slideId) return;
+    let cancelled = false;
+    (async () => {
+      let text = notesCache.current.get(slideId);
+      if (text === undefined) {
+        try {
+          text = await api.readFile(deckId, `notes/${slideId}.md`);
+        } catch {
+          text = "";
+        }
+        notesCache.current.set(slideId, text);
+      }
+      if (cancelled) return;
+      const note = text.slice(0, 8000);
+      const last = lastSentNote.current;
+      if (last && last.slideId === slideId && last.text === note) return;
+      lastSentNote.current = { slideId, text: note };
+      sync.setNotes(slideId, note);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [current?.id, sync.transport, sync.setNotes, deckId]);
 
   // clock
   useEffect(() => {
@@ -250,6 +283,44 @@ export function PresentView({
   const total = slides.length;
   const progress = total ? ((index + 1) / total) * 100 : 0;
 
+  // sync chip (bottom bar): the desktop transport has its own states —
+  // running (green), starting (amber pulse) and stopped (neutral "local",
+  // hinting at the QR panel where the server can be started)
+  const syncChip = (() => {
+    if (sync.transport === "desktop") {
+      if (sync.connected) {
+        return {
+          dot: "var(--ss-ok)",
+          label: sync.remotes ? `${sync.remotes} remote${sync.remotes > 1 ? "s" : ""}` : "sync",
+          title: "Synced with the desktop app's phone remote server",
+        };
+      }
+      if (sync.serverStatus?.status === "starting") {
+        return { dot: "var(--ss-warn)", label: "starting…", title: "Starting the phone remote server…" };
+      }
+      return {
+        dot: "var(--ss-mut)",
+        label: "local",
+        title: "Phone remote server stopped — open the QR panel (Q) to start it",
+      };
+    }
+    return {
+      dot: sync.connected ? "var(--ss-ok)" : sync.unavailable ? "var(--ss-mut)" : "var(--ss-err)",
+      label: sync.connected
+        ? sync.remotes
+          ? `${sync.remotes} remote${sync.remotes > 1 ? "s" : ""}`
+          : "sync"
+        : sync.unavailable
+          ? "local"
+          : "offline",
+      title: sync.unavailable
+        ? "Presenting from this browser — the phone remote needs the desktop app (or a local run)"
+        : sync.connected
+          ? "Synced with the phone remote service"
+          : "Reconnecting to the sync service…",
+    };
+  })();
+
   return (
     <div className={`ss-display ${chromeHidden ? "hide-chrome" : ""}`} onMouseMove={bump}>
       {/* stage */}
@@ -322,18 +393,9 @@ export function PresentView({
           </span>
         </div>
         <div className="ss-chrome-panel">
-          <span className="ss-chip" style={{ height: 22 }} title={sync.unavailable ? "Presenting from this browser — phone remote needs a local run" : sync.connected ? "Synced with the phone remote service" : "Reconnecting to the sync service…"}>
-            <span
-              className="dot"
-              style={{ background: sync.connected ? "var(--ss-ok)" : sync.unavailable ? "var(--ss-mut)" : "var(--ss-err)" }}
-            />
-            {sync.connected
-              ? sync.remotes
-                ? `${sync.remotes} remote${sync.remotes > 1 ? "s" : ""}`
-                : "sync"
-              : sync.unavailable
-                ? "local"
-                : "offline"}
+          <span className="ss-chip" style={{ height: 22 }} title={syncChip.title}>
+            <span className="dot" style={{ background: syncChip.dot }} />
+            {syncChip.label}
           </span>
           <span className="ss-label" style={{ letterSpacing: ".1em", fontVariantNumeric: "tabular-nums" }}>
             {now

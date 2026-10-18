@@ -305,3 +305,38 @@ Work Log:
 Stage Summary:
 - P06: assets preview and render correctly in BOTH stores — object-URL previews for browser decks, runtime healing for raw/stale asset paths, legacy cache files filtered
 - P07: Present mode is now the editor's exact rendering pipeline in one sandboxed frame — background, content and overlays all render; the presenter navigates fully offline; the badge explains hosted "local" mode; the deck-default theme toggle fixes light decks authored in dark mode
+
+---
+Task ID: 11
+Agent: main (Super Z)
+Task: Problem 02 (OPEN) — Phone Remote does not work on the hosted site. Decision implemented: a Java desktop program opens the app in an embedded webview and starts the sync server on demand from the QR panel, driven by a JavaScript bridge.
+
+Work Log:
+- Cloned main @ 40082e4 and mapped the sync architecture (socket.io mini-service :3003, useSync display/remote/editor, QrPanel, RemoteView, /api/qr)
+- Designed the Desktop Bridge Protocol v1 (CefMessageRouter queries + executeJavaScript event pushes + phone WebSocket messages + room model) shared verbatim by both sides
+- NEW src/lib/stagesmith/desktop-bridge.ts — window.cefQuery detection, promise call({id,action,payload})→{ok,data|error}, window.__chasseDesktop._handleEvent event hook, getBridgeInfo trust handshake (cached)
+- NEW src/hooks/useDesktopServer.ts — server control hook for the QR panel: mode absent/checking/ready/untrusted, status + log tail (cap 200), start/stop/restart/selectAddress
+- useSync.ts — second transport "desktop" beside the untouched socket.io path: trusted bridge → joinRoom/setSlide/nav/reportSteps/syncDeck/setNotes/setUi; state/presence/token from sync-* events; connected = running && joined; unavailable when the embedded server isn't running (badge falls back to neutral "local"); untrusted/no-bridge → original behavior incl. fsWritable gating
+- QrPanel.tsx — three modes: trusted bridge (Start/Stop/Restart, status dot, QR via /api/qr of http://<lan-ip>:8765/remote?deck=..&t=.., link + copy, interface picker, phone count, collapsible level-coloured log tail, same-Wi-Fi/client-isolation/firewall hints), untrusted bridge (expected vs current origin + "File → Change app URL…"), normal browser (desktop-app download card replacing the old "needs a local run" copy; local-run origin-picker QR flow unchanged)
+- PresentView.tsx — presenter notes pushed to the room (cached per slide, 8000-char cap, desktop transport only) so phones show speaker notes; desktop-aware sync chip (green sync/N remotes, amber "starting…", neutral "local" with QR-panel tooltip)
+- Verified: bunx tsc --noEmit clean, bun run lint clean, no user-facing "needs a local run" strings remain
+- Sibling deliverable: new repository chasse-studio-desktop (Java 17, JCEF 152.0.6 via jcefmaven, Javalin 6.7.0, Gson) implementing the other side of the protocol — same room semantics as mini-services/stagesmith-sync, phone remote page served on the LAN, jpackage scripts. Independently smoke-tested: /health, /api/status, /remote, WS join/nav/presence/ping/bad-token (all PASS) and phone page verified live in a browser (Next advanced 02/05→03/05, notes render, LIVE pill)
+
+Stage Summary:
+- Hosted deployments: QR panel now offers the desktop app (download card); inside the desktop app the panel starts/stops/restarts the embedded LAN server and shows a real, phone-reachable QR
+- Local bun run dev flow, app-served ?remote= view and the mini-service are untouched
+---
+Task ID: 11
+Agent: main (Super Z)
+Task: Problem 09 (QR code not generating in the desktop app) — the panel stayed on "Server stopped" with no log lines and no QR even though Java reported the sync server listening.
+
+Work Log:
+- Root cause (reproduced 1:1 in a sandbox JCEF/Xvfb end-to-end harness): DesktopBridge.pushEvent interpolated the raw JSON into the injected JS expression — window.__chasseDesktop._handleEvent({"type":…}) — so the page received an OBJECT while desktop-bridge.ts did JSON.parse(json); JSON.parse coerces the object to "[object Object]", throws, and the catch dropped EVERY pushed event silently (server-status/server-log/sync-state/sync-presence/sync-token). Request/response actions (getBridgeInfo/getServerStatus/joinRoom/startServer) were unaffected — exactly the reported symptoms.
+- desktop-bridge.ts: _handleEvent now accepts a JSON string (protocol v1.1 — what new Java builds send) OR a pre-parsed object; DesktopServerStatus.addresses widened with optional display (friendly adapter name) and virtual (VM/VPN/Docker/WSL-style) flags.
+- useDesktopServer.ts: resilience fallback — after start/stop/restart the hook polls getServerStatus every 700ms (max ~8s) and applies results ONLY while no server-status event has arrived for that call (event stream stays authoritative, can never be reverted by a poll); initial ready-pull now also seeds the log tail via a new getServerLog bridge action; received server-status events bump a sequence counter that gates the poll.
+- QrPanel.tsx: interface picker shows friendly adapter names, dims virtual adapters (opacity 0.65) and tags them "·vm", tooltip + "Interface:" caption explain that virtual adapters usually can't reach a phone; selected interface caption uses the display name.
+- Sibling desktop-repo changes (Java): pushEvent wraps the JSON in a Gson-escaped JS string literal; [bridge] console logging for startServer/stopServer/restartServer received + every status change ("sending server-status event to the page"); new getServerLog action (ring buffer snapshot); LanAddresses detects virtual adapters (name/displayName token match: virtualbox/vmware/docker/wsl/hyper-v/tap/tun/…) and sorts them last; addresses carry {address, iface, display, virtual}; new --devtools=PORT, --cef-arg=<switch> and --osr diagnostic flags; JCEF now initialises BEFORE any Swing/GTK touch (XInitThreads must be the first Xlib call on Linux).
+- Verified: bunx tsc --noEmit clean; bun run lint clean; full JCEF e2e under Xvfb — page receives server-status starting→running, server-log lines, sync-token; simulated phone joins via WS and sync-presence remotes=1 reaches the page; driven the REAL app UI via CDP (deck create → present → Q → Start server): panel shows "Running on 0.0.0.0:8765" (sandbox has no RFC1918 iface; on the user's machine 10.161.79.82), QR img loads from /api/qr?text=http://…/remote?deck=…&t=…, Stop/Restart + link + copy + phone count + Server log all present (VLM screenshot review). Headless WS protocol regression: 11/11 PASS.
+
+Stage Summary:
+- PROBLEM 09 fixed on both sides of the bridge; event delivery is now string-based per protocol v1.1 with an object-tolerant web handler, a poll fallback, and console logging for future debugging

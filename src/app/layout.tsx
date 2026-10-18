@@ -23,21 +23,21 @@ const spaceGrotesk = Space_Grotesk({
 const instrumentSans = Instrument_Sans({
   variable: "--font-instrument-sans",
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight:  "variable",
 });
 
 const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains-mono",
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight:  "variable",
 });
 
 /* Chassé brand voice — italic Fraunces serif for the brand + titles */
 const fraunces = Fraunces({
   variable: "--font-fraunces",
   subsets: ["latin"],
-  style: ["italic"],
-  weight: ["500", "600"],
+  style: "italic",
+  weight:  "variable",
 });
 
 export const metadata: Metadata = {
