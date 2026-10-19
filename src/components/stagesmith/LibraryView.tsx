@@ -7,6 +7,7 @@ import type { DeckSummary } from "@/lib/stagesmith/types";
 import { openDeviceProject, supportsDeviceFolders } from "@/lib/stagesmith/device";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { LiveThumb } from "./LiveThumb";
+import { BrandLogo } from "./BrandLogo";
 import { download, formatWhen, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -646,35 +647,8 @@ function OpenFolderDialog({
   );
 }
 
-/** Chassé brand mark — two overlapping rounded rects (amber + rose) */
-import Image from "next/image";
-
-export function BrandLogo({ size = 23, showImage = false }: { size?: number; showImage?: boolean }) {
-  if (showImage) {
-    return (
-      <Image
-        src="/logo.png"
-        alt="Chassé Logo"
-        width={size}
-        height={size}
-        quality={95}
-        priority
-        style={{
-          display: "block",
-          width: size,
-          height: size,
-        }}
-      />
-    );
-  }
-
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="8.5" y="3.5" width="12" height="12" rx="3" stroke="#ffb454" strokeWidth="1.8" />
-      <rect x="3.5" y="8.5" width="12" height="12" rx="3" stroke="#ff8fa3" strokeWidth="1.8" style={{ fill: "var(--ss-panel, #1a1723)" }} />
-    </svg>
-  );
-}
+/** Chassé brand mark — moved to ./BrandLogo so the loading screen shares
+ *  the exact same mark as the app headers. */
 
 function DeckCard({
   deck,

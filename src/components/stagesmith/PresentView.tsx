@@ -9,7 +9,9 @@ import { StageFrame, type TransitionTiming } from "./StageFrame";
 import { QrPanel } from "./QrPanel";
 import { LiveThumb } from "./LiveThumb";
 import { useDeckUpdated, useSync } from "@/hooks/useSync";
-import { BrandLogo } from "./LibraryView";
+import { useAssetPreloader } from "@/hooks/useAssetPreloader";
+import { BrandLogo } from "./BrandLogo";
+import { SplashVeil } from "./LoadingScreen";
 import { download, type SsNav } from "./shared";
 
 /**
@@ -81,13 +83,33 @@ export function PresentView({
   const deck: DeckJson | null = bundle?.deck ?? null;
   const slides = useMemo(() => deck?.slides ?? [], [deck]);
 
+  /* ---------- present-mode boot gate (the branded loading screen) ----------
+     Nothing of the deck is shown until BOTH agree:
+       · useAssetPreloader — every slide module, TSX bg/overlay, background
+         image and asset is resolved + decoded, fonts are ready
+       · stageReady — the sandboxed runtime mounted the first slide and
+         posted its `rendered` message (or surfaced an error card)
+     The hidden StageFrame underneath IS the offscreen mount: it boots in
+     parallel behind the veil, so the reveal is instant and the first real
+     transition starts from a warm cache. */
+  const [bootRetry, setBootRetry] = useState(0);
+  const [bootError, setBootError] = useState<string | null>(null);
+  const [stageReady, setStageReady] = useState(false);
+  const [stageError, setStageError] = useState<string | null>(null);
+  const start = fromParam ? Math.max(0, Number(fromParam) || 0) : 0;
+  const preload = useAssetPreloader(deck, deckId, version, { startIndex: start, timeoutMs: 15_000 });
+  const revealReady = preload.ready && stageReady;
+  const bootMessage = deck
+    ? preload.message
+    : `Opening ${deckId}`;
+  const presentError = bootError ?? preload.error ?? stageError;
+
   // sync — the display is the presenter: it owns the token
   const sync = useSync(deckId, "display", null, slides);
   const state = sync.state;
 
   // local navigation state — drives the deck whenever the room state is not
   // available (offline / hosted): the presenter never gets stuck (Problem 07)
-  const start = fromParam ? Math.max(0, Number(fromParam) || 0) : 0;
   const [localIndex, setLocalIndex] = useState(start);
   const roomIndex =
     sync.connected && state ? Math.max(0, Math.min(state.index ?? 0, Math.max(0, slides.length - 1))) : null;
@@ -95,14 +117,60 @@ export function PresentView({
   const step = state?.step ?? 0;
   const current = slides[index] ?? null;
 
-  // SSR delivered the bundle — only fetch when missing or stale
+  // SSR delivered the bundle — only fetch when missing or stale; a failed
+  // fetch surfaces as the loading screen's error state with a Retry
   useEffect(() => {
     if (initialBundle?.deck && initialBundle.deck.id === deckId) return;
-    api.getDeck(deckId).then((b) => {
-      setBundle(b);
-      setVersion(b.signature);
-    });
-  }, [deckId, initialBundle]);
+    let cancelled = false;
+    api
+      .getDeck(deckId)
+      .then((b) => {
+        if (cancelled) return;
+        setBundle(b);
+        setVersion(b.signature);
+        setBootError(null);
+      })
+      .catch((e) => {
+        if (!cancelled) setBootError(`Couldn't open the deck — ${(e as Error).message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deckId, initialBundle, bootRetry]);
+
+  // stage watchdog — if the whole boot (preloader + first runtime render)
+  // hasn't completed in ~15 s, show the error state instead of an endless
+  // spinner; Retry resets everything and re-arms the gate
+  useEffect(() => {
+    if (revealReady || presentError) return;
+    const t = setTimeout(() => {
+      setStageError("The stage didn't finish rendering its first slide in time.");
+    }, 15_000);
+    return () => clearTimeout(t);
+  }, [revealReady, presentError]);
+
+  // Retry: re-open the deck, re-run the full preload, re-arm the stage gate
+  const retryBoot = useCallback(() => {
+    setBootError(null);
+    setStageError(null);
+    setStageReady(false);
+    setBootRetry((n) => n + 1);
+    preload.retry();
+  }, [preload]);
+
+  // the first `rendered` message from the sandboxed runtime — the slide is
+  // genuinely on screen (an error card also counts: it's the honest result)
+  const onSteps = useCallback(
+    (steps: number) => {
+      setStageReady(true);
+      if (current) sync.reportSteps(current.id, steps);
+    },
+    [sync, current],
+  );
+  const onRuntimeError = useCallback(() => {
+    // compile/render error card on the stage — reveal it instead of gating
+    setStageReady(true);
+  }, []);
 
   // jump into position when the room state is missing (fresh room)
   const didInitRef = useRef(false);
@@ -336,12 +404,6 @@ export function PresentView({
   }, [deck, deckId, index, slides, version]);
 
   /* ---------- report steps ---------- */
-  const onSteps = useCallback(
-    (steps: number) => {
-      if (current) sync.reportSteps(current.id, steps);
-    },
-    [sync, current],
-  );
 
   const themeCss = bundle?.themeCss ?? "";
   const total = slides.length;
@@ -387,6 +449,21 @@ export function PresentView({
 
   return (
     <div className={`ss-display ${chromeHidden ? "hide-chrome" : ""}`} onMouseMove={bump}>
+      {/* the present-mode loading gate — real progress from the asset
+          preloader, shown immediately (no 200 ms delay: a full preload is
+          always worth announcing), with an error state + Retry for failed
+          assets, module errors and timeouts. Portaled over everything; the
+          stage beneath stays inert until the first slide is ready. */}
+      <SplashVeil
+        active={!revealReady}
+        mode="present"
+        timing={{ showDelayMs: 0 }}
+        progress={presentError ? null : deck ? preload.progress : null}
+        message={presentError ? null : bootMessage}
+        error={presentError}
+        onRetry={retryBoot}
+      />
+
       {/* stage */}
       <div className="ss-display-stage">
         <div style={{ position: "relative", width: "min(100vw, calc(100vh * 16 / 9))", aspectRatio: "16/9" }}>
@@ -397,7 +474,13 @@ export function PresentView({
               crossfades only when its key changed, and the overlay layer is
               never touched by transitions. */}
           <div style={{ position: "absolute", inset: 0, zIndex: 2, isolation: "isolate" }}>
+            {/* `key={bootRetry}` — a Retry remounts the sandboxed runtime so
+                it genuinely re-resolves its modules and re-renders (and
+                re-posts `rendered`, re-arming the reveal gate). Without it
+                the already-rendered stage would never signal again and the
+                loading screen would never lift. */}
             <StageFrame
+              key={bootRetry}
               deckId={deckId}
               slide={current}
               deckBg={deck?.bg}
@@ -411,6 +494,7 @@ export function PresentView({
               slideTotal={total}
               transition={transition}
               onSteps={onSteps}
+              onRuntimeError={onRuntimeError}
             />
           </div>
         </div>

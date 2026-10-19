@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import "./stagesmith.css";
 import { ViewsShell } from "@/components/stagesmith/ViewsShell";
+import { SplashVisual } from "@/components/stagesmith/SplashVisual";
 import { getDeckBundle, listDecksSafe } from "@/lib/stagesmith/bundle";
 
 export const dynamic = "force-dynamic";
@@ -56,10 +57,7 @@ export default async function Page({
 }
 
 function Boot() {
-  return (
-    <div className="ss-app" style={{ placeItems: "center", display: "grid", justifyItems: "center", gap: 14 }}>
-      <div style={{ font: "italic 600 36px var(--ss-fbrand)", letterSpacing: "-.01em" }}>Chassé</div>
-      <div className="ss-label" style={{ letterSpacing: ".3em" }}>Loading studio…</div>
-    </div>
-  );
+  // branded Suspense fallback — same visual as the pre-hydration splash
+  // (server-safe: no hooks, no client JS, no external resources)
+  return <SplashVisual mode="app" />;
 }

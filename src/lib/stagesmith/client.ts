@@ -84,6 +84,10 @@ export interface ModuleInfo {
 }
 
 const moduleCache = new Map<string, ModuleInfo>();
+/** concurrent resolveModule calls for the same key share ONE request — the
+ *  present-mode preloader and StageFrame's own resolution race for the same
+ *  modules; without this both would compile/fetch the file twice. */
+const inflightModules = new Map<string, Promise<ModuleInfo>>();
 
 /**
  * Resolve a deck layer (slide/bg/overlay) to a loadable module.
@@ -92,54 +96,60 @@ const moduleCache = new Map<string, ModuleInfo>();
  * the returned bundle is self-contained and is imported by the runtime
  * from a blob URL.
  */
-export async function resolveModule(deckId: string, path: string, version: string | number): Promise<ModuleInfo> {
+export function resolveModule(deckId: string, path: string, version: string | number): Promise<ModuleInfo> {
   const key = `${deckId}:${path}:${version}`;
   const hit = moduleCache.get(key);
-  if (hit) return hit;
-  try {
-    let info: ModuleInfo;
-    if (await isLocalDeck(deckId)) {
-      const rec = await local.getRecord(deckId);
-      if (!rec) throw new Error("Deck not found");
-      const res = await fetch("/api/compile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: rec.files, entry: path }),
-      });
-      const data = (await j<{ ok: boolean; js?: string; steps?: number; ver?: string; error?: string }>(res)) as {
-        ok: boolean;
-        js?: string;
-        steps?: number;
-        ver?: string;
-        error?: string;
-      };
-      info = data.ok
-        ? { url: null, code: data.js ?? "", ver: data.ver ?? String(data.js?.length ?? 0), steps: data.steps || 1, error: null }
-        : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
-    } else {
-      const res = await fetch(
-        `/api/compile?deck=${encodeURIComponent(deckId)}&file=${encodeURIComponent(path)}&meta=1`,
-      );
-      const data = (await j<{ ok: boolean; url?: string; steps?: number; error?: string; hash?: string }>(res)) as {
-        ok: boolean;
-        url?: string;
-        steps?: number;
-        error?: string;
-        hash?: string;
-      };
-      info = data.ok
-        ? { url: data.url ?? null, code: null, ver: data.hash ?? "", steps: data.steps || 1, error: null }
-        : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
+  if (hit) return Promise.resolve(hit);
+  const pending = inflightModules.get(key);
+  if (pending) return pending;
+  const p = (async () => {
+    try {
+      let info: ModuleInfo;
+      if (await isLocalDeck(deckId)) {
+        const rec = await local.getRecord(deckId);
+        if (!rec) throw new Error("Deck not found");
+        const res = await fetch("/api/compile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files: rec.files, entry: path }),
+        });
+        const data = (await j<{ ok: boolean; js?: string; steps?: number; ver?: string; error?: string }>(res)) as {
+          ok: boolean;
+          js?: string;
+          steps?: number;
+          ver?: string;
+          error?: string;
+        };
+        info = data.ok
+          ? { url: null, code: data.js ?? "", ver: data.ver ?? String(data.js?.length ?? 0), steps: data.steps || 1, error: null }
+          : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
+      } else {
+        const res = await fetch(
+          `/api/compile?deck=${encodeURIComponent(deckId)}&file=${encodeURIComponent(path)}&meta=1`,
+        );
+        const data = (await j<{ ok: boolean; url?: string; steps?: number; error?: string; hash?: string }>(res)) as {
+          ok: boolean;
+          url?: string;
+          steps?: number;
+          error?: string;
+          hash?: string;
+        };
+        info = data.ok
+          ? { url: data.url ?? null, code: null, ver: data.hash ?? "", steps: data.steps || 1, error: null }
+          : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
+      }
+      moduleCache.set(key, info);
+      if (moduleCache.size > 800) {
+        const first = moduleCache.keys().next().value;
+        if (first) moduleCache.delete(first);
+      }
+      return info;
+    } catch (e) {
+      return { url: null, code: null, ver: "err", steps: 1, error: (e as Error).message };
     }
-    moduleCache.set(key, info);
-    if (moduleCache.size > 800) {
-      const first = moduleCache.keys().next().value;
-      if (first) moduleCache.delete(first);
-    }
-    return info;
-  } catch (e) {
-    return { url: null, code: null, ver: "err", steps: 1, error: (e as Error).message };
-  }
+  })().finally(() => inflightModules.delete(key));
+  inflightModules.set(key, p);
+  return p;
 }
 
 /* ------------------------------------------------------------------ */

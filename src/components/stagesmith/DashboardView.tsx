@@ -21,7 +21,8 @@ import { Filmstrip } from "./Filmstrip";
 import { PreviewPane } from "./PreviewPane";
 import { CodePane, type CodeTab, type GotoError } from "./CodePane";
 import { QrPanel } from "./QrPanel";
-import { BrandLogo } from "./LibraryView";
+import { BrandLogo } from "./BrandLogo";
+import { SplashVeil } from "./LoadingScreen";
 import { useSync } from "@/hooks/useSync";
 import { useUiTheme, hydrateUiTheme } from "@/hooks/useUiTheme";
 import { download, type SsNav } from "./shared";
@@ -90,6 +91,8 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   const [gotoError, setGotoError] = useState<GotoError | null>(null);
   /** deck missing from every store (wrong browser profile / deleted) */
   const [notFound, setNotFound] = useState(false);
+  /** transient load failure (network / server hiccup) — Retry-able */
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // app chrome theme (fix-list item 8) — hydrate once per mount
   const [uiTheme, setUiTheme] = useUiTheme();
@@ -190,6 +193,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
     try {
       const b = await api.getDeck(deckId);
       setNotFound(false);
+      setLoadError(null);
       setBundle(b);
       setDeck(b.deck);
       setThemeCss(b.themeCss);
@@ -198,10 +202,20 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
       setBuffers({});
       setDirty({});
       refreshSnapshots();
-    } catch {
-      setNotFound(true);
+    } catch (e) {
+      // genuinely absent decks keep their branded not-found panel; anything
+      // else (network, 5xx…) becomes the loading screen's Retry state
+      const msg = (e as Error)?.message ?? "";
+      if (/\b404\b|not found/i.test(msg)) setNotFound(true);
+      else setLoadError(msg || "The deck request failed.");
     }
   }, [deckId, refreshSnapshots]);
+
+  // Retry for the opening splash's error state
+  const retryLoad = useCallback(() => {
+    setLoadError(null);
+    load();
+  }, [load]);
 
   // SSR already delivered the bundle — hydrate selection, then only reload
   // when the bundle is missing or the folder signature moved on
@@ -517,16 +531,27 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
             This deck isn’t on the server and isn’t in this browser’s storage. Browser-stored decks live in the
             browser and profile that created them — open it there, or load a .smdeck export.
           </div>
-          <button className="ss-btn ss-btn-acc" onClick={nav.library}>
-            Back to library
-          </button>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className="ss-btn" onClick={retryLoad}>
+              Retry
+            </button>
+            <button className="ss-btn ss-btn-acc" onClick={nav.library}>
+              Back to library
+            </button>
+          </div>
         </div>
       );
     }
+    // opening a deck in the editor — branded loading screen (indeterminate
+    // bar; only shows if the open actually takes a moment)
     return (
-      <div className="ss-app" style={{ placeItems: "center", display: "grid" }}>
-        <div className="ss-label" style={{ letterSpacing: ".3em" }}>Opening {deckId}…</div>
-      </div>
+      <SplashVeil
+        active
+        mode="deck"
+        message={`Opening ${deckId}`}
+        error={loadError}
+        onRetry={retryLoad}
+      />
     );
   }
 
