@@ -17,7 +17,12 @@
 <style>
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:transparent}
-  #root{position:absolute;top:0;left:0;width:1280px;height:720px;transform-origin:0 0;transition:background-color .5s ease}
+  #root{position:absolute;top:0;left:0;width:1280px;height:720px;transform-origin:0 0}
+  /* theme CSS injects `#root { background: var(--bg) }` for the base color,
+     but background transitions must be handled exclusively by the bg-slot
+     crossfade system — no CSS transition on background-color. The base
+     #root color is fine as a static fallback (shows only if no bg slot
+     covers it); it must NOT animate on its own. */
   .ss-stage{position:absolute;inset:0;overflow:hidden}
   .ss-layer{position:absolute;inset:0}
   .ss-bg{z-index:0}
@@ -36,9 +41,9 @@
     color:#f87171;font-weight:600;letter-spacing:.18em;text-transform:uppercase;
     font-size:11px;margin-bottom:10px;
   }
-  @media (prefers-reduced-motion: reduce) {
-    #root{transition:none}
-  }
+  /* background transitions are handled by the bg-slot crossfade system,
+     not by CSS transitions on #root — keeps bg changes in sync with the
+     slide entry/exit choreography and avoids a jarring color flash. */
 </style>
 </head>
 <body>
