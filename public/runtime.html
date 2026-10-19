@@ -316,7 +316,7 @@ async function ensureBgEntry(next) {
   return { key: ref.key, kind: "module", comp };
 }
 
-function makeBgEntry(target) {
+function makeBgEntry(target, hidden) {
   const entry = {
     key: target.key,
     makeNode: target.kind === "image"
@@ -325,9 +325,18 @@ function makeBgEntry(target) {
     el: null,
     fadeStarted: false, // committed once its fade has begun
     dying: false,       // fading out (target has no background)
+    // incoming slots start invisible so they never flash at full opacity
+    // before fadeSlot() gets to animate them in
+    hidden: !!hidden,
     setEl: null,
   };
-  entry.setEl = (el) => { entry.el = el; };
+  entry.setEl = (el) => {
+    entry.el = el;
+    // apply the hidden state immediately on mount — the ref callback fires
+    // synchronously after React commits, before the browser paints, so the
+    // element is opacity:0 on the very first frame it is composited
+    if (el && entry.hidden) el.style.opacity = "0";
+  };
   return entry;
 }
 
@@ -627,7 +636,7 @@ async function crossfadeBg(next, keys, t, my) {
   }
 
   // mount the incoming slot hidden, wait until it is paintable, then fade
-  const entry = makeBgEntry(target);
+  const entry = makeBgEntry(target, true /* hidden until fade starts */);
   bgStack.push(entry);
   renderTree();
   await nextPaint(); // refs attached
