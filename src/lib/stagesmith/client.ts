@@ -84,6 +84,11 @@ export interface ModuleInfo {
 }
 
 const moduleCache = new Map<string, ModuleInfo>();
+/** tracks the last-seen version per deckId — when it changes, stale entries
+ *  for that deck are evicted so a reopened deck never serves old compiled
+ *  modules from a previous session version. */
+const deckVersionSeen = new Map<string, string | number>();
+
 /** concurrent resolveModule calls for the same key share ONE request — the
  *  present-mode preloader and StageFrame's own resolution race for the same
  *  modules; without this both would compile/fetch the file twice. */
@@ -97,6 +102,16 @@ const inflightModules = new Map<string, Promise<ModuleInfo>>();
  * from a blob URL.
  */
 export function resolveModule(deckId: string, path: string, version: string | number): Promise<ModuleInfo> {
+  // when the version advances for this deck, drop all stale cache entries for
+  // it — ensures a reopened (or live-edited) deck always recompiles its modules
+  const lastVersion = deckVersionSeen.get(deckId);
+  if (lastVersion !== undefined && lastVersion !== version) {
+    for (const k of [...moduleCache.keys()]) {
+      if (k.startsWith(`${deckId}:`)) moduleCache.delete(k);
+    }
+  }
+  deckVersionSeen.set(deckId, version);
+
   const key = `${deckId}:${path}:${version}`;
   const hit = moduleCache.get(key);
   if (hit) return Promise.resolve(hit);
@@ -139,10 +154,6 @@ export function resolveModule(deckId: string, path: string, version: string | nu
           : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
       }
       moduleCache.set(key, info);
-      if (moduleCache.size > 800) {
-        const first = moduleCache.keys().next().value;
-        if (first) moduleCache.delete(first);
-      }
       return info;
     } catch (e) {
       return { url: null, code: null, ver: "err", steps: 1, error: (e as Error).message };
