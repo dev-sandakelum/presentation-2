@@ -1124,3 +1124,33 @@ html[data-ss-theme="light"] .ss-remote-btn.next { color: #fff; }
   .ss-app *, .ss-display * { animation-duration: 0.001s !important; transition-duration: 0.001s !important; }
 }
 
+
+/* ------------------------------------------------------------------ */
+/* present mode: background-loading chip (Part: present loads big decks */
+/* progressively — the reveal no longer waits for every slide)          */
+/* ------------------------------------------------------------------ */
+@keyframes ss-rot {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.ss-bgload {
+  position: fixed;
+  left: 18px;
+  bottom: 16px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 99px;
+  font: 500 11px var(--ss-fm);
+  letter-spacing: 0.06em;
+  color: var(--ss-ink2);
+  background: var(--ss-chipbg);
+  border: 1px solid var(--ss-line);
+  pointer-events: none;
+  opacity: 0.92;
+}
+html[data-ss-theme="light"] .ss-bgload {
+  background: rgba(247, 246, 251, 0.92);
+}

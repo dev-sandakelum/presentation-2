@@ -1,56 +1,57 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, getAssetMap, resolveModule } from "@/lib/stagesmith/client";
+import { api, getAssetMap, resolveModule, assetRouteUrl } from "@/lib/stagesmith/client";
 import type { DeckJson, FileRow, Source } from "@/lib/stagesmith/types";
 
 /**
- * useAssetPreloader — Present mode's "load everything before the first slide
- * is shown" gate (drives the loading screen's real progress bar).
+ * useAssetPreloader — Present mode's preload gate.
  *
- * For EVERY slide in the deck it preloads:
- *   · the slide TSX module        — resolveModule (compile) + fetch() so the
- *                                   runtime's `import(url)` is HTTP-cache warm
- *   · its effective background    — TSX modules are fetched warm; image
- *                                   backgrounds are `new Image()` + decoded
- *                                   via `img.decode()`
- *   · its effective overlay       — same treatment
- * plus the deck-common layers, every raster asset in assets/ (logos, images
- * used by slides) and `document.fonts.ready`.
+ * NO TIME LIMIT: elapsed time alone never produces an error. Big decks
+ * (21–26 slides, large backgrounds) legitimately take longer than any fixed
+ * budget, especially on slow disk / antivirus-scanned desktop webviews — the
+ * previous ~15 s watchdog turned a healthy load into a red error state.
  *
- * A note on "mount a background once, offscreen": compiled slide/bg modules
- * run inside the sandboxed runtime (opaque-origin import map — react, the
- * stagesmith API, lucide), so they cannot execute in the host page. The
- * hidden StageFrame that PresentView mounts underneath the loading overlay
- * IS the offscreen mount: it imports and mounts the first background/slide
- * while covered, and the overlay is only lifted once both the preloader AND
- * the runtime's first `rendered` message agree — so the first real slide and
- * every later transition start from a fully warm cache.
- *
- * Failure policy (error state + Retry):
- *   · an image that fails to load        → fatal  ("missing asset")
- *   · a module that fails to resolve     → fatal  ("module error")
- *   · a warm fetch that answers !ok      → fatal
- *   · nothing settles within timeoutMs   → fatal  ("timeout")
- *
- * Progress is honest: completed jobs / total jobs, and the message counts
- * fully-prepared slides ("Preparing slide N of M").
- *
- * The gate runs ONCE per mount (and per explicit retry). Live edits change
- * the deck object but must NOT cancel the run halfway — so the effect reads
- * the deck/options through refs and only re-runs for a new deckId, a retry,
- * or the deck arriving after a client-side fetch.
+ * Instead:
+ *   · PRIORITY — the first few slides (startIndex window), their backgrounds
+ *     and fonts load FIRST; the reveal gate opens as soon as they're ready,
+ *     while everything else keeps loading in the background
+ *   · PARTIAL START — `ready` means "the deck can start"; `allDone` reports
+ *     when the background load finished (PresentView shows a tiny
+ *     non-blocking "Loading more slides" chip meanwhile)
+ *   · REAL FAILURES ONLY — a task that fails is retried automatically
+ *     (3 attempts), then recorded in `failures` with its label + reason.
+ *     Nothing else is cancelled; the user sees which item failed with Retry
+ *     and "Continue anyway" (the deck starts, the missing item renders as
+ *     the runtime's placeholder card)
+ *   · STALL ≠ SLOW — if NOTHING settles for 60 s while work remains, a soft
+ *     "seems stuck" notice appears (never the red error state); it clears
+ *     itself the moment progress resumes
+ *   · SHARED WORK — identical backgrounds (same bgKey) load once, modules
+ *     reuse the app-wide compile cache, already-decoded data-URL images are
+ *     skipped, and images decode via img.decode()
  */
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|avif|svg|bmp|ico)$/i;
+const TASK_ATTEMPTS = 3;
+const TASK_RETRY_DELAYS = [400, 1200];
+/** no progress for this long → soft "seems stuck" notice (not an error) */
+const STALL_MS = 60_000;
+/** concurrent warm jobs — keeps the browser responsive on big decks */
+const CONCURRENCY = 4;
+/** how many slides must be ready before the deck reveals (spec: ~first 3) */
+const CRITICAL_WINDOW = 3;
+
+export interface PreloadFailure {
+  label: string;
+  error: string;
+}
 
 export interface AssetPreloaderOptions {
-  /** overall watchdog — defaults to ~15 s */
-  timeoutMs?: number;
-  /** concurrent warm jobs — defaults to 6 */
-  concurrency?: number;
   /** slide index to prioritize first (the one present mode opens on) */
   startIndex?: number;
+  concurrency?: number;
+  criticalWindow?: number;
 }
 
 export interface AssetPreloaderResult {
@@ -58,26 +59,82 @@ export interface AssetPreloaderResult {
   progress: number | null;
   /** status line, e.g. "Preparing slide 3 of 17" */
   message: string;
-  /** all jobs settled successfully */
+  /** the critical window settled → deck can start (see also failuresAcknowledged) */
   ready: boolean;
-  /** fatal error text (drives the Retry state) */
-  error: string | null;
-  /** re-run the whole preload (resets progress + watchdog) */
+  /** every background task settled too */
+  allDone: boolean;
+  /** tasks that failed after their retries — each shows Retry + Continue anyway */
+  failures: PreloadFailure[];
+  /** the user clicked "Continue anyway" — failures become placeholders */
+  failuresAcknowledged: boolean;
+  /** nothing has settled for a long time — soft notice, never an error */
+  stalled: boolean;
+  /** re-run the whole preload (full Retry) */
   retry: () => void;
+  /** re-run ONLY the failed tasks */
+  retryFailed: () => void;
+  /** "Continue anyway" — start the deck with failed items as placeholders */
+  acknowledgeFailures: () => void;
 }
 
 interface PreloadState {
   progress: number | null;
   message: string;
   ready: boolean;
-  error: string | null;
+  allDone: boolean;
+  failures: PreloadFailure[];
+  failuresAcknowledged: boolean;
+  stalled: boolean;
 }
 
-const IDLE: PreloadState = { progress: null, message: "Preparing presentation", ready: false, error: null };
+const IDLE: PreloadState = {
+  progress: null,
+  message: "Preparing presentation",
+  ready: false,
+  allDone: false,
+  failures: [],
+  failuresAcknowledged: false,
+  stalled: false,
+};
 
-/** decode an image and reject when it's genuinely missing */
+type TaskStatus = "pending" | "running" | "ok" | "failed";
+
+interface Task {
+  key: string;
+  /** slide index, or -1 for deck-global jobs (fonts, raster assets) */
+  slide: number;
+  critical: boolean;
+  label: string;
+  status: TaskStatus;
+  error?: string;
+  run: () => Promise<void>;
+}
+
+/* data-URL images already decoded this session (browser-deck assets are big
+ * base64 strings — decoding them twice is pure waste) */
+const decodedDataUrls = new Set<string>();
+function rememberDecoded(url: string): void {
+  if (!/^data:/i.test(url)) return;
+  if (decodedDataUrls.size > 500) decodedDataUrls.clear();
+  decodedDataUrls.add(url);
+}
+
+/** decode an image via img.decode(); rejects with the failing URL */
 async function decodeImage(url: string): Promise<void> {
-  if (/^(data|blob):/i.test(url)) return; // browser-deck data URLs are already local
+  if (/^(data|blob):/i.test(url)) {
+    if (decodedDataUrls.has(url)) return; // already decoded this session
+    await new Promise<void>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        if (typeof img.decode === "function") img.decode().then(() => resolve(), () => resolve());
+        else resolve();
+      };
+      img.onerror = () => reject(new Error("the image didn't load"));
+      img.src = url;
+    });
+    rememberDecoded(url);
+    return;
+  }
   await new Promise<void>((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -86,13 +143,12 @@ async function decodeImage(url: string): Promise<void> {
         img.decode().then(() => resolve(), () => resolve());
       } else resolve();
     };
-    img.onerror = () => reject(new Error(url));
+    img.onerror = () => reject(new Error("the image didn't load"));
     img.src = url;
   });
 }
 
-/** resolve + warm a deck module; rejects on resolve/fetch failure (the task
- *  label already names the file — messages stay single-pathed) */
+/** resolve + warm a deck module; rejects on resolve/fetch failure */
 async function warmModule(deckId: string, path: string, version: string | number): Promise<void> {
   const m = await resolveModule(deckId, path, version);
   if (m.error) throw new Error(m.error);
@@ -122,11 +178,100 @@ export function useAssetPreloader(
 
   const hasDeck = Boolean(deck);
 
+  /** the live task list of the current run (mutable; state is derived) */
+  const tasksRef = useRef<Task[]>([]);
+  const runRef = useRef<{
+    cancelled: boolean;
+    acknowledged: boolean;
+    lastProgressAt: number;
+    slideCount: number;
+  } | null>(null);
+
+  /** recompute the public state from the task list */
+  const publish = useCallback((): void => {
+    const run = runRef.current;
+    const tasks = tasksRef.current;
+    if (!run) return;
+    const total = tasks.length;
+    const settled = tasks.filter((t) => t.status === "ok" || t.status === "failed");
+    const done = settled.length;
+    const failures: PreloadFailure[] = tasks
+      .filter((t) => t.status === "failed")
+      .map((t) => ({ label: t.label, error: t.error ?? "load failed" }));
+    const criticalBlocked = tasks.some((t) => t.critical && (t.status === "pending" || t.status === "running"));
+    const criticalFailed = tasks.some((t) => t.critical && t.status === "failed");
+    const allDone = total > 0 && done === total;
+    // slides whose tasks are ALL settled → the "Preparing slide N of M" count
+    const slideRemaining = new Map<number, number>();
+    for (const t of tasks) {
+      if (t.slide >= 0 && (t.status === "pending" || t.status === "running")) {
+        slideRemaining.set(t.slide, (slideRemaining.get(t.slide) ?? 0) + 1);
+      }
+    }
+    let prepared = 0;
+    for (let i = 0; i < run.slideCount; i++) if (!(slideRemaining.get(i) ?? 0)) prepared++;
+    // stall = NOTHING settling for a long time, regardless of how much is
+    // left — this also covers “everything preloaded but the stage never
+    // rendered” (the old 15 s stage watchdog is gone by design)
+    const stalled = Date.now() - run.lastProgressAt > STALL_MS;
+    setState({
+      progress: total > 0 ? done / total : null,
+      message:
+        run.slideCount > 0
+          ? `Preparing slide ${Math.min(prepared + (allDone ? 0 : 1), Math.max(run.slideCount, 1))} of ${run.slideCount}`
+          : "Preparing presentation",
+      // nothing to preload (edge: a deck with no slides) → don't block the gate
+      ready: total > 0 ? !criticalBlocked && (!criticalFailed || run.acknowledged) : true,
+      allDone,
+      failures,
+      failuresAcknowledged: run.acknowledged,
+      stalled,
+    });
+  }, []);
+
+  /** run a pool over the given tasks, updating statuses + progress */
+  const runPool = useCallback(
+    async (subset: Task[]): Promise<void> => {
+      const run = runRef.current;
+      if (!run) return;
+      const concurrency = Math.max(1, Math.min(optsRef.current.concurrency ?? CONCURRENCY, subset.length || 1));
+      let cursor = 0;
+      const worker = async (): Promise<void> => {
+        while (!run.cancelled && cursor < subset.length) {
+          const task = subset[cursor++];
+          task.status = "running";
+          publish();
+          let lastErr: unknown = null;
+          for (let attempt = 0; attempt < TASK_ATTEMPTS; attempt++) {
+            if (run.cancelled) return;
+            try {
+              await task.run();
+              lastErr = null;
+              break;
+            } catch (e) {
+              lastErr = e;
+              if (attempt < TASK_ATTEMPTS - 1) {
+                await new Promise((r) => setTimeout(r, TASK_RETRY_DELAYS[attempt] ?? 1200));
+                if (run.cancelled) return;
+              }
+            }
+          }
+          task.status = lastErr ? "failed" : "ok";
+          task.error = lastErr ? `${(lastErr as Error)?.message ?? "load failed"}` : undefined;
+          run.lastProgressAt = Date.now();
+          publish();
+        }
+      };
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    },
+    [publish],
+  );
+
   useEffect(() => {
     if (!hasDeck) return;
     const d = deckRef.current;
     if (!d) return;
-    const { version: ver, timeoutMs = 15_000, concurrency = 6, startIndex = 0 } = optsRef.current;
+    const { version: ver, startIndex = 0, criticalWindow = CRITICAL_WINDOW } = optsRef.current;
 
     const startKey = `${deckId}#${retryToken}`;
     if (startKeyRef.current === startKey) return;
@@ -136,65 +281,75 @@ export function useAssetPreloader(
     const slides = d.slides;
     const slideCount = slides.length;
 
-    setState({
-      progress: slideCount > 0 ? 0 : null,
-      message: slideCount > 0 ? `Preparing slide 1 of ${slideCount}` : "Preparing presentation",
-      ready: false,
-      error: null,
-    });
+    runRef.current = { cancelled: false, acknowledged: false, lastProgressAt: Date.now(), slideCount };
 
     (async () => {
-      /* phase 0 — the asset map (browser decks resolve bg images to data
-       * URLs through it; server decks return null and keep /api/assets) */
+      setState({
+        progress: slideCount > 0 ? 0 : null,
+        message: slideCount > 0 ? `Preparing slide 1 of ${slideCount}` : "Preparing presentation",
+        ready: false,
+        allDone: false,
+        failures: [],
+        failuresAcknowledged: false,
+        stalled: false,
+      });
+
+      /* the asset map (browser decks resolve bg images to data URLs through
+       * it; server decks return null and keep /api/assets) */
       const assetMap = await getAssetMap(deckId, ver).catch(() => null);
       if (cancelled) return;
-
-      /* phase 1 — enumerate every warm job */
+      if (runRef.current) runRef.current.lastProgressAt = Date.now();
       const assetFiles: FileRow[] = await api.listAssets(deckId).catch(() => []);
       if (cancelled) return;
-      const urlOf = (path: string): string => assetMap?.[path] ?? `/api/assets/${deckId}/${path}`;
+      if (runRef.current) runRef.current.lastProgressAt = Date.now();
+      const urlOf = (path: string): string => assetMap?.[path] ?? assetRouteUrl(deckId, path);
 
-      interface Task {
-        slide: number; // -1 for deck-global jobs
-        label: string;
-        run: () => Promise<void>;
-      }
-      const tasks: Task[] = [];
-
-      const warmSource = (slide: number, source: Source | undefined) => {
+      const byKey = new Map<string, Task>();
+      const addTask = (t: Task): void => {
+        if (!byKey.has(t.key)) byKey.set(t.key, t);
+      };
+      const warmSource = (slide: number, critical: boolean, source: Source | undefined): void => {
         if (!source || source.type === "none") return;
         if (source.type === "code") {
-          tasks.push({ slide, label: source.path, run: () => warmModule(deckId, source.path, ver) });
+          // shared bg/overlay modules load once — same key, one task
+          addTask({
+            key: `code:${source.path}`,
+            slide,
+            critical,
+            label: source.path,
+            status: "pending",
+            run: () => warmModule(deckId, source.path, ver),
+          });
         } else if (source.type === "image") {
-          const path = source.path;
-          tasks.push({ slide, label: path, run: () => decodeImage(urlOf(path)) });
+          addTask({
+            key: `img:${source.path}`,
+            slide,
+            critical,
+            label: source.path,
+            status: "pending",
+            run: () => decodeImage(urlOf(source.path)),
+          });
         }
       };
 
-      // slide order: current → next → previous → the rest
+      // slide order: startIndex window first (critical), then the rest
       const order: number[] = [];
       if (slideCount > 0) {
         const cur = Math.min(Math.max(0, startIndex), slideCount - 1);
-        order.push(cur);
-        if (cur + 1 < slideCount) order.push(cur + 1);
-        if (cur - 1 >= 0) order.push(cur - 1);
+        for (let i = cur; i < Math.min(cur + criticalWindow, slideCount); i++) order.push(i);
+        if (cur > 0) order.push(cur - 1);
         for (let i = 0; i < slideCount; i++) if (!order.includes(i)) order.push(i);
       }
-      for (const i of order) {
-        const s = slides[i];
-        tasks.push({
-          slide: i,
-          label: `slides/${s.id}.tsx`,
-          run: () => warmModule(deckId, `slides/${s.id}.tsx`, ver),
-        });
-        warmSource(i, s.bg !== undefined ? s.bg : d.bg);
-        warmSource(i, s.overlay !== undefined ? s.overlay : d.overlay);
-      }
+      const criticalSet = new Set(order.slice(0, Math.min(criticalWindow, slideCount)));
 
-      // deck-global: fonts + every raster asset (logos, images slides <Img/>)
+      const tasks: Task[] = [];
+      // fonts are critical — the first slides need them
       tasks.push({
+        key: "fonts",
         slide: -1,
+        critical: true,
         label: "fonts",
+        status: "pending",
         run: async () => {
           try {
             if (document.fonts?.ready) await document.fonts.ready;
@@ -203,81 +358,87 @@ export function useAssetPreloader(
           }
         },
       });
+      for (const i of order) {
+        const s = slides[i];
+        const critical = criticalSet.has(i);
+        addTask({
+          key: `slide:${s.id}`,
+          slide: i,
+          critical,
+          label: `slides/${s.id}.tsx`,
+          status: "pending",
+          run: () => warmModule(deckId, `slides/${s.id}.tsx`, ver),
+        });
+        warmSource(i, critical, s.bg !== undefined ? s.bg : d.bg);
+        warmSource(i, critical, s.overlay !== undefined ? s.overlay : d.overlay);
+      }
+      // deck-global raster assets (logos, images slides <Img/>) — background
       for (const f of assetFiles) {
         if (!IMAGE_EXT.test(f.path)) continue;
-        const path = f.path;
-        tasks.push({ slide: -1, label: path, run: () => decodeImage(urlOf(path)) });
-      }
-
-      const total = tasks.length;
-      if (total === 0) {
-        if (!cancelled) setState({ progress: 1, message: "Ready", ready: true, error: null });
-        return;
-      }
-
-      /* phase 2 — run the pool with progress + a fatal-error short-circuit */
-      let done = 0;
-      let prepared = 0;
-      let fatal: string | null = null;
-      let finished = false;
-      const remaining = slides.map(() => 0);
-      for (const t of tasks) if (t.slide >= 0) remaining[t.slide] += 1;
-
-      const watchdog = setTimeout(() => {
-        if (finished || cancelled) return;
-        cancelled = true; // stop the workers
-        setState({
-          progress: null,
-          message: "",
-          ready: false,
-          error: `Still loading after ${Math.round(timeoutMs / 1000)} s — the deck may be unreachable or too large.`,
+        addTask({
+          key: `img:${f.path}`,
+          slide: -1,
+          critical: false,
+          label: f.path,
+          status: "pending",
+          run: () => decodeImage(urlOf(f.path)),
         });
-      }, timeoutMs);
-
-      let cursor = 0;
-      const worker = async () => {
-        while (!fatal && !cancelled && cursor < tasks.length) {
-          const task = tasks[cursor++];
-          try {
-            await task.run();
-          } catch (e) {
-            fatal = `Couldn't load ${task.label} — ${(e as Error).message}`;
-            return;
-          }
-          if (cancelled || fatal) return;
-          done += 1;
-          if (task.slide >= 0) {
-            remaining[task.slide] -= 1;
-            if (remaining[task.slide] === 0) prepared += 1;
-          }
-          setState({
-            progress: done / total,
-            message: slideCount > 0 ? `Preparing slide ${Math.min(prepared + 1, slideCount)} of ${slideCount}` : "Preparing",
-            ready: false,
-            error: null,
-          });
-        }
-      };
-      await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, total)) }, () => worker()));
-      finished = true;
-      clearTimeout(watchdog);
-
-      if (cancelled) return; // superseded (unmount / retry / timeout)
-      if (fatal) {
-        setState({ progress: null, message: "", ready: false, error: fatal });
-        return;
       }
-      setState({ progress: 1, message: "Ready", ready: true, error: null });
-    })();
+
+      tasksRef.current = [...tasks];
+      publish();
+      if (cancelled) return;
+
+      // critical first, then the background remainder
+      const criticalTasks = tasksRef.current.filter((t) => t.critical);
+      const restTasks = tasksRef.current.filter((t) => !t.critical);
+      await runPool(criticalTasks);
+      if (!cancelled) await runPool(restTasks);
+      publish();
+    })().catch(() => {
+      /* the run itself failed to enumerate (e.g. asset map read error) —
+       * publish whatever settled; the stage gate still reveals when ready */
+      publish();
+    });
+
+    /* stall watch — based on NO PROGRESS, never on total elapsed time */
+    const ticker = setInterval(() => {
+      const run = runRef.current;
+      if (!run || run.cancelled) return;
+      publish();
+    }, 2500);
 
     return () => {
       cancelled = true;
+      clearInterval(ticker);
+      if (runRef.current) runRef.current.cancelled = true;
     };
-  }, [deckId, retryToken, hasDeck]);
+  }, [deckId, retryToken, hasDeck, publish, runPool]);
 
   const retry = useCallback(() => {
     setRetryToken((t) => t + 1);
   }, []);
 
-  return { ...state, retry };
+  const retryFailed = useCallback(() => {
+    const run = runRef.current;
+    if (!run) return;
+    const failed = tasksRef.current.filter((t) => t.status === "failed");
+    if (!failed.length) return;
+    for (const t of failed) {
+      t.status = "pending";
+      t.error = undefined;
+    }
+    run.lastProgressAt = Date.now();
+    publish();
+    void runPool(failed).then(() => publish());
+  }, [publish, runPool]);
+
+  const acknowledgeFailures = useCallback(() => {
+    const run = runRef.current;
+    if (!run) return;
+    run.acknowledged = true;
+    publish();
+  }, [publish]);
+
+  return { ...state, retry, retryFailed, acknowledgeFailures };
 }

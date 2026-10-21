@@ -69,6 +69,8 @@ export interface FileRow {
   path: string;
   mtime: number;
   size: number;
+  /** original upload file name when the stored name is sanitized */
+  display?: string;
 }
 
 export interface DeckSummary {
@@ -86,6 +88,9 @@ export interface DeckSummary {
   /** true when the deck mirrors into a folder on the user's device
    *  (File System Access API — Chromium browsers) */
   device?: boolean;
+  /** device-folder name (decks can share a title — the delete dialog needs
+   *  the folder to say exactly what will be removed) */
+  folderName?: string;
   /** minimal payload to render a live cover thumbnail without loading the deck */
   cover?: DeckCover;
 }

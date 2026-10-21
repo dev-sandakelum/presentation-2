@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { RuntimeMessage, SlideEntry, Source, ThemeMode } from "@/lib/stagesmith/types";
-import { resolveModule, getAssetMap, type ModuleInfo } from "@/lib/stagesmith/client";
+import { resolveModule, getAssetMap, assetRouteUrl, type ModuleInfo } from "@/lib/stagesmith/client";
 
 /**
  * The sandboxed Stage Runtime wrapper (plan §5.1).
@@ -62,8 +62,11 @@ export async function resolveCode(deckId: string, path: string, version: string 
   return resolveModule(deckId, path, version);
 }
 
+/** image layer source URL — always percent-encoded per segment so names with
+ *  spaces, brackets, # and unicode all load (used for bg/overlay images when
+ *  the deck's assetMap has no data-URL entry). */
 export function imageSourceUrl(deckId: string, source: Extract<Source, { type: "image" }>): string {
-  return `/api/assets/${deckId}/${source.path}`;
+  return assetRouteUrl(deckId, source.path);
 }
 
 /** resolution is settled for exactly this set of sources at this version */

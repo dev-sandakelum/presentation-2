@@ -62,6 +62,18 @@ async function isLocalDeck(deckId: string): Promise<boolean> {
   return local.hasDeck(deckId);
 }
 
+/** THE one asset-URL builder for route-served decks — every path segment is
+ *  percent-encoded, so file names with spaces, brackets, #, % and non-English
+ *  letters all work ("Minimal Blue and Pastel Ribbon Background.png" →
+ *  "Minimal%20Blue%20and%20Pastel%20Ribbon%20Background.png"). */
+export function assetRouteUrl(deckId: string, path: string): string {
+  return `/api/assets/${encodeURIComponent(deckId)}/${path
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/")}`;
+}
+
 /* ------------------------------------------------------------------ */
 /* module resolution (StageFrame)                                      */
 /* ------------------------------------------------------------------ */
@@ -204,6 +216,9 @@ export interface DeleteDeckResult {
   removed: boolean;
   external: boolean;
   root: string;
+  /** device-folder cleanup couldn't remove the files (permission/IO) —
+   *  shown in the delete toast instead of being swallowed */
+  folderCleanupError?: string;
 }
 
 /** import result row */
@@ -289,8 +304,20 @@ export const api = {
 
   deleteDeck: async (deckId: string): Promise<DeleteDeckResult> => {
     if (await isLocalDeck(deckId)) {
+      const rec = await local.getRecord(deckId);
+      let root = "this browser";
+      let folderCleanupError: string | undefined;
+      if (rec?.device) {
+        // best-effort: also remove the deck's files from the device folder
+        // (permission may have lapsed — the browser-store copy is deleted
+        // regardless, and the reason is surfaced instead of swallowed)
+        const { cleanupDeviceProject, deviceFolderName } = await import("./device");
+        root = (await deviceFolderName(deckId)) ?? deckId;
+        const cleanup = await cleanupDeviceProject(deckId);
+        folderCleanupError = cleanup.error;
+      }
       await local.deleteDeck(deckId);
-      return { ok: true, removed: true, external: false, root: "this browser" };
+      return { ok: true, removed: true, external: false, root, folderCleanupError };
     }
     const res = await fetch(`/api/decks/${deckId}`, { method: "DELETE" });
     return j<DeleteDeckResult>(res);
@@ -314,6 +341,24 @@ export const api = {
       body: JSON.stringify({ path, content }),
     });
     return (await j<{ signature: string }>(res)).signature;
+  },
+
+  /** batch save — the editor's save queue writes all dirty buffers in one
+   *  call (one record mutation for browser decks, sequential atomic PUTs
+   *  for server decks). Returns the deck's new signature. */
+  saveFiles: async (deckId: string, entries: Array<{ path: string; content: string }>): Promise<string> => {
+    if (!entries.length) return api.poll(deckId);
+    if (await isLocalDeck(deckId)) return local.saveFiles(deckId, entries);
+    let sig = "";
+    for (const e of entries) {
+      const res = await fetch(`/api/decks/${deckId}/files`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: e.path, content: e.content }),
+      });
+      sig = (await j<{ signature: string }>(res)).signature;
+    }
+    return sig;
   },
 
   deleteFile: async (deckId: string, path: string): Promise<void> => {
@@ -400,14 +445,15 @@ export const api = {
   /* ---------------- assets + code files ---------------- */
 
   /** preview URL for a deck asset — store-aware (Problem 06): browser decks
-   *  have no /api/assets route, so their IndexedDB blobs are served as
-   *  object URLs; server decks keep the /api/assets route. */
+   *  have no /api/assets route, so their IndexedDB blobs (or device-folder
+   *  files) are served as object URLs; server decks keep the /api/assets
+   *  route (always percent-encoded — spaces, # and unicode all work). */
   assetUrl: async (deckId: string, path: string): Promise<string> => {
     if (await isLocalDeck(deckId)) {
       const url = await local.getAssetUrl(deckId, path);
       if (url) return url;
     }
-    return `/api/assets/${deckId}/${path.split("/").map(encodeURIComponent).join("/")}`;
+    return assetRouteUrl(deckId, path);
   },
 
   listAssets: async (deckId: string): Promise<FileRow[]> => {
@@ -416,12 +462,14 @@ export const api = {
     return (await j<{ assets?: FileRow[] }>(res)).assets ?? [];
   },
 
-  uploadAssets: async (deckId: string, files: File[]): Promise<Array<{ path: string }>> => {
+  uploadAssets: async (deckId: string, files: File[]): Promise<Array<{ path: string; display: string }>> => {
     if (await isLocalDeck(deckId)) return local.uploadAssets(deckId, files);
     const form = new FormData();
     for (const f of files) form.append("file", f);
     const res = await fetch(`/api/decks/${deckId}/assets`, { method: "POST", body: form });
-    return (await j<{ uploaded: Array<{ path: string }> }>(res)).uploaded;
+    const rows = (await j<{ uploaded: Array<{ path: string }> }>(res)).uploaded;
+    // server decks keep the original on-disk name — the display name is the file name
+    return rows.map((r) => ({ path: r.path, display: r.path.replace("assets/", "") }));
   },
 
   listCodeFiles: async (deckId: string, dir: "overlay" | "bg"): Promise<FileRow[]> => {

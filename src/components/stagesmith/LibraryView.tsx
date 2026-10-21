@@ -8,6 +8,7 @@ import { openDeviceProject, supportsDeviceFolders } from "@/lib/stagesmith/devic
 import { NewProjectDialog } from "./NewProjectDialog";
 import { LiveThumb } from "./LiveThumb";
 import { BrandLogo } from "./BrandLogo";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { download, formatWhen, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -663,8 +664,48 @@ function DeckCard({
 }) {
   const { toast } = useToast();
   const { ref, inView } = useInView<HTMLDivElement>();
-  const [confirming, setConfirming] = useState(false);
   const [sig, setSig] = useState(deck.signature);
+
+  /* ---------- delete flow: menu only OPENS the confirmation ---------- */
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deletingRef = useRef(false); // rapid double-clicks → ONE delete
+
+  // big decks ask for the title to be typed (decks can share a title — the
+  // folder/id line + the typed title together pin down the right deck)
+  const requireText = deck.slideCount >= 20 ? deck.title : null;
+  const folderName = deck.folderName ?? deck.id;
+
+  const doDelete = async () => {
+    if (deletingRef.current) return;
+    deletingRef.current = true;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const r = await api.deleteDeck(deck.id);
+      setDeleteOpen(false);
+      onDeleted();
+      toast(
+        r.external
+          ? { title: "Removed from library", description: `Files kept on disk at ${r.root}` }
+          : {
+              title: "Deck deleted",
+              description: r.folderCleanupError
+                ? `${r.folderCleanupError} (${folderName})`
+                : deck.device
+                  ? `Removed from this browser and the “${folderName}” folder.`
+                  : undefined,
+            },
+      );
+    } catch (e) {
+      // keep the dialog open with the reason — confirm button becomes Retry
+      setDeleteError((e as Error).message || "The deck couldn't be deleted");
+    } finally {
+      setDeleting(false);
+      deletingRef.current = false;
+    }
+  };
 
   // keep the cover thumbnail fresh without a full refresh
   useEffect(() => {
@@ -805,31 +846,65 @@ function DeckCard({
             <DropdownMenuItem
               style={{ color: "var(--ss-danger)" }}
               onClick={() => {
-                if (!confirming) {
-                  setConfirming(true);
-                  setTimeout(() => setConfirming(false), 2500);
-                  return;
-                }
-                api.deleteDeck(deck.id).then((r) => {
-                  onDeleted();
-                  toast(
-                    r.external
-                      ? { title: "Removed from library", description: `Files kept on disk at ${r.root}` }
-                      : { title: "Deck deleted" },
-                  );
-                }).catch((e: Error) => toast({ title: "Delete failed", description: e.message, variant: "destructive" }));
+                // NEVER delete from the menu — open the confirmation dialog
+                setDeleteError(null);
+                setDeleteOpen(true);
               }}
             >
               <ExternalLink size={0} style={{ display: "none" }} />
-              {confirming
-                ? "Click again to confirm"
-                : deck.external
-                  ? "Remove from library (keeps files)"
-                  : "Delete"}
+              {deck.external ? "Remove from library (keeps files)" : "Delete"}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      {/* the delete confirmation — nothing is removed until Confirm */}
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDeleteOpen(false);
+            setDeleteError(null);
+          }
+        }}
+        title={deck.external ? "Remove deck from library?" : "Delete deck?"}
+        description={
+          <>
+            <div style={{ font: "600 13.5px var(--ss-fb, sans-serif)", color: "var(--ss-ink, #f2f0fa)" }}>
+              {deck.title}
+            </div>
+            <div style={{ color: "var(--ss-mut, #9894b0)", font: "400 12px var(--ss-fm, monospace)" }}>
+              {deck.slideCount} slides · folder: {folderName}
+              {deck.store === "browser" && !deck.device ? " · stored in this browser" : ""}
+            </div>
+            <div style={{ marginTop: 4 }}>
+              {deck.external ? (
+                <>
+                  This removes the deck from the library only. Its files stay on disk at{" "}
+                  <code style={{ font: "500 11.5px var(--ss-fm, monospace)" }}>{deck.id}</code>.
+                </>
+              ) : (
+                <>
+                  This permanently deletes the deck and its files from{" "}
+                  {deck.device
+                    ? "this device"
+                    : deck.store === "server"
+                      ? "the app's decks folder"
+                      : "this browser"}
+                  . This cannot be undone.
+                </>
+              )}
+            </div>
+          </>
+        }
+        confirmLabel={deck.external ? "Remove from library" : "Delete deck"}
+        danger
+        busy={deleting}
+        error={deleteError}
+        requireText={requireText}
+        onConfirm={doDelete}
+        closeLabel="Close without deleting"
+      />
     </div>
   );
 }

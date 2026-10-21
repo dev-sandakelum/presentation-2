@@ -5,13 +5,14 @@ import dynamic from "next/dynamic";
 import type { EditorView } from "@codemirror/view";
 import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, PanelBottom, PanelRight, Save, Trash2, Upload, WandSparkles } from "lucide-react";
 import type { DeckJson, FileRow, SlideEntry, Source } from "@/lib/stagesmith/types";
-import { api } from "@/lib/stagesmith/client";
+import { api, assetRouteUrl } from "@/lib/stagesmith/client";
 import { FORMATABLE_EXT, formatTsx } from "@/lib/stagesmith/format";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import { copyText, fixPrompt, sourceLabel } from "./shared";
 import { resolveCode } from "./StageFrame";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 /** the whole CodeMirror stack loads in its own chunk — fast first paint */
 const CmEditor = dynamic(() => import("./editor/CmEditor"), {
@@ -801,6 +802,14 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
   /** store-aware preview URLs (Problem 06): browser decks serve IndexedDB
    *  blobs as object URLs — the /api/assets route 404s for them. */
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
+  /** paths whose preview genuinely failed to load → error placeholder */
+  const [broken, setBroken] = useState<Record<string, boolean>>({});
+
+  /* asset trash → reusable confirmation dialog (never delete on first click) */
+  const [trashTarget, setTrashTarget] = useState<FileRow | null>(null);
+  const [trashing, setTrashing] = useState(false);
+  const [trashError, setTrashError] = useState<string | null>(null);
+  const trashingRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -818,17 +827,42 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
     const list = Array.from(files);
     if (!list.length) return;
     try {
-      await api.uploadAssets(deckId, list);
+      const uploaded = await api.uploadAssets(deckId, list);
       await refresh();
-      toast({ title: `${list.length} asset${list.length > 1 ? "s" : ""} copied into assets/` });
+      toast({
+        title: `${uploaded.length} asset${uploaded.length > 1 ? "s" : ""} copied into assets/`,
+        description: uploaded.some((u) => u.display !== u.path.replace("assets/", ""))
+          ? "File names were made disk-safe — the panel shows the original names."
+          : undefined,
+      });
     } catch (e) {
       toast({ title: "Upload failed", description: (e as Error).message, variant: "destructive" });
     }
   };
 
+  const doTrash = useCallback(async () => {
+    if (!trashTarget || trashingRef.current) return;
+    trashingRef.current = true;
+    setTrashing(true);
+    setTrashError(null);
+    try {
+      await api.deleteFile(deckId, trashTarget.path);
+      setTrashTarget(null);
+      refresh();
+      toast({ title: "Asset deleted", description: trashTarget.path });
+    } catch (e) {
+      setTrashError((e as Error).message || "The file couldn't be deleted");
+    } finally {
+      setTrashing(false);
+      trashingRef.current = false;
+    }
+  }, [deckId, trashTarget, refresh, toast]);
+
   const rows = useMemo(() => assets ?? [], [assets]);
 
-  // resolve image preview URLs for whichever store the deck lives in
+  // resolve image preview URLs for whichever store the deck lives in — one
+  // URL for EVERY listed file (not just freshly uploaded ones), whatever its
+  // name: object URLs for browser/device decks, ENCODED route URLs otherwise
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -838,7 +872,7 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
           try {
             out[a.path] = await api.assetUrl(deckId, a.path);
           } catch {
-            /* fall back to the route URL below */
+            out[a.path] = assetRouteUrl(deckId, a.path);
           }
         }
       }
@@ -896,26 +930,59 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
               <div className="ss-assets-grid">
                 {rows.map((a) => {
                   const isImage = /\.(png|jpe?g|svg|webp|gif|avif)$/i.test(a.path);
+                  const displayName = a.display ?? a.path.replace("assets/", "");
+                  const src = previewUrls[a.path] ?? assetRouteUrl(deckId, a.path);
                   return (
                     <div key={a.path} className="ss-asset">
                       {isImage ? (
-                        <img src={previewUrls[a.path] ?? `/api/assets/${deckId}/${a.path}`} alt={a.path} loading="lazy" />
+                        broken[a.path] ? (
+                          /* honest placeholder when the image really failed —
+                             logged, never a silent broken-image icon */
+                          <div
+                            title={`Couldn't load ${a.path}`}
+                            style={{
+                              aspectRatio: "16/10",
+                              display: "grid",
+                              placeItems: "center",
+                              gap: 6,
+                              background: "var(--ss-errbg)",
+                              color: "var(--ss-err)",
+                            }}
+                          >
+                            <AlertTriangle size={18} />
+                            <span style={{ font: "500 9px var(--ss-mono)", color: "var(--ss-mut)" }}>couldn&apos;t load</span>
+                          </div>
+                        ) : (
+                          <img
+                            src={src}
+                            alt={displayName}
+                            loading="lazy"
+                            onError={() => {
+                              console.warn(`[assets] preview failed to load: ${a.path} (src=${src})`);
+                              setBroken((b) => ({ ...b, [a.path]: true }));
+                            }}
+                          />
+                        )
                       ) : (
                         <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", font: "500 10px var(--ss-mono)", color: "var(--ss-mut)" }}>
                           {a.path.split(".").pop()?.toUpperCase()}
                         </div>
                       )}
                       <div className="nm" title={a.path}>
-                        {a.path.replace("assets/", "")}
+                        {displayName}
                       </div>
                       <div className="acts">
                         <button
                           className="ss-btn"
                           style={{ height: 24, padding: "0 8px", fontSize: 11 }}
-                          title="Copy <Img name='…' /> snippet"
+                          title={`Copy <Img name="${a.path}" /> snippet`}
                           onClick={async () => {
-                            const ok = await copyText(`<Img name='${a.path}' />`);
-                            toast(ok ? { title: "Snippet copied" } : { title: "Clipboard blocked", variant: "destructive" });
+                            // the runtime's asset() encodes every segment, so
+                            // the RAW path is the correct thing to copy — it
+                            // works with spaces, # and unicode as-is
+                            const escaped = a.path.replace(/(["\\])/g, "\\$1");
+                            const ok = await copyText(`<Img name="${escaped}" />`);
+                            toast(ok ? { title: "Snippet copied", description: `<Img name="${escaped}" />` } : { title: "Clipboard blocked", variant: "destructive" });
                           }}
                         >
                           <Copy size={11} /> snippet
@@ -923,13 +990,10 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
                         <button
                           className="ss-btn"
                           style={{ height: 24, padding: "0 8px", fontSize: 11, color: "var(--ss-err)" }}
-                          onClick={async () => {
-                            try {
-                              await api.deleteFile(deckId, a.path);
-                              refresh();
-                            } catch (e) {
-                              toast({ title: "Delete failed", description: (e as Error).message, variant: "destructive" });
-                            }
+                          title="Delete asset"
+                          onClick={() => {
+                            setTrashError(null);
+                            setTrashTarget(a);
                           }}
                         >
                           <Trash2 size={11} />
@@ -951,6 +1015,37 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
           <CodeFileList deckId={deckId} dir="bg" version={version} />
         )}
       </div>
+
+      {/* asset delete confirmation — reuses the deck-delete dialog */}
+      <ConfirmDialog
+        open={trashTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) {
+            setTrashTarget(null);
+            setTrashError(null);
+          }
+        }}
+        title="Delete asset?"
+        description={
+          <>
+            <div style={{ font: "600 13px var(--ss-fb, sans-serif)", color: "var(--ss-ink)" }}>
+              {trashTarget ? (trashTarget.display ?? trashTarget.path.replace("assets/", "")) : ""}
+            </div>
+            {trashTarget && (
+              <div style={{ color: "var(--ss-mut)", font: "400 11.5px var(--ss-fm, monospace)" }}>{trashTarget.path}</div>
+            )}
+            <div>
+              This removes the file from the deck. Slides that use it will show a placeholder. This cannot be undone.
+            </div>
+          </>
+        }
+        confirmLabel="Delete asset"
+        danger
+        busy={trashing}
+        error={trashError}
+        onConfirm={doTrash}
+        closeLabel="Close without deleting"
+      />
     </div>
   );
 }

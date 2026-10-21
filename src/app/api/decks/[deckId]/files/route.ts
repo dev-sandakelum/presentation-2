@@ -8,14 +8,7 @@ import {
   validRelPath,
   writeFileAtomic,
 } from "@/lib/stagesmith/store";
-
-const THEME_URL_RE = /url\(\s*['"]?(\.\/|\.\.\/)([^'")]+)['"]?\s*\)/g;
-
-function rewriteThemeCss(css: string, deckId: string): string {
-  return css.replace(THEME_URL_RE, (_m, _prefix, rest) =>
-    `url('/api/assets/${deckId}/assets/${rest.replace(/^assets\//, "")}')`,
-  );
-}
+import { rewriteThemeCss, unrewriteThemeCss } from "@/lib/stagesmith/themeurl";
 
 /**
  * GET /api/decks/<id>/files?path=<rel>  — file content (theme.css gets url rewrite)
@@ -53,11 +46,9 @@ export async function PUT(
     const rel = String(body.path || "");
     const content = String(body.content ?? "");
     if (!validRelPath(rel)) return Response.json({ error: "Illegal path" }, { status: 400 });
-    // undo theme.css url rewriting from GET (store the portable form)
-    const portable =
-      path.basename(rel) === "theme.css"
-        ? content.replace(new RegExp(`/api/assets/${deckId}/assets/`, "g"), "./assets/")
-        : content;
+    // undo theme.css url rewriting from GET (store the portable form; decode
+    // so re-reading never double-encodes encoded asset names)
+    const portable = path.basename(rel) === "theme.css" ? unrewriteThemeCss(content, deckId) : content;
     await writeFileAtomic(deckPath(deckId, rel), portable);
     return Response.json({ ok: true, savedAt: Date.now(), signature: await deckSignature(deckId) });
   } catch (e) {

@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Grid2X2, Maximize2, Moon, QrCode, Sun, X } from "lucide-react";
-import { api, getAssetMap, resolveModule } from "@/lib/stagesmith/client";
+import { ChevronLeft, ChevronRight, Grid2X2, Maximize2, Moon, QrCode, Sun, X, Loader2 } from "lucide-react";
+import { api, getAssetMap, resolveModule, assetRouteUrl } from "@/lib/stagesmith/client";
 import type { DeckBundle } from "@/lib/stagesmith/client";
 import type { DeckJson, Source, ThemeMode } from "@/lib/stagesmith/types";
 import { StageFrame, type TransitionTiming } from "./StageFrame";
@@ -84,25 +84,55 @@ export function PresentView({
   const slides = useMemo(() => deck?.slides ?? [], [deck]);
 
   /* ---------- present-mode boot gate (the branded loading screen) ----------
-     Nothing of the deck is shown until BOTH agree:
-       · useAssetPreloader — every slide module, TSX bg/overlay, background
-         image and asset is resolved + decoded, fonts are ready
+     No TIME LIMIT anywhere: the gate opens when the FIRST FEW slides are
+     genuinely ready —
+       · useAssetPreloader — priority preload: the start window's slide
+         modules, backgrounds and fonts first, the rest in the background
        · stageReady — the sandboxed runtime mounted the first slide and
          posted its `rendered` message (or surfaced an error card)
+     Elapsed time alone NEVER errors; a real per-item failure is retried a
+     few times, then shown with Retry / “Continue anyway”; a total lack of
+     progress (60 s) becomes a soft “seems stuck” notice — never red.
      The hidden StageFrame underneath IS the offscreen mount: it boots in
-     parallel behind the veil, so the reveal is instant and the first real
-     transition starts from a warm cache. */
+     parallel behind the veil, so the reveal is instant. */
   const [bootRetry, setBootRetry] = useState(0);
   const [bootError, setBootError] = useState<string | null>(null);
   const [stageReady, setStageReady] = useState(false);
-  const [stageError, setStageError] = useState<string | null>(null);
   const start = fromParam ? Math.max(0, Number(fromParam) || 0) : 0;
-  const preload = useAssetPreloader(deck, deckId, version, { startIndex: start, timeoutMs: 15_000 });
-  const revealReady = preload.ready && stageReady;
-  const bootMessage = deck
-    ? preload.message
-    : `Opening ${deckId}`;
-  const presentError = bootError ?? preload.error ?? stageError;
+  const preload = useAssetPreloader(deck, deckId, version, { startIndex: start });
+  // the deck starts once the critical window settled AND any failed item was
+  // either retried away or explicitly acknowledged (Continue anyway)
+  const revealReady = preload.ready && stageReady && (!preload.failures.length || preload.failuresAcknowledged);
+  const bootMessage = deck ? preload.message : `Opening ${deckId}`;
+  /** red errors are reserved for genuinely failed loads (deck unreachable) */
+  const presentError = bootError;
+
+  /* a calm, informative hint after ~10 s — NOT an error, just honesty about
+   * big decks (21–26 slides with large backgrounds take a moment) */
+  const loadStartRef = useRef<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (revealReady || presentError) {
+      loadStartRef.current = null;
+      setElapsed(0);
+      return;
+    }
+    if (loadStartRef.current === null) loadStartRef.current = Date.now();
+    const t = setInterval(() => {
+      if (loadStartRef.current !== null) setElapsed(Date.now() - loadStartRef.current);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [revealReady, presentError]);
+  const slowHint = !revealReady && !presentError && elapsed > 10_000;
+
+  /* soft (non-red) notices under the progress bar:
+     · a specific item failed after retries → which one, Retry, Continue anyway
+     · nothing has settled for 60 s → “seems stuck”, Retry, Back */
+  const warningText = preload.stalled
+    ? "Loading seems stuck — nothing has progressed for a while."
+    : preload.failures.length
+      ? `Couldn't load ${preload.failures[0].label} — ${preload.failures[0].error}${preload.failures.length > 1 ? ` (and ${preload.failures.length - 1} more)` : ""}`
+      : null;
 
   // sync — the display is the presenter: it owns the token
   const sync = useSync(deckId, "display", null, slides);
@@ -138,25 +168,20 @@ export function PresentView({
     };
   }, [deckId, initialBundle, bootRetry]);
 
-  // stage watchdog — if the whole boot (preloader + first runtime render)
-  // hasn't completed in ~15 s, show the error state instead of an endless
-  // spinner; Retry resets everything and re-arms the gate
-  useEffect(() => {
-    if (revealReady || presentError) return;
-    const t = setTimeout(() => {
-      setStageError("The stage didn't finish rendering its first slide in time.");
-    }, 15_000);
-    return () => clearTimeout(t);
-  }, [revealReady, presentError]);
-
   // Retry: re-open the deck, re-run the full preload, re-arm the stage gate
   const retryBoot = useCallback(() => {
     setBootError(null);
-    setStageError(null);
     setStageReady(false);
     setBootRetry((n) => n + 1);
     preload.retry();
   }, [preload]);
+
+  // the soft-warning Retry: failed items → retry just those; a stall →
+  // re-arm the WHOLE boot (preloader + stage) so a silent stage recovers too
+  const warningRetry = useCallback(() => {
+    if (preload.failures.length) preload.retryFailed();
+    else retryBoot();
+  }, [preload, retryBoot]);
 
   // the first `rendered` message from the sandboxed runtime — the slide is
   // genuinely on screen (an error card also counts: it's the honest result)
@@ -367,7 +392,7 @@ export function PresentView({
               .catch(() => {}),
           );
         } else if (source.type === "image") {
-          const url = assetMap?.[source.path] ?? `/api/assets/${deckId}/${source.path}`;
+          const url = assetMap?.[source.path] ?? assetRouteUrl(deckId, source.path);
           if (!/^(data|blob):/i.test(url)) {
             jobs.push(
               new Promise<void>((res) => {
@@ -451,9 +476,12 @@ export function PresentView({
     <div className={`ss-display ${chromeHidden ? "hide-chrome" : ""}`} onMouseMove={bump}>
       {/* the present-mode loading gate — real progress from the asset
           preloader, shown immediately (no 200 ms delay: a full preload is
-          always worth announcing), with an error state + Retry for failed
-          assets, module errors and timeouts. Portaled over everything; the
-          stage beneath stays inert until the first slide is ready. */}
+          always worth announcing). NO time-based error: the red state is
+          reserved for genuinely failed deck loads; slow loads keep the
+          progress bar, a calm hint, a soft warning area for failed items
+          (Retry / Continue anyway) and an always-available Back button.
+          Portaled over everything; the stage beneath stays inert until the
+          first slides are ready. */}
       <SplashVeil
         active={!revealReady}
         mode="present"
@@ -462,7 +490,24 @@ export function PresentView({
         message={presentError ? null : bootMessage}
         error={presentError}
         onRetry={retryBoot}
+        hint={slowHint ? "Large deck — this can take a moment" : null}
+        warning={!presentError ? warningText : null}
+        onWarningRetry={warningRetry}
+        onContinue={preload.failures.length ? preload.acknowledgeFailures : undefined}
+        continueLabel="Continue anyway"
+        onCancel={() => nav.deck(deckId)}
+        cancelLabel="Back"
       />
+
+      {/* background loading continues after the reveal — a small, honest,
+          non-blocking indicator; jumping ahead to a slide that isn't ready
+          just keeps the previous frame until its module resolves */}
+      {revealReady && !preload.allDone && (
+        <div className="ss-bgload" role="status" aria-live="polite">
+          <Loader2 size={12} style={{ animation: "ss-rot 1s linear infinite" }} />
+          Loading more slides…
+        </div>
+      )}
 
       {/* stage */}
       <div className="ss-display-stage">

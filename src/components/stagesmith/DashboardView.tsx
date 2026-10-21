@@ -25,6 +25,7 @@ import { BrandLogo } from "./BrandLogo";
 import { SplashVeil } from "./LoadingScreen";
 import { useSync } from "@/hooks/useSync";
 import { useUiTheme, hydrateUiTheme } from "@/hooks/useUiTheme";
+import { useSaveQueue, readRecoverySnapshot } from "@/hooks/useSaveQueue";
 import { download, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -36,7 +37,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-const SAVE_DEBOUNCE = 320; // ms — plan: ~400 ms autosave
 const CODE_MIN_KEY = "ss-code-minimized"; // fix-list item 1: remembered between sessions
 /* code panel dock position (right side vs bottom) + side width — persisted */
 const CODE_SIDE_KEY = "ss-code-side";
@@ -79,7 +79,6 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   const [selId, setSelId] = useState<string | null>(null);
   const [buffers, setBuffers] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
-  const [saveState, setSaveState] = useState<"saved" | "saving" | "idle">("idle");
   const [codeMinimized, setCodeMinimized] = useState(false);
   /** dock the code editor as a right side panel (user request) */
   const [codeSide, setCodeSide] = useState(false);
@@ -256,37 +255,32 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
     return () => clearInterval(t);
   }, [deckId, version, dirty, toast]);
 
-  /* ---------- autosave ---------- */
+  /* ---------- autosave (ONE serialized queue — see useSaveQueue) ---------- */
   const buffersRef = useRef(buffers);
   buffersRef.current = buffers;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
 
-  const flushSave = useCallback(
-    async (paths?: string[]) => {
-      const toSave = paths ?? Object.keys(dirtyRef.current).filter((p) => dirtyRef.current[p]);
-      if (toSave.length === 0) return;
-      setSaveState("saving");
-      try {
-        for (const p of toSave) {
-          await api.saveFile(deckId, p, buffersRef.current[p] ?? "");
+  const save = useSaveQueue(deckId, {
+    collect: () =>
+      Object.keys(dirtyRef.current)
+        .filter((p) => dirtyRef.current[p])
+        .map((p) => ({ path: p, content: buffersRef.current[p] ?? "" })),
+    onSaved: (saved, signature) => {
+      ownSaveRef.current = true;
+      setVersion(signature);
+      setDirty((d) => {
+        const nd = { ...d };
+        for (const e of saved) {
+          // clear the flag ONLY when the buffer still matches what was
+          // written — edits made during the save keep their flag and go out
+          // with the queue's coalesced next run
+          if (buffersRef.current[e.path] === e.content) delete nd[e.path];
         }
-        ownSaveRef.current = true;
-        const sig = await api.poll(deckId);
-        setVersion(sig);
-        setDirty((d) => {
-          const nd = { ...d };
-          for (const p of toSave) delete nd[p];
-          return nd;
-        });
-        setSaveState("saved");
-      } catch (e) {
-        setSaveState("idle");
-        toast({ title: "Save failed", description: (e as Error).message, variant: "destructive" });
-      }
+        return nd;
+      });
     },
-    [deckId, toast],
-  );
+  });
 
   const onBufferChange = useCallback(
     (path: string, content: string) => {
@@ -299,17 +293,50 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
       undoTimers.current[path] = setTimeout(() => delete undoTimers.current[path], 600);
       setBuffers((b) => ({ ...b, [path]: content }));
       setDirty((d) => ({ ...d, [path]: true }));
-      setSaveState("saving");
+      save.notifyChange();
     },
-    [],
+    [save],
   );
 
-  // debounced flush
+  // crash recovery — restore unsaved text buffers from the last session
+  // (written on tab hide / close / save failure) once the deck is loaded
+  const recoveryDoneRef = useRef(false);
   useEffect(() => {
-    if (!Object.values(dirty).some(Boolean)) return;
-    const t = setTimeout(() => flushSave(), SAVE_DEBOUNCE);
-    return () => clearTimeout(t);
-  }, [buffers, dirty, flushSave]);
+    if (!deck || recoveryDoneRef.current) return;
+    recoveryDoneRef.current = true;
+    const recovered = readRecoverySnapshot(deckId);
+    if (!recovered) return;
+    // only paths that still exist in THIS deck — a file/slide deleted in the
+    // meantime must not be resurrected by the recovery copy
+    const live = new Set((bundle?.files ?? []).map((f) => f.path));
+    const paths = Object.keys(recovered).filter((p) => live.has(p) && recovered[p] !== undefined);
+    if (!paths.length) return;
+    setBuffers((b) => {
+      const nb = { ...b };
+      for (const p of paths) nb[p] = recovered[p];
+      return nb;
+    });
+    setDirty((d) => {
+      const nd = { ...d };
+      for (const p of paths) nd[p] = true;
+      return nd;
+    });
+    setTab((cur) => (paths.some((p) => p.startsWith("slides/")) ? "slide" : cur));
+    toast({
+      title: "Recovered unsaved edits",
+      description: "Changes from the last session were restored and are saving now.",
+    });
+    save.notifyChange();
+  }, [deck, deckId, bundle, save, toast]);
+
+  // surface save failures loudly (chip + toast); the queue already retried 1s/3s/10s
+  const failedToastRef = useRef(false);
+  useEffect(() => {
+    if (save.phase === "failed" && !failedToastRef.current) {
+      toast({ title: "Save failed", description: save.error ?? "Your edits are kept — click the status chip to retry.", variant: "destructive" });
+    }
+    failedToastRef.current = save.phase === "failed";
+  }, [save.phase, save.error, toast]);
 
   const undo = useCallback(() => {
     const step = undoRef.current.pop();
@@ -318,7 +345,8 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
     setBuffers((b) => ({ ...b, [step.path]: step.content }));
     setDirty((d) => ({ ...d, [step.path]: true }));
     setTab((cur) => (step.path.startsWith("slides/") ? "slide" : step.path === "theme.css" ? "theme" : cur));
-  }, []);
+    save.notifyChange();
+  }, [save]);
 
   const redo = useCallback(() => {
     const step = redoRef.current.pop();
@@ -326,7 +354,8 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
     undoRef.current.push({ path: step.path, content: buffersRef.current[step.path] ?? "" });
     setBuffers((b) => ({ ...b, [step.path]: step.content }));
     setDirty((d) => ({ ...d, [step.path]: true }));
-  }, []);
+    save.notifyChange();
+  }, [save]);
 
   /* ---------- keyboard ---------- */
   useEffect(() => {
@@ -334,7 +363,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
       if (e.metaKey || e.ctrlKey || e.altKey) {
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
           e.preventDefault();
-          flushSave();
+          save.saveNow(); // skip the debounce — save immediately
         }
         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
           e.preventDefault();
@@ -354,7 +383,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [flushSave, undo, redo, nav, deckId, toggleCodeMin]);
+  }, [save, undo, redo, nav, deckId, toggleCodeMin]);
 
   /* ---------- sync (presence + token for QR) ---------- */
   const sync = useSync(deckId, "editor", null, deck?.slides);
@@ -598,10 +627,64 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
             e.currentTarget.style.borderBottomColor = "transparent";
           }}
         />
-        <span className={`ss-chip ${anyDirty ? (saveState === "saving" ? "warn" : "warn") : "ok"}`}>
-          <span className="dot" />
-          {anyDirty ? (saveState === "saving" ? "Saving…" : "Unsaved") : "Saved"}
-        </span>
+        {(() => {
+          /* toolbar save status: Saved · Unsaved · Saving… · Failed (with
+           * reason + retry) — the chip itself is the retry button */
+          const failed = save.phase === "failed";
+          const chipClass = failed ? "err" : anyDirty ? (save.phase === "saving" ? "warn" : "warn") : "ok";
+          const chipText = failed
+            ? "Save failed — click to retry"
+            : anyDirty
+              ? save.phase === "saving"
+                ? "Saving…"
+                : "Unsaved"
+              : "Saved";
+          const title = failed
+            ? save.error ?? "The last save failed"
+            : save.mirrorWarning
+              ? `Saved${save.mirrorWarning ? ` — ${save.mirrorWarning}` : ""}`
+              : "All changes saved";
+          return (
+            <span
+              className={`ss-chip ${chipClass}`}
+              title={title}
+              role={failed ? "button" : undefined}
+              tabIndex={failed ? 0 : undefined}
+              onClick={failed ? save.retry : undefined}
+              onKeyDown={
+                failed
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        save.retry();
+                      }
+                    }
+                  : undefined
+              }
+            >
+              <span className="dot" />
+              {chipText}
+            </span>
+          );
+        })()}
+        {save.mirrorWarning && (
+          <span
+            className="ss-chip warn"
+            title={`${save.mirrorWarning} (click to retry the sync)`}
+            role="button"
+            tabIndex={0}
+            onClick={save.retryMirror}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                save.retryMirror();
+              }
+            }}
+          >
+            <span className="dot" />
+            device sync
+          </span>
+        )}
         <span className="ss-chip">
           <span className="dot" style={{ background: sync.connected ? "var(--ss-ok)" : "var(--ss-faint)" }} />
           {sync.remotes > 0 ? `${sync.remotes} phone${sync.remotes > 1 ? "s" : ""} connected` : "sync idle"}
@@ -782,7 +865,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
             dirty={dirty}
             onBufferChange={onBufferChange}
             ensureBuffer={ensureBuffer}
-            onFlushSave={() => flushSave()}
+            onFlushSave={() => save.saveNow()}
             onCommonSource={setCommonSource}
             onOverride={setSlideOverride}
             version={version}

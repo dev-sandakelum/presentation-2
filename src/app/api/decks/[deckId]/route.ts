@@ -8,16 +8,7 @@ import {
   updateDeckMeta,
   validDeckId,
 } from "@/lib/stagesmith/store";
-
-const THEME_URL_RE = /url\(\s*['"]?(\.\/|\.\.\/)([^'")]+)['"]?\s*\)/g;
-
-/** rewrite ./… url() refs in theme.css to same-origin asset URLs (plan §5.2) */
-function rewriteThemeCss(css: string, deckId: string): string {
-  return css.replace(THEME_URL_RE, (_m, prefix, rest) => {
-    const rel = prefix === "./" ? rest : prefix === "../" ? rest : rest;
-    return `url('/api/assets/${deckId}/assets/${rest.replace(/^assets\//, "")}')`;
-  });
-}
+import { rewriteThemeCss } from "@/lib/stagesmith/themeurl";
 
 /** GET /api/decks/<id> — full deck + file list + theme css */
 export async function GET(

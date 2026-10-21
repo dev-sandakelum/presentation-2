@@ -30,10 +30,29 @@ import { starterDeckFiles, templateByKey } from "./templates";
 /* ------------------------------------------------------------------ */
 
 const DB_NAME = "chasse-studio";
-const DB_VERSION = 1;
-const STORE_DECKS = "decks"; // deckId → BrowserDeckRecord
+const DB_VERSION = 2; // v2: asset blobs move into their own store (see below)
+const STORE_DECKS = "decks"; // deckId → StoredDeckRecord (text files + meta, NO blobs)
 const STORE_SNAPSHOTS = "snapshots"; // `${deckId}::${name}` → { files, assets }
 const STORE_HANDLES = "handles"; // deckId → FileSystemDirectoryHandle
+const STORE_BLOBS = "blobs"; // `${deckId}::${path}` → { blob: Blob, display?: string }
+
+/* v2 migration note — WHY the split store exists:
+ *
+ * v1 kept every asset Blob INSIDE the deck record, so every save re-put the
+ * whole record — all 26 slides AND every large PNG — through IndexedDB in ONE
+ * transaction. That is exactly what triggers Chromium's "Failed to write
+ * blobs (IOError)" on big decks and makes a one-character edit take minutes
+ * (it also re-mirrored every file to the device folder on every save).
+ *
+ * v2 stores asset blobs one-per-key in STORE_BLOBS. The deck record becomes
+ * a small text-only object, and saves write only what actually changed
+ * (content-hash diff for text files, object-identity/size diff for blobs).
+ * Records written by v1 (assets still inline) are migrated lazily: on load
+ * their blobs are served from the inline copy; the first successful persist
+ * writes each blob to STORE_BLOBS and then re-puts the record stripped —
+ * blobs are always written BEFORE the record is stripped, so a failed
+ * migration never loses data (it simply retries next time).
+ */
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -50,6 +69,9 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_DECKS)) db.createObjectStore(STORE_DECKS, { keyPath: "id" });
       if (!db.objectStoreNames.contains(STORE_SNAPSHOTS)) db.createObjectStore(STORE_SNAPSHOTS);
       if (!db.objectStoreNames.contains(STORE_HANDLES)) db.createObjectStore(STORE_HANDLES);
+      // v2: one key per asset blob (no data moves here — see the lazy
+      // migration in loadRecordFromDb / persistRecord)
+      if (!db.objectStoreNames.contains(STORE_BLOBS)) db.createObjectStore(STORE_BLOBS);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error ?? new Error("IndexedDB open failed"));
@@ -95,6 +117,101 @@ function idbDelete(store: string, key: IDBValidKey): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
+/* blob store helpers (v2)                                             */
+/* ------------------------------------------------------------------ */
+
+interface StoredBlob {
+  blob: Blob;
+  /** original upload file name — shown in the UI when it differs from the
+   *  sanitized on-disk name (uploads get safe, space-free file names) */
+  display?: string;
+}
+
+const blobKey = (deckId: string, path: string) => `${deckId}::${path}`;
+
+function blobKeyRange(deckId: string): IDBKeyRange {
+  return IDBKeyRange.bound(`${deckId}::`, `${deckId}::\uffff`);
+}
+
+async function putBlob(deckId: string, path: string, value: StoredBlob): Promise<void> {
+  await idbPut(STORE_BLOBS, value, blobKey(deckId, path));
+}
+
+async function deleteBlob(deckId: string, path: string): Promise<void> {
+  await idbDelete(STORE_BLOBS, blobKey(deckId, path));
+}
+
+/** every stored blob of a deck: path → { blob, display } */
+async function getBlobIndex(deckId: string): Promise<Map<string, StoredBlob>> {
+  const out = new Map<string, StoredBlob>();
+  try {
+    const db = await openDb();
+    const rows = await new Promise<Array<[string, StoredBlob]>>((resolve, reject) => {
+      const t = db.transaction(STORE_BLOBS, "readonly");
+      const req = t.objectStore(STORE_BLOBS).getAll(blobKeyRange(deckId));
+      // keys come in the same order — pair them up
+      const keysReq = t.objectStore(STORE_BLOBS).getAllKeys(blobKeyRange(deckId));
+      t.oncomplete = () =>
+        resolve((req.result ?? []).map((v, i) => [String(keysReq.result?.[i] ?? "").slice(deckId.length + 2), v as StoredBlob]));
+      t.onerror = () => reject(t.error ?? new Error("blob index read failed"));
+      t.onabort = () => reject(t.error ?? new Error("blob index read aborted"));
+    });
+    for (const [p, v] of rows) if (v && v.blob) out.set(p, v);
+  } catch {
+    /* unreadable blob store → treat as empty (persist re-writes on demand) */
+  }
+  return out;
+}
+
+async function deleteAllBlobs(deckId: string): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(STORE_BLOBS, "readwrite");
+      const s = t.objectStore(STORE_BLOBS);
+      const req = s.getAllKeys(blobKeyRange(deckId));
+      req.onsuccess = () => {
+        for (const k of req.result) s.delete(k);
+      };
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error ?? new Error("blob delete failed"));
+      t.onabort = () => reject(t.error ?? new Error("blob delete aborted"));
+    });
+  } catch {
+    /* best effort */
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* save-error messages that explain the storage situation              */
+/* ------------------------------------------------------------------ */
+
+/** wrap a raw IndexedDB error with a human explanation + quota context.
+ *  "Failed to write blobs (IOError)" is Chromium's quota/IO failure — the
+ *  user needs to know it's the storage layer, and how full it is. */
+async function describeStorageError(e: unknown): Promise<Error> {
+  const err = e instanceof Error ? e : new Error(String(e));
+  const msg = `${err.name || ""} ${err.message || err}`.trim();
+  if (!/Failed to write blobs|IOError|QuotaExceeded|quota|AbortError/i.test(msg)) return err;
+  let extra = "";
+  try {
+    if (typeof navigator !== "undefined" && navigator.storage?.estimate) {
+      const est = await navigator.storage.estimate();
+      if (est.usage != null && est.quota != null) {
+        const mb = (n: number) => `${Math.round(n / 1024 / 1024)} MB`;
+        extra = ` — browser storage: ${mb(est.usage)} used of ${mb(est.quota)} available`;
+      }
+    }
+  } catch {
+    /* estimate unavailable */
+  }
+  const reason = /quota/i.test(msg) ? "Browser storage is full" : "The browser couldn't write its storage (disk IO error — check free disk space, antivirus locks, or other running instances)";
+  const out = new Error(`${reason}${extra}. Your edits are kept — saving will retry.`);
+  out.cause = err;
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
 /* record shape + helpers                                              */
 /* ------------------------------------------------------------------ */
 
@@ -105,10 +222,56 @@ export interface BrowserDeckRecord {
   modified: string;
   /** every text file of the project (deck.json, theme.css, slides/, …) */
   files: Record<string, string>;
-  /** binary assets by path (assets/…) */
+  /** binary assets by path (assets/…) — RUNTIME map only since the v2 split:
+   *  persisted one-per-key in the blob store, merged back on load. */
   assets: Record<string, Blob>;
   /** a device folder is attached (File System Access API) */
   device?: boolean;
+}
+
+/** what actually goes into STORE_DECKS — the record minus its blobs */
+function stripAssets(rec: BrowserDeckRecord): BrowserDeckRecord {
+  const { assets: _assets, ...rest } = rec;
+  return rest as BrowserDeckRecord;
+}
+
+/* per-deck snapshot of the LAST PERSISTED state — the diff baseline that
+ * makes saves write only what changed (files by content hash, blobs by
+ * identity/size). Initialized on first load; updated by persistRecord. */
+interface PersistedState {
+  /** content hash per file path (of the persisted record) */
+  files: Record<string, string>;
+  /** `title|modified|created|device` of the persisted record */
+  meta: string;
+  /** blob-store index: path → { size, type, display } */
+  blobs: Map<string, { size: number; type: string; display?: string }>;
+  /** same-session identity of the last persisted blob — catches same-size
+   *  replacements that the size+type compare would miss */
+  blobObjects: Map<string, Blob>;
+}
+const persistedStates = new Map<string, PersistedState>();
+
+function fileHash(content: string): string {
+  return `${content.length}:${fnv1a(content)}`;
+}
+
+function metaKeyOf(rec: BrowserDeckRecord): string {
+  return `${rec.title}|${rec.modified}|${rec.created}|${rec.device ? 1 : 0}`;
+}
+
+async function initPersistedState(deckId: string, raw: BrowserDeckRecord | null): Promise<PersistedState> {
+  const files: Record<string, string> = {};
+  if (raw) for (const p of Object.keys(raw.files)) files[p] = fileHash(raw.files[p]);
+  const blobs = new Map<string, { size: number; type: string; display?: string }>();
+  const blobObjects = new Map<string, Blob>();
+  for (const [p, v] of await getBlobIndex(deckId)) {
+    blobs.set(p, { size: v.blob.size, type: v.blob.type, display: v.display });
+    blobObjects.set(p, v.blob);
+    if (v.display) setDisplayName(deckId, p, v.display);
+  }
+  const st: PersistedState = { files, meta: raw ? metaKeyOf(raw) : "", blobs, blobObjects };
+  persistedStates.set(deckId, st);
+  return st;
 }
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -164,14 +327,110 @@ function writeDeck(rec: BrowserDeckRecord, deck: DeckJson): void {
 }
 
 export async function putRecord(rec: BrowserDeckRecord, mirror = true): Promise<BrowserDeckRecord> {
-  await idbPut(STORE_DECKS, rec);
+  await persistRecord(rec);
   recordCache.set(rec.id, rec);
-  if (mirror && deviceMirror) deviceMirror(rec).catch(() => {}); // best-effort write-through
+  if (mirror && deviceMirror) {
+    // best-effort write-through — the mirror runs its own serialized queue and
+    // reports failures through the mirror-status listener (never blocks saves)
+    deviceMirror(rec, lastMirrorChanges.get(rec.id) ?? emptyChanges).catch(() => {});
+  }
   return rec;
 }
 
-/** device write-through hook (set by device.ts — avoids a cyclic import) */
-type DeviceMirror = (rec: BrowserDeckRecord) => Promise<void>;
+export interface MirrorChanges {
+  files: string[];
+  assets: string[];
+  removedFiles: string[];
+  removedAssets: string[];
+}
+const emptyChanges: MirrorChanges = { files: [], assets: [], removedFiles: [], removedAssets: [] };
+const lastMirrorChanges = new Map<string, MirrorChanges>();
+
+/** the diff-based write path — THE fix for slow / failed saves:
+ *  1. write each CHANGED asset blob (own small transaction, no giant put)
+ *  2. delete removed blob keys
+ *  3. put the small text-only deck record if meta/files changed
+ *  Nothing is written at all when nothing changed. Blobs are written before
+ *  the record is stripped, so a v1 record with inline assets can never lose
+ *  them to a failed migration. */
+async function persistRecord(rec: BrowserDeckRecord): Promise<void> {
+  let st = persistedStates.get(rec.id);
+  if (!st) st = await initPersistedState(rec.id, null);
+
+  const changedFiles: string[] = [];
+  const removedFiles: string[] = [];
+  for (const p of Object.keys(rec.files)) {
+    if (st.files[p] !== fileHash(rec.files[p])) changedFiles.push(p);
+  }
+  for (const p of Object.keys(st.files)) if (rec.files[p] === undefined) removedFiles.push(p);
+  const metaChanged = st.meta !== metaKeyOf(rec);
+
+  const changedAssets: string[] = [];
+  const removedAssets: string[] = [];
+  for (const p of Object.keys(rec.assets)) {
+    const blob = rec.assets[p];
+    const prev = st.blobs.get(p);
+    if (!prev) {
+      changedAssets.push(p); // new, or a v1 inline blob pending migration
+    } else {
+      const persistedObj = st.blobObjects.get(p);
+      // identity compare when we know the persisted object (same session);
+      // size+type compare across sessions (fresh objects from IDB)
+      const same = persistedObj ? persistedObj === blob : prev.size === blob.size && prev.type === blob.type;
+      if (!same) changedAssets.push(p);
+    }
+  }
+  for (const p of Object.keys(st.blobs)) if (rec.assets[p] === undefined) removedAssets.push(p);
+
+  const nothingChanged =
+    !changedFiles.length && !removedFiles.length && !changedAssets.length && !removedAssets.length && !metaChanged;
+
+  if (nothingChanged) {
+    lastMirrorChanges.set(rec.id, emptyChanges);
+    return;
+  }
+
+  try {
+    // 1) changed blobs — each its own small transaction
+    for (const p of changedAssets) {
+      await putBlob(rec.id, p, { blob: rec.assets[p], display: getDisplayName(rec.id, p) });
+    }
+    // 2) removals
+    for (const p of removedAssets) await deleteBlob(rec.id, p);
+    // 3) the small record (never carries blobs)
+    if (metaChanged || changedFiles.length || removedFiles.length) {
+      await idbPut(STORE_DECKS, stripAssets(rec));
+    }
+  } catch (e) {
+    throw await describeStorageError(e);
+  }
+
+  // advance the diff baseline
+  for (const p of changedFiles) st.files[p] = fileHash(rec.files[p]);
+  for (const p of removedFiles) delete st.files[p];
+  st.meta = metaKeyOf(rec);
+  for (const p of changedAssets) {
+    const blob = rec.assets[p];
+    st.blobs.set(p, { size: blob.size, type: blob.type, display: getDisplayName(rec.id, p) });
+    st.blobObjects.set(p, blob);
+  }
+  for (const p of removedAssets) {
+    st.blobs.delete(p);
+    st.blobObjects.delete(p);
+    clearDisplayName(rec.id, p);
+  }
+
+  lastMirrorChanges.set(rec.id, {
+    files: changedFiles,
+    assets: changedAssets,
+    removedFiles,
+    removedAssets,
+  });
+}
+
+/** device write-through hook (set by device.ts — avoids a cyclic import).
+ *  Receives the CHANGED paths so the mirror can skip unchanged files. */
+type DeviceMirror = (rec: BrowserDeckRecord, changes: MirrorChanges) => Promise<void>;
 let deviceMirror: DeviceMirror | null = null;
 export function setDeviceMirror(fn: DeviceMirror | null): void {
   deviceMirror = fn;
@@ -183,11 +442,10 @@ const recordCache = new Map<string, BrowserDeckRecord>();
 export async function hasDeck(deckId: string): Promise<boolean> {
   if (recordCache.has(deckId)) return true;
   try {
+    // NOTE: never cache the raw record here — it hasn't been through
+    // loadRecordFromDb (blob-store merge + v1 migration handling) yet
     const rec = await idbGet<BrowserDeckRecord>(STORE_DECKS, deckId);
-    if (rec) {
-      recordCache.set(deckId, rec);
-      return true;
-    }
+    return Boolean(rec);
   } catch {
     /* ignore */
   }
@@ -198,12 +456,34 @@ export async function getRecord(deckId: string): Promise<BrowserDeckRecord | nul
   const cached = recordCache.get(deckId);
   if (cached) return cached;
   try {
-    const rec = await idbGet<BrowserDeckRecord>(STORE_DECKS, deckId);
+    const rec = await loadRecordFromDb(deckId);
     if (rec) recordCache.set(deckId, rec);
     return rec ?? null;
   } catch {
     return null;
   }
+}
+
+/** read a deck record + merge its blob-store assets back into the runtime
+ *  map. v1 records (assets inline) are served from the inline copy first;
+ *  the next successful persist migrates them into the blob store. */
+async function loadRecordFromDb(deckId: string): Promise<BrowserDeckRecord | null> {
+  const raw = (await idbGet<BrowserDeckRecord>(STORE_DECKS, deckId)) ?? null;
+  if (!raw) return null;
+  const inline = (raw as BrowserDeckRecord & { assets?: Record<string, Blob> }).assets ?? {};
+  const rec = stripAssets(raw);
+  rec.assets = {};
+  const blobs = await getBlobIndex(deckId);
+  for (const [p, v] of blobs) rec.assets[p] = v.blob;
+  // legacy v1 blobs that were never migrated still win (they're the copy the
+  // record actually carries) — persist will move them into the blob store
+  for (const p of Object.keys(inline)) if (!rec.assets[p]) rec.assets[p] = inline[p];
+  // seed the diff baseline: files/meta from the raw record; the blob index
+  // deliberately EXCLUDES not-yet-migrated inline assets → they count as
+  // "changed" on the next persist, which completes the migration safely
+  const st = await initPersistedState(deckId, raw);
+  for (const p of Object.keys(inline)) st.blobs.delete(p);
+  return rec;
 }
 
 export async function uniqueDeckId(base: string, taken?: Set<string>): Promise<string> {
@@ -289,16 +569,33 @@ async function summaryOf(rec: BrowserDeckRecord): Promise<DeckSummary> {
     signature: signatureOf(rec),
     store: "browser",
     device: rec.device,
+    folderName: await deviceFolderNameOf(rec),
     cover: deck ? coverOf(deck, rec, themeCss) : undefined,
   };
 }
 
+/** best-effort device folder name for summaries (delete-confirmation needs
+ *  it — decks can share a title, folders can't) */
+async function deviceFolderNameOf(rec: BrowserDeckRecord): Promise<string | undefined> {
+  if (!rec.device) return undefined;
+  try {
+    const { getDeviceHandle } = await import("./device");
+    const handle = await getDeviceHandle(rec.id);
+    return handle?.name ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function listDecks(): Promise<DeckSummary[]> {
-  const recs = await idbGetAll<BrowserDeckRecord>(STORE_DECKS);
+  const raws = await idbGetAll<BrowserDeckRecord>(STORE_DECKS);
   const out: DeckSummary[] = [];
-  for (const rec of recs) {
-    if (!validDeckId(rec.id)) continue;
-    recordCache.set(rec.id, rec);
+  for (const raw of raws) {
+    if (!validDeckId(raw.id)) continue;
+    // merge blob-store assets + v1 inline handling before using the record
+    // (raw records from STORE_DECKS carry no assets since the v2 split)
+    const rec = await getRecord(raw.id);
+    if (!rec) continue;
     out.push(await summaryOf(rec));
   }
   out.sort((a, b) => (a.modified < b.modified ? 1 : -1));
@@ -308,6 +605,7 @@ export async function listDecks(): Promise<DeckSummary[]> {
 export async function getBundle(deckId: string): Promise<DeckBundle | null> {
   const rec = await getRecord(deckId);
   if (!rec) return null;
+  if (rec.device) await syncDeviceAssets(deckId, rec); // pick up hand-copied files
   const deck = parseDeck(rec);
   return {
     deck,
@@ -355,7 +653,10 @@ export async function createStarterDeck(title: string): Promise<{ deck: DeckJson
 export async function deleteDeck(deckId: string): Promise<void> {
   await idbDelete(STORE_DECKS, deckId);
   await idbDelete(STORE_HANDLES, deckId);
+  await deleteAllBlobs(deckId);
   recordCache.delete(deckId);
+  persistedStates.delete(deckId);
+  displayNames.delete(deckId);
   // drop snapshots
   try {
     const db = await openDb();
@@ -408,10 +709,20 @@ export async function readFile(deckId: string, rel: string): Promise<string> {
 }
 
 export async function saveFile(deckId: string, rel: string, content: string): Promise<string> {
+  return saveFiles(deckId, [{ path: rel, content }]);
+}
+
+/** batch save — the editor's save queue writes all dirty buffers in ONE
+ *  record mutation + ONE diff-based persist (previously each file saved
+ *  re-put the whole deck — N files × full-deck write). */
+export async function saveFiles(deckId: string, entries: Array<{ path: string; content: string }>): Promise<string> {
   const rec = await getRecord(deckId);
   if (!rec) throw new Error("Deck not found");
-  if (!validRelPath(rel)) throw new Error(`Illegal path: ${rel}`);
-  rec.files[rel] = content;
+  if (!entries.length) return signatureOf(rec);
+  for (const e of entries) {
+    if (!validRelPath(e.path)) throw new Error(`Illegal path: ${e.path}`);
+    rec.files[e.path] = e.content;
+  }
   rec.modified = new Date().toISOString();
   await putRecord(rec, true);
   return signatureOf(rec);
@@ -623,24 +934,94 @@ export async function restoreSnapshot(deckId: string, name: string): Promise<voi
 /* assets + code files                                                 */
 /* ------------------------------------------------------------------ */
 
+/* original upload display names (sanitized file names stay URL/disk-safe;
+ * the UI shows what the user actually uploaded). Persisted alongside each
+ * blob in the blob store; held here for fast access. */
+const displayNames = new Map<string, Map<string, string>>();
+
+function setDisplayName(deckId: string, path: string, display: string): void {
+  let m = displayNames.get(deckId);
+  if (!m) {
+    m = new Map();
+    displayNames.set(deckId, m);
+  }
+  m.set(path, display);
+}
+function getDisplayName(deckId: string, path: string): string | undefined {
+  return displayNames.get(deckId)?.get(path);
+}
+function clearDisplayName(deckId: string, path: string): void {
+  displayNames.get(deckId)?.delete(path);
+}
+
+/** make an upload file name disk/URL-safe: lowercase ascii, no spaces, no
+ *  brackets/#/% — the ORIGINAL name is kept as the display label. */
+export function sanitizeAssetName(original: string): string {
+  const dot = original.lastIndexOf(".");
+  const ext = dot > 0 ? original.slice(dot).toLowerCase().replace(/[^.a-z0-9]/g, "") : "";
+  const base = (dot > 0 ? original.slice(0, dot) : original)
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "") // strip accents left by NFKD
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  const safeBase = base || "asset";
+  return ext && /^\.[a-z0-9]+$/.test(ext) ? `${safeBase}${ext}` : safeBase;
+}
+
 export async function listAssets(deckId: string): Promise<FileRow[]> {
   const rec = await getRecord(deckId);
   if (!rec) return [];
+  if (rec.device) await syncDeviceAssets(deckId, rec); // pick up hand-copied files
   const mt = Date.parse(rec.modified) || Date.now();
   return Object.keys(rec.assets)
     // hidden segments (.stagesmith/ legacy thumb caches, .DS_Store…) are
     // internal junk, not deck content — never show them in the Assets panel
     .filter((p) => !p.split("/").some((seg) => seg.startsWith(".")))
     .sort()
-    .map((p) => ({ path: p, mtime: mt, size: rec.assets[p].size }));
+    .map((p) => ({ path: p, mtime: mt, size: rec.assets[p].size, display: getDisplayName(deckId, p) }));
 }
 
-export async function uploadAssets(deckId: string, files: File[]): Promise<Array<{ path: string }>> {
+/** scan the device folder's assets/ dir and import files that aren't in the
+ *  browser store yet (hand-copied images appear after a refresh/reopen).
+ *  Throttled — the scan costs a folder iteration + cheap file stats. */
+const deviceScanAt = new Map<string, number>();
+let deviceScanInFlight: Promise<void> = Promise.resolve();
+
+export async function syncDeviceAssets(deckId: string, rec: BrowserDeckRecord): Promise<void> {
+  const last = deviceScanAt.get(deckId) ?? 0;
+  if (Date.now() - last < 3000) return;
+  deviceScanAt.set(deckId, Date.now());
+  // serialize scans (folder iteration isn't free) and coalesce bursts
+  const run = deviceScanInFlight.then(async () => {
+    try {
+      const { scanDeviceAssets } = await import("./device");
+      const found = await scanDeviceAssets(deckId);
+      if (!found || !found.length) return;
+      let added = false;
+      for (const f of found) {
+        if (rec.assets[f.path] === undefined) {
+          rec.assets[f.path] = f.file;
+          added = true;
+        }
+      }
+      if (added) await putRecord(rec, true); // diff persist: only the NEW blobs
+    } catch {
+      /* no permission / no handle — the studio keeps working from the store */
+    }
+  });
+  deviceScanInFlight = run.catch(() => {});
+  await run;
+}
+
+export async function uploadAssets(deckId: string, files: File[]): Promise<Array<{ path: string; display: string }>> {
   const rec = await getRecord(deckId);
   if (!rec) throw new Error("Deck not found");
-  const uploaded: Array<{ path: string }> = [];
+  const uploaded: Array<{ path: string; display: string }> = [];
   for (const f of files) {
-    let name = f.name.replace(/[/\\]/g, "-");
+    // sanitized, URL/disk-safe file name; original kept as the display label
+    let name = sanitizeAssetName(f.name) || "asset";
     let p = `assets/${name}`;
     let n = 2;
     while (rec.assets[p] !== undefined || rec.files[p] !== undefined) {
@@ -649,7 +1030,8 @@ export async function uploadAssets(deckId: string, files: File[]): Promise<Array
       n++;
     }
     rec.assets[p] = f;
-    uploaded.push({ path: p });
+    setDisplayName(deckId, p, f.name);
+    uploaded.push({ path: p, display: f.name });
   }
   rec.modified = new Date().toISOString();
   await putRecord(rec, true);
@@ -702,52 +1084,82 @@ export async function deleteCodeFile(deckId: string, path: string): Promise<void
 /* ------------------------------------------------------------------ */
 
 const assetMapCache = new Map<string, { sig: string; map: Record<string, string> }>();
+/** concurrent getAssetMap calls share ONE conversion run (StageFrame, the
+ *  present-mode preloader and the neighbour warmer all ask at boot — without
+ *  this, big browser decks would convert every blob to a data URL 3×) */
+const assetMapInflight = new Map<string, Promise<Record<string, string> | null>>();
 
 /** deck assets as name → data-URL map for the runtime config (local decks).
  *  Cached per signature — converted blobs are reused across slides/frames. */
 export async function getAssetMap(deckId: string, version: string | number): Promise<Record<string, string> | null> {
-  const rec = await getRecord(deckId);
-  if (!rec) return null;
-  const sig = String(version) || signatureOf(rec);
-  const hit = assetMapCache.get(deckId);
-  if (hit && hit.sig === sig) return hit.map;
-  const keys = Object.keys(rec.assets);
-  if (!keys.length) {
-    assetMapCache.set(deckId, { sig, map: {} });
-    return {};
-  }
-  const map: Record<string, string> = {};
-  for (const k of keys) {
-    try {
-      map[k] = await blobToDataUrl(rec.assets[k]);
-    } catch {
-      /* skip broken asset */
+  const hit = assetMapInflight.get(deckId);
+  if (hit) return hit;
+  const p = (async () => {
+    const rec = await getRecord(deckId);
+    if (!rec) return null;
+    const sig = String(version) || signatureOf(rec);
+    const cached = assetMapCache.get(deckId);
+    if (cached && cached.sig === sig) return cached.map;
+    const keys = Object.keys(rec.assets);
+    if (!keys.length) {
+      assetMapCache.set(deckId, { sig, map: {} });
+      return {};
     }
+    const map: Record<string, string> = {};
+    for (const k of keys) {
+      try {
+        map[k] = await blobToDataUrl(rec.assets[k]);
+      } catch {
+        /* skip broken asset */
+      }
+    }
+    assetMapCache.set(deckId, { sig, map });
+    return map;
+  })();
+  assetMapInflight.set(deckId, p);
+  try {
+    return await p;
+  } finally {
+    assetMapInflight.delete(deckId);
   }
-  assetMapCache.set(deckId, { sig, map });
-  return map;
 }
 
 /* ------------------------------------------------------------------ */
-/* asset preview URLs (editor Assets panel — Problem 06)               */
+/* asset preview URLs (editor Assets panel — Problem 06 + spaces fix)   */
 /* ------------------------------------------------------------------ */
 
-const objectUrlCache = new Map<string, { url: string; size: number; type: string }>();
+const objectUrlCache = new Map<string, { url: string; size: number; type: string; lastModified: number }>();
 
 /** a deck asset as a loadable URL for UI previews (browser decks have no
  *  /api/assets route — serve the IndexedDB blob as an object URL).
- *  Cached per deck+path; re-created when the stored blob changes. */
+ *  Cached per deck+path; re-created when the stored blob changes.
+ *  Device decks ALSO fall back to the file on disk, so a file copied into
+ *  the folder by hand still previews even before the folder scan imports it. */
 export async function getAssetUrl(deckId: string, path: string): Promise<string | null> {
   const rec = await getRecord(deckId);
   if (!rec) return null;
-  const blob = rec.assets[path];
-  if (!blob) return null;
   const key = `${deckId}::${path}`;
+  let blob: Blob | null = rec.assets[path] ?? null;
+  let lastModified = 0;
+  if (!blob && rec.device) {
+    // not in the store (yet) — read it straight from the device folder
+    try {
+      const { readDeviceAsset } = await import("./device");
+      const file = await readDeviceAsset(deckId, path);
+      if (file) {
+        blob = file;
+        lastModified = file.lastModified;
+      }
+    } catch {
+      /* no handle / no permission */
+    }
+  }
+  if (!blob) return null;
   const hit = objectUrlCache.get(key);
-  if (hit && hit.size === blob.size && hit.type === blob.type) return hit.url;
+  if (hit && hit.size === blob.size && hit.type === blob.type && hit.lastModified === lastModified) return hit.url;
   if (hit) URL.revokeObjectURL(hit.url);
   const url = URL.createObjectURL(blob);
-  objectUrlCache.set(key, { url, size: blob.size, type: blob.type });
+  objectUrlCache.set(key, { url, size: blob.size, type: blob.type, lastModified });
   return url;
 }
 

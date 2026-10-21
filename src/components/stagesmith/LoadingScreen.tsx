@@ -41,6 +41,20 @@ export interface LoadingScreenProps {
   onRetry?: () => void;
   /** when true the overlay fades out (300 ms) instead of unmounting cold */
   leaving?: boolean;
+  /** calm information line under the progress bar ("Large deck — this can
+   *  take a moment") — never an error, just honesty about slow loads */
+  hint?: string | null;
+  /** soft warning text (failed item / seems-stuck) — shows Retry + optional
+   *  Continue-anywhere buttons WITHOUT switching to the red error state */
+  warning?: string | null;
+  /** retry handler for the soft warning area */
+  onWarningRetry?: () => void;
+  /** "Continue anyway" — proceed past failed items (renders as placeholders) */
+  onContinue?: () => void;
+  continueLabel?: string;
+  /** always-available escape from the load (Back) */
+  onCancel?: () => void;
+  cancelLabel?: string;
 }
 
 export function LoadingScreen({
@@ -50,13 +64,34 @@ export function LoadingScreen({
   error = null,
   onRetry,
   leaving = false,
+  hint = null,
+  warning = null,
+  onWarningRetry,
+  onContinue,
+  continueLabel = "Continue anyway",
+  onCancel,
+  cancelLabel = "Back",
 }: LoadingScreenProps) {
   // keep the busy page out of the a11y tree / focus order while the overlay
   // is up (released again once the fade-out begins)
   useInertLock(!leaving);
   if (typeof document === "undefined") return null;
   return createPortal(
-    <SplashVisual mode={mode} progress={progress} message={message} error={error} onRetry={onRetry} leaving={leaving} />,
+    <SplashVisual
+      mode={mode}
+      progress={progress}
+      message={message}
+      error={error}
+      onRetry={onRetry}
+      leaving={leaving}
+      hint={hint}
+      warning={warning}
+      onWarningRetry={onWarningRetry}
+      onContinue={onContinue}
+      continueLabel={continueLabel}
+      onCancel={onCancel}
+      cancelLabel={cancelLabel}
+    />,
     document.body,
   );
 }
@@ -122,6 +157,13 @@ export interface SplashVeilProps {
   onRetry?: () => void;
   /** different timing (e.g. present mode: show immediately, real progress) */
   timing?: Partial<Record<SplashTimingKey, number>>;
+  hint?: string | null;
+  warning?: string | null;
+  onWarningRetry?: () => void;
+  onContinue?: () => void;
+  continueLabel?: string;
+  onCancel?: () => void;
+  cancelLabel?: string;
 }
 
 /**
@@ -130,7 +172,22 @@ export interface SplashVeilProps {
  * `minVisibleMs`, fades over `fadeMs`, and unmounts. Errors bypass the
  * show-delay (a failed load should be loud, not invisible).
  */
-export function SplashVeil({ active, mode = "app", progress = null, message = null, error = null, onRetry, timing }: SplashVeilProps) {
+export function SplashVeil({
+  active,
+  mode = "app",
+  progress = null,
+  message = null,
+  error = null,
+  onRetry,
+  timing,
+  hint = null,
+  warning = null,
+  onWarningRetry,
+  onContinue,
+  continueLabel = "Continue anyway",
+  onCancel,
+  cancelLabel = "Back",
+}: SplashVeilProps) {
   const t = { ...SPLASH_TIMING, ...timing };
   const [shown, setShown] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -182,6 +239,13 @@ export function SplashVeil({ active, mode = "app", progress = null, message = nu
       error={error}
       onRetry={onRetry}
       leaving={leaving}
+      hint={hint}
+      warning={warning}
+      onWarningRetry={onWarningRetry}
+      onContinue={onContinue}
+      continueLabel={continueLabel}
+      onCancel={onCancel}
+      cancelLabel={cancelLabel}
     />
   );
 }
