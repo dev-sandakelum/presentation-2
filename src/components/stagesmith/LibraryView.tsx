@@ -6,6 +6,7 @@ import { api, getCapabilities, defaultStore, type DeleteDeckResult, type FsBrows
 import type { DeckSummary } from "@/lib/stagesmith/types";
 import { openDeviceProject, supportsDeviceFolders } from "@/lib/stagesmith/device";
 import { desktopFsStatus } from "@/lib/stagesmith/desktop-store";
+import { DesktopFsError } from "@/lib/stagesmith/desktop-fs";
 import { useDesktopFs } from "@/hooks/useDesktopFs";
 import {
   grantNextPending,
@@ -89,15 +90,29 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
     desktopFs.status?.available === true && !(desktopFs.status.configured && desktopFs.status.valid);
   const chooseDesktopFolder = async () => {
     try {
-      const s = await desktopFs.choose();
+      const s = await desktopFs.choose({
+        // the in-app dialog's copy — the native chooser carries it from here
+        title: "Choose your Chassé decks folder",
+        startPath: desktopFs.status?.path || undefined,
+        hint: "Chassé Studio keeps each deck as a plain folder here — deck.json, slides and assets together.",
+      });
       if (s?.configured && s.valid) {
         toast({ title: "Decks folder ready", description: s.path });
         refresh();
       } else if (s?.configured && !s.valid) {
         toast({ title: "Folder not usable", description: `${s.path} — ${s.problem === "no-permission" ? "no write permission" : "folder missing"}`, variant: "destructive" });
       }
+      // {cancelled:true} — quiet by design: the user closed the chooser,
+      // nothing changed, no error to show
     } catch (e) {
-      toast({ title: "Could not choose folder", description: (e as Error).message, variant: "destructive" });
+      if (e instanceof DesktopFsError && e.code === "BUSY") {
+        toast({ title: "Folder chooser already open", description: "Finish or close the open chooser first." });
+      } else if (e instanceof DesktopFsError && e.code === "NO_OS_PERMISSION") {
+        // the desktop app's own verdict — missing or read-only folder
+        toast({ title: "Folder not usable", description: e.message, variant: "destructive" });
+      } else {
+        toast({ title: "Could not choose folder", description: (e as Error).message, variant: "destructive" });
+      }
     }
   };
 

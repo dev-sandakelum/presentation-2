@@ -38,6 +38,8 @@ import {
   fsReadText,
   fsUploadFile,
   fsWriteText,
+  isDesktopRootCancelled,
+  type DesktopChooseRootOptions,
   type DesktopDeckInfo,
   type DesktopRootInfo,
 } from "./desktop-fs";
@@ -117,21 +119,39 @@ export async function isDesktopFsActive(): Promise<boolean> {
   return s.available && s.configured && s.valid;
 }
 
-/** "Choose folder" action (native dialog on the Java side — user gesture). */
-export async function chooseDesktopRoot(): Promise<DesktopFsStatus> {
+/**
+ * "Choose folder" action (native dialog on the Java side — user gesture).
+ * Accepts the in-app dialog's copy: {title, startPath, hint}. A cancelled
+ * chooser ({cancelled:true}, or the legacy CANCELLED error) and a BUSY answer
+ * (a chooser is already open) keep the current state quietly; any other
+ * failure (e.g. NO_OS_PERMISSION for a read-only or missing folder) is
+ * re-thrown AFTER the state is refreshed, so the dialog can say what went
+ * wrong while the banner still reflects reality.
+ */
+export async function chooseDesktopRoot(
+  options: DesktopChooseRootOptions = {},
+): Promise<DesktopFsStatus> {
   const available = await desktopFsCapabilityCached();
   if (!available) return NOT_AVAILABLE;
+  let failure: unknown = null;
   try {
-    rootInfo = await fsChooseRoot();
+    const r = await fsChooseRoot(options);
+    if (!isDesktopRootCancelled(r)) {
+      rootInfo = r;
+    }
   } catch (e) {
-    // cancelled / failed — keep whatever state we had
-    if (!(e instanceof DesktopFsError && e.code === "CANCELLED")) {
+    if (e instanceof DesktopFsError && (e.code === "CANCELLED" || e.code === "BUSY")) {
+      // cancelled, or a chooser is already open — keep whatever state we had
+    } else {
+      failure = e; // remembered — surfaced after the refresh below
       rootInfo = await fsGetRoot().catch(() => null);
     }
   }
   statusPromise = null;
   invalidateDeckIndex();
-  return refreshDesktopFsStatus();
+  const status = await refreshDesktopFsStatus();
+  if (failure) throw failure;
+  return status;
 }
 
 /* ------------------------------------------------------------------ */

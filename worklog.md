@@ -405,3 +405,17 @@ Work Log:
 
 Stage Summary:
 - Requirement coverage: check-on-open for every device deck (granted silent / prompt banner / denied quiet / missing re-attach), one-click shared-parent re-grant, "Allow on every visit" hint, focus re-check, storage.persist(), pre-action guards for save/delete/import/present, and the delete toast never lies about deletion.
+---
+Task ID: chooser-1
+Agent: main (Super Z)
+Task: fs.chooseRoot parity with the upgraded Java side — optional {title, startPath, hint} params, {cancelled:true} as a clean (non-error) outcome, BUSY when a chooser is already open, and NO_OS_PERMISSION surfaced with the desktop app's exact message.
+
+Work Log:
+- desktop-fs.ts: fsChooseRoot(options?) sends {cmd, title?, startPath?, hint?}; new DesktopChooseRootOptions / DesktopRootCancelled {cancelled:true} / DesktopChooseRootResult union + isDesktopRootCancelled() guard; "BUSY" added to DesktopFsErrorCode (byte-compatible with chasse-desktop's new CODE_BUSY).
+- desktop-store.ts: chooseDesktopRoot(options) — {cancelled:true} (and legacy CANCELLED) and BUSY keep the current state quietly; any other failure re-reads fs.getRoot, refreshes status and re-throws after, so the banner stays truthful AND the caller can show why (read-only / missing folder).
+- useDesktopFs.ts: choose(options?) passes the copy through; on failure refreshes the banner state, then re-throws.
+- LibraryView.tsx: the desktop-folder banner now feeds the native chooser — title "Choose your Chassé decks folder", startPath = last known status.path, hint "Chassé Studio keeps each deck as a plain folder here — deck.json, slides and assets together."; cancelled → silent (nothing changed); BUSY → "Folder chooser already open" toast; NO_OS_PERMISSION → destructive toast with the Java side's exact message.
+- bun run lint: 0 problems · bunx tsc --noEmit: clean.
+
+Stage Summary:
+- The web side of the v2 contract now matches the Java chooser exactly: params in ({title, startPath, hint}), clean cancel out ({cancelled:true}), BUSY + NO_OS_PERMISSION as typed, user-visible outcomes. No store fallback, permission or persistence behavior changed — only the chooseRoot surface.

@@ -31,6 +31,7 @@ export type DesktopFsErrorCode =
   | "IO_ERROR"
   | "ALREADY_EXISTS"
   | "BAD_REQUEST"
+  | "BUSY"
   | "CANCELLED"
   | "FORBIDDEN"
   | "UNKNOWN_CMD";
@@ -53,11 +54,35 @@ export interface DesktopHello {
   capabilities: string[];
 }
 
-/** fs.getRoot / fs.chooseRoot result */
+/** fs.getRoot result / fs.chooseRoot success result */
 export interface DesktopRootInfo {
   configured: boolean;
   path: string;
   valid: boolean;
+}
+
+/** optional fs.chooseRoot params — the in-app dialog's copy for the native chooser */
+export interface DesktopChooseRootOptions {
+  /** the native chooser's dialog title */
+  title?: string;
+  /** open the chooser at this folder when it still exists (otherwise the
+   *  desktop app falls back to the last used folder) */
+  startPath?: string;
+  /** one line of context shown inside the native chooser */
+  hint?: string;
+}
+
+/** fs.chooseRoot cancel answer — a clean outcome, NOT an error */
+export interface DesktopRootCancelled {
+  cancelled: true;
+}
+
+/** fs.chooseRoot → {cancelled:true} | {configured, path, valid} */
+export type DesktopChooseRootResult = DesktopRootInfo | DesktopRootCancelled;
+
+/** narrows the cancel answer ({cancelled:true}) of a chooseRoot result */
+export function isDesktopRootCancelled(r: DesktopChooseRootResult): r is DesktopRootCancelled {
+  return (r as DesktopRootCancelled)?.cancelled === true;
 }
 
 /** one row of fs.listDecks */
@@ -165,9 +190,15 @@ export function fsGetRoot(): Promise<DesktopRootInfo> {
   return cmd<DesktopRootInfo>("fs.getRoot");
 }
 
-/** fs.chooseRoot → native folder dialog on the Java side; {configured,…} */
-export function fsChooseRoot(): Promise<DesktopRootInfo> {
-  return cmd<DesktopRootInfo>("fs.chooseRoot");
+/**
+ * fs.chooseRoot {title?, startPath?, hint?} → native folder dialog on the Java
+ * side. Answers {cancelled:true} when the user closes or cancels the chooser
+ * (not an error), or {configured, path, valid} after a successful pick.
+ */
+export function fsChooseRoot(
+  options: DesktopChooseRootOptions = {},
+): Promise<DesktopChooseRootResult> {
+  return cmd<DesktopChooseRootResult>("fs.chooseRoot", options);
 }
 
 /** fs.listDecks → [{id, title, folder, slides, modified}] */

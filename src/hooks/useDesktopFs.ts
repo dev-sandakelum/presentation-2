@@ -8,9 +8,10 @@
  *                     Java side — nothing expires)
  *   · valid         — the folder exists and is writable
  *   · path/problem  — what to show when the folder needs (re-)choosing
- * plus `choose()` — the native folder dialog on the Java side — and
- * `refresh()`. Rendering never waits: the snapshot starts `null` and fills
- * in asynchronously, exactly like the device-access states.
+ * plus `choose(options)` — the native folder dialog on the Java side, fed
+ * with the in-app dialog's title/startPath/hint — and `refresh()`.
+ * Rendering never waits: the snapshot starts `null` and fills in
+ * asynchronously, exactly like the device-access states.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -21,10 +22,11 @@ import {
   refreshDesktopFsStatus,
   type DesktopFsStatus,
 } from "@/lib/stagesmith/desktop-store";
+import type { DesktopChooseRootOptions } from "@/lib/stagesmith/desktop-fs";
 
 export function useDesktopFs(): {
   status: DesktopFsStatus | null;
-  choose: () => Promise<DesktopFsStatus | null>;
+  choose: (options?: DesktopChooseRootOptions) => Promise<DesktopFsStatus | null>;
   refresh: () => void;
   choosing: boolean;
 } {
@@ -45,18 +47,24 @@ export function useDesktopFs(): {
     refreshDesktopFsStatus().then((s) => setStatus(s)).catch(() => {});
   }, []);
 
-  const choose = useCallback(async () => {
+  const choose = useCallback(async (options?: DesktopChooseRootOptions) => {
     if (choosing) return null;
     setChoosing(true);
     try {
       // the native dialog opens on the Java side — this click is the gesture
-      const s = await chooseDesktopRoot();
+      const s = await chooseDesktopRoot(options);
       setStatus(s);
       return s;
+    } catch (e) {
+      // the chooser failed (e.g. NO_OS_PERMISSION for a read-only folder) —
+      // keep the banner in sync with the unchanged root, then let the
+      // caller's dialog say what went wrong
+      refresh();
+      throw e;
     } finally {
       setChoosing(false);
     }
-  }, [choosing]);
+  }, [choosing, refresh]);
 
   // re-check when the window regains focus (the user may have picked the
   // folder in another window, or the disk may have changed)
