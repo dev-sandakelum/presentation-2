@@ -34,6 +34,16 @@ export function download(url: string, filename?: string) {
   document.body.appendChild(a);
   a.click();
   a.remove();
+  // feedback hook (useDownloadFeedback listens): in the browser this is the
+  // ONLY download feedback there is; in the desktop app the bridge's native
+  // download events take over (the DOM event is then ignored by the hook)
+  try {
+    window.dispatchEvent(
+      new CustomEvent("ss-export-started", { detail: { url, filename: filename ?? null } }),
+    );
+  } catch {
+    /* non-essential */
+  }
 }
 
 export async function copyText(text: string): Promise<boolean> {
@@ -41,7 +51,22 @@ export async function copyText(text: string): Promise<boolean> {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
-    return false;
+    // JCEF and some embedded webviews reject async clipboard writes; the
+    // synchronous fallback still works there (and in insecure contexts)
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
   }
 }
 

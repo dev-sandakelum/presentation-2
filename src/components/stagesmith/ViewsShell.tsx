@@ -9,6 +9,7 @@ import { PresentView } from "./PresentView";
 import { RemoteView } from "./RemoteView";
 import { installDeviceMirror } from "@/lib/stagesmith/device";
 import { useAccessLifecycle } from "@/hooks/useDeviceAccess";
+import { useDownloadFeedback } from "@/hooks/useDownloadFeedback";
 import { SplashVeil, type SplashMode } from "./LoadingScreen";
 import type { SsNav } from "./shared";
 
@@ -53,6 +54,10 @@ export function ViewsShell({
   // state drives the banner/cards, and focus flips re-check in the
   // background. Never blocks rendering.
   useAccessLifecycle();
+
+  // export/download feedback toasts — desktop bridge events in the app,
+  // the ss-export-started DOM event in a normal browser
+  useDownloadFeedback();
 
   /* ---------- pending-navigation loading veil ---------- */
   const viewKey = `${remote ?? ""}|${deck ?? ""}|${present ?? ""}`;

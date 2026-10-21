@@ -40,6 +40,36 @@ async function j<T>(res: Response): Promise<T> {
 }
 
 /* ------------------------------------------------------------------ */
+/* object-URL hygiene (export blobs must not leak)                      */
+/* ------------------------------------------------------------------ */
+
+const EXPORT_URL_TTL_MS = 10 * 60 * 1000; // 10 min — survives even a slow native Save-as
+const exportUrls = new Set<string>();
+let unloadHookInstalled = false;
+
+/**
+ * Every object URL created for an export is eventually revoked: after 10
+ * minutes at the latest (a native Save-as dialog can stay open for minutes),
+ * and immediately when the page hides (an export URL is never needed again
+ * after the click that consumed it).
+ */
+function scheduleObjectUrlRevoke(url: string): void {
+  exportUrls.add(url);
+  setTimeout(() => {
+    exportUrls.delete(url);
+    URL.revokeObjectURL(url);
+  }, EXPORT_URL_TTL_MS);
+  if (!unloadHookInstalled && typeof window !== "undefined") {
+    unloadHookInstalled = true;
+    const flush = () => {
+      for (const u of [...exportUrls]) URL.revokeObjectURL(u);
+      exportUrls.clear();
+    };
+    window.addEventListener("pagehide", flush);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /* capabilities                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -767,7 +797,12 @@ export const api = {
       blob = await res.blob();
       filename = `${deckId}.${format === "smdeck" ? "smdeck" : "deck.tsx"}`;
     }
-    return { url: URL.createObjectURL(blob), filename };
+    // object URL hygiene (Task: memory): revoked after a generous window —
+    // long enough that even a desktop Save-as dialog can't outlive it, short
+    // enough that repeated exports never accumulate. Also flushed on unload.
+    const url = URL.createObjectURL(blob);
+    scheduleObjectUrlRevoke(url);
+    return { url, filename };
   },
 
   /* ---------------- server-only helpers ---------------- */

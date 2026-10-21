@@ -63,7 +63,20 @@ export type DesktopBridgeEvent =
   | { type: "server-log"; ts: number; level: "info" | "warn" | "error"; text: string }
   | { type: "sync-state"; deckId: string; state: SyncState }
   | { type: "sync-presence"; deckId: string; remotes: number }
-  | { type: "sync-token"; deckId: string; token: string };
+  | { type: "sync-token"; deckId: string; token: string }
+  /** Native download pipeline (desktop ≥1.3.0): every stage of a download
+   *  the user started from the page (exports, .smdeck, .deck.tsx…). */
+  | {
+      type: "download";
+      stage: "started" | "saving" | "progress" | "completed" | "failed";
+      id: number;
+      fileName: string;
+      path?: string;
+      error?: string;
+      percent?: number;
+      receivedBytes?: number;
+      totalBytes?: number;
+    };
 
 /* ------------------------------------------------------------------ */
 /* Singleton state                                                     */

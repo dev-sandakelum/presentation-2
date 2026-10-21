@@ -396,7 +396,9 @@ export async function snapshotDeck(deckId: string, tag: string): Promise<string>
 export async function listSnapshots(deckId: string): Promise<string[]> {
   try {
     const dir = deckPath(deckId, ".stagesmith/snapshots");
-    return (await fs.readdir(dir)).filter((f) => f.endsWith(".json")).sort().reverse();
+    // extensionless names — the SAME form create returns and restore accepts
+    // (with ".json" in the list, the dashboard's restore always failed)
+    return (await fs.readdir(dir)).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort().reverse();
   } catch {
     return [];
   }

@@ -963,7 +963,12 @@ function ImportSlideItems({ onAdd }: { onAdd: (opts: { code?: string; label?: st
               if (code.trim()) onAdd({ code, label: "Pasted slide" });
               else toast({ title: "Clipboard is empty" });
             })
-            .catch(() => toast({ title: "Clipboard blocked by the browser" }));
+            .catch(() =>
+              toast({
+                title: "Clipboard is not available in this window",
+                description: "Paste with Ctrl+V into the code editor instead.",
+              }),
+            );
         }}
       >
         <Import size={14} /> Paste TSX from clipboard

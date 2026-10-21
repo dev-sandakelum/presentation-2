@@ -11,6 +11,7 @@ import { LiveThumb } from "./LiveThumb";
 import { useDeckUpdated, useSync } from "@/hooks/useSync";
 import { useAssetPreloader } from "@/hooks/useAssetPreloader";
 import { useAccessStates } from "@/hooks/useDeviceAccess";
+import { useToast } from "@/hooks/use-toast";
 import { requestDeckAccess, pickFolderAgain } from "@/lib/stagesmith/permission";
 import { AccessBanner } from "./AccessBanner";
 import { BrandLogo } from "./BrandLogo";
@@ -101,6 +102,21 @@ export function PresentView({
   const [bootRetry, setBootRetry] = useState(0);
   const [bootError, setBootError] = useState<string | null>(null);
   const [stageReady, setStageReady] = useState(false);
+  const { toast } = useToast();
+
+  // fullscreen can be refused (some embedded webviews, OSR mode, browser
+  // policy) — the silent .catch in toggleFull leaves the user wondering why
+  // F did nothing; this turns the browser's own fullscreenerror event into
+  // honest feedback instead
+  useEffect(() => {
+    const onFsError = () =>
+      toast({
+        title: "Fullscreen is not available here",
+        description: "The window does not allow fullscreen — the stage stays at its current size.",
+      });
+    document.addEventListener("fullscreenerror", onFsError);
+    return () => document.removeEventListener("fullscreenerror", onFsError);
+  }, [toast]);
 
   /* present-mode permission notice — the deck itself always presents from
    * the browser copy (never fails halfway); a lapsed folder permission or a

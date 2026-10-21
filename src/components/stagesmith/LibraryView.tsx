@@ -7,6 +7,7 @@ import type { DeckSummary } from "@/lib/stagesmith/types";
 import { openDeviceProject, supportsDeviceFolders } from "@/lib/stagesmith/device";
 import { desktopFsStatus } from "@/lib/stagesmith/desktop-store";
 import { DesktopFsError } from "@/lib/stagesmith/desktop-fs";
+import { hasCefQuery } from "@/lib/stagesmith/desktop-bridge";
 import { useDesktopFs } from "@/hooks/useDesktopFs";
 import {
   grantNextPending,
@@ -27,6 +28,7 @@ import { ToastAction } from "@/components/ui/toast";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -88,6 +90,10 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
   const desktopFs = useDesktopFs();
   const desktopNeedsFolder =
     desktopFs.status?.available === true && !(desktopFs.status.configured && desktopFs.status.valid);
+  // an OLDER desktop build (bridge present, but no "fs" capability): the
+  // app falls back to browser storage and the user should update the desktop
+  // app to get the folder-backed, never-expiring storage
+  const legacyDesktopApp = desktopFs.status !== null && !desktopFs.status.available && hasCefQuery();
   const chooseDesktopFolder = async () => {
     try {
       const s = await desktopFs.choose({
@@ -318,6 +324,38 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
 
         {/* the desktop decks-folder banner — first run (no folder yet) or a
             folder that went missing / read-only since the last run */}
+        {legacyDesktopApp && (
+          <div
+            role="status"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+              flexWrap: "wrap",
+              border: "1px solid var(--ss-line-strong)",
+              borderRadius: 14,
+              padding: "12px 16px",
+              marginBottom: 18,
+              background: "var(--ss-panel)",
+            }}
+          >
+            <MonitorSmartphone size={18} style={{ flex: "0 0 auto", opacity: 0.8 }} />
+            <div style={{ flex: "1 1 320px", minWidth: 240, font: "400 12.5px/1.6 var(--ss-fb)", color: "var(--ss-mut)" }}>
+              <span style={{ font: "600 13.5px var(--ss-fb)", color: "var(--ss-ink)" }}>Desktop app update available — </span>
+              this installed desktop build is older than the studio, so decks are kept in this
+              browser’s storage. Updating the app lets it own a real decks folder for you.
+            </div>
+            <a
+              className="ss-btn"
+              href="https://github.com/dev-sandakelum/chasse-desktop/releases"
+              target="_blank"
+              rel="noreferrer"
+              style={{ flex: "0 0 auto", textDecoration: "none" }}
+            >
+              Get the latest release
+            </a>
+          </div>
+        )}
         {desktopNeedsFolder && (
           <div
             role="status"
@@ -425,6 +463,7 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
         <DialogContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)", borderRadius: 18 }}>
           <DialogHeader>
             <DialogTitle style={{ color: "var(--ss-ink)", font: "italic 600 17px var(--ss-fbrand)", letterSpacing: "-.01em" }}>New deck</DialogTitle>
+            <DialogDescription className="sr-only">Give the deck a title — the starter deck is created with two slides.</DialogDescription>
           </DialogHeader>
           <div style={{ display: "grid", gap: 12, padding: "4px 0" }}>
             <div className="ss-label">Deck title</div>
@@ -455,6 +494,9 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
         <DialogContent style={{ background: "var(--ss-pop)", borderColor: "var(--ss-line)", color: "var(--ss-ink)", borderRadius: 18, maxWidth: 560 }}>
           <DialogHeader>
             <DialogTitle style={{ color: "var(--ss-ink)", font: "italic 600 17px var(--ss-fbrand)", letterSpacing: "-.01em" }}>Import a deck</DialogTitle>
+            <DialogDescription className="sr-only">
+              Import a deck from a .smdeck or .zip file, a .deck.tsx file, or paste slide TSX code.
+            </DialogDescription>
           </DialogHeader>
           <div style={{ display: "grid", gap: 16, padding: "4px 0" }}>
             <div>
@@ -616,6 +658,9 @@ function OpenFolderDialog({
       >
         <DialogHeader>
           <DialogTitle style={{ color: "var(--ss-ink)", font: "700 17px var(--ss-fd)" }}>Open existing folder</DialogTitle>
+          <DialogDescription className="sr-only">
+            Open a deck from a device folder, this server’s decks folder, or a downloaded .smdeck file.
+          </DialogDescription>
         </DialogHeader>
 
         <div style={{ display: "grid", gap: 14, padding: "2px 0 6px" }}>

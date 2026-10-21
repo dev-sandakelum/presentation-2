@@ -955,16 +955,17 @@ function clearDisplayName(deckId: string, path: string): void {
   displayNames.get(deckId)?.delete(path);
 }
 
-/** make an upload file name disk/URL-safe: lowercase ascii, no spaces, no
- *  brackets/#/% — the ORIGINAL name is kept as the display label. */
+/** make an upload file name disk/URL-safe: spaces/punctuation → dashes,
+ *  Unicode letters and numbers KEPT (CJK, Cyrillic, …) — the ORIGINAL name is
+ *  kept as the display label. ASCII-only stripping used to collapse names
+ *  like "背景 图像.png" to a bare ".png" (a hidden dotfile). */
 export function sanitizeAssetName(original: string): string {
   const dot = original.lastIndexOf(".");
   const ext = dot > 0 ? original.slice(dot).toLowerCase().replace(/[^.a-z0-9]/g, "") : "";
   const base = (dot > 0 ? original.slice(0, dot) : original)
-    .toLowerCase()
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "") // strip accents left by NFKD
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 60);
   const safeBase = base || "asset";

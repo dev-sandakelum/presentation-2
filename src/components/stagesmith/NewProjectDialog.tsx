@@ -22,10 +22,12 @@ import {
   supportsDeviceFolders,
 } from "@/lib/stagesmith/device";
 import type { SsNav } from "./shared";
+import { PromptDialog } from "./PromptDialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -76,6 +78,10 @@ export function NewProjectDialog({
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // in-app replacement for the window.prompt() of "New folder here"
+  // (window.prompt never renders inside the desktop webview)
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFolderBusy, setNewFolderBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -250,6 +256,10 @@ export function NewProjectDialog({
       >
         <DialogHeader>
           <DialogTitle style={{ color: "var(--ss-ink)", font: "700 17px var(--ss-fd)" }}>New project</DialogTitle>
+          <DialogDescription className="sr-only">
+            Choose a name and where the new deck project should live: the desktop app’s decks folder,
+            a device folder, the server’s decks folder, or a downloaded starter zip.
+          </DialogDescription>
         </DialogHeader>
 
         <div style={{ display: "grid", gap: 14, padding: "2px 0 6px" }}>
@@ -391,17 +401,7 @@ export function NewProjectDialog({
                   style={{ height: 28, width: 28, flex: "none" }}
                   title="New folder here"
                   disabled={busy || !browse?.writable}
-                  onClick={async () => {
-                    const label = window.prompt("New folder name", "presentations");
-                    const clean = (label || "").trim();
-                    if (!clean || !browse) return;
-                    try {
-                      const made = await api.createFolder(`${browse.path}/${clean.replace(/[/\\]/g, "-")}`);
-                      setDir(made.path);
-                    } catch (e) {
-                      setError((e as Error).message);
-                    }
-                  }}
+                  onClick={() => setNewFolderOpen(true)}
                 >
                   <FolderPlus size={13} />
                 </button>
@@ -562,6 +562,32 @@ export function NewProjectDialog({
           )}
         </DialogFooter>
       </DialogContent>
+      {/* nested dialogs are fine in Radix — the prompt for a new folder
+          only opens from the server-location browser */}
+      <PromptDialog
+        open={newFolderOpen}
+        onOpenChange={setNewFolderOpen}
+        title="New folder"
+        description={browse ? `Inside ${browse.path}` : undefined}
+        label="Folder name"
+        initial="presentations"
+        confirmLabel="Create folder"
+        busy={newFolderBusy}
+        onResolve={async (label) => {
+          const clean = (label || "").trim();
+          if (!clean || !browse) return;
+          setNewFolderBusy(true);
+          try {
+            const made = await api.createFolder(`${browse.path}/${clean.replace(/[/\\]/g, "-")}`);
+            setDir(made.path);
+            setNewFolderOpen(false);
+          } catch (e) {
+            setError((e as Error).message);
+          } finally {
+            setNewFolderBusy(false);
+          }
+        }}
+      />
     </Dialog>
   );
 }

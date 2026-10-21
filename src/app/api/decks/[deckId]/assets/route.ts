@@ -53,7 +53,19 @@ export async function POST(
 }
 
 function sanitize(name: string): string {
-  return String(name).replace(/[^\w.\-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "asset";
+  // keep Unicode letters and numbers (CJK, Cyrillic, …) — only path
+  // separators, control characters and friends become dashes. ASCII-only
+  // stripping used to collapse names like "背景 图像.png" to ".png", which
+  // the UI then treats as a hidden dotfile. Disk and URLs handle Unicode
+  // fine (asset serving is percent-encoded per segment).
+  return (
+    String(name)
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "") // strip accents left by NFKD
+      .replace(/[^\p{L}\p{N}.\-]+/gu, "-")
+      .replace(/^[.\-]+|[.\-]+$/g, "") // never a leading dot (hidden file) or trailing junk
+      .slice(0, 80) || "asset"
+  );
 }
 
 async function walkAssets(deckId: string): Promise<string[]> {

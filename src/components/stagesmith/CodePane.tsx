@@ -13,6 +13,7 @@ import { resolveCode } from "./StageFrame";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { PromptDialog } from "./PromptDialog";
 
 /** the whole CodeMirror stack loads in its own chunk — fast first paint */
 const CmEditor = dynamic(() => import("./editor/CmEditor"), {
@@ -417,6 +418,11 @@ function SourceEditor(props: {
   const { layer, deckId, deck, files, sel } = props;
   const { toast } = useToast();
   const [scope, setScope] = useState<"common" | "override">("common");
+  // the in-app name dialog for new code files (window.prompt never renders
+  // inside the desktop webview — JCEF drops JS dialogs without a handler)
+  const [newNameOpen, setNewNameOpen] = useState(false);
+  const [newNameBusy, setNewNameBusy] = useState(false);
+  const [newNameError, setNewNameError] = useState<string | null>(null);
 
   const common = layer === "bg" ? deck.bg : deck.overlay;
   const override = sel ? (layer === "bg" ? sel.bg : sel.overlay) : undefined;
@@ -457,9 +463,9 @@ function SourceEditor(props: {
     }
   };
 
-  const newCodeFile = async () => {
-    const name = window.prompt(`New ${layer} code file name (without .tsx)`, `custom-${layer}`);
-    if (!name) return;
+  const newCodeFile = () => setNewNameOpen(true);
+
+  const createCodeFile = async (name: string) => {
     const path = `${layer}/${name.replace(/[^\w-]/g, "-").replace(/\.tsx$/, "")}.tsx`;
     const template =
       layer === "bg"
@@ -485,12 +491,18 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
   );
 }
 `;
+    setNewNameBusy(true);
+    setNewNameError(null);
     try {
       await api.saveFile(deckId, path, template);
       setSource({ type: "code", path });
+      setNewNameOpen(false);
       toast({ title: `Created ${path}` });
     } catch (e) {
-      toast({ title: "Could not create file", description: (e as Error).message, variant: "destructive" });
+      // the dialog stays open with the reason — confirm becomes Retry
+      setNewNameError((e as Error).message);
+    } finally {
+      setNewNameBusy(false);
     }
   };
 
@@ -590,6 +602,25 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
           />
         )}
       </div>
+      <PromptDialog
+        open={newNameOpen}
+        onOpenChange={(o) => {
+          if (!o) {
+            setNewNameOpen(false);
+            setNewNameError(null);
+          }
+        }}
+        title={`New ${layer} code file`}
+        description="A starter component will be created for you."
+        label={`File name (without .tsx)`}
+        initial={`custom-${layer}`}
+        confirmLabel="Create"
+        busy={newNameBusy}
+        error={newNameError}
+        onResolve={(name) => {
+          if (name) void createCodeFile(name);
+        }}
+      />
     </div>
   );
 }
