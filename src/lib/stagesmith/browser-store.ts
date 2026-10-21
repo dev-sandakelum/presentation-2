@@ -653,6 +653,7 @@ export async function createStarterDeck(title: string): Promise<{ deck: DeckJson
 export async function deleteDeck(deckId: string): Promise<void> {
   await idbDelete(STORE_DECKS, deckId);
   await idbDelete(STORE_HANDLES, deckId);
+  await idbDelete(STORE_HANDLES, `__parent__::${deckId}`);
   await deleteAllBlobs(deckId);
   recordCache.delete(deckId);
   persistedStates.delete(deckId);
@@ -1169,29 +1170,10 @@ export async function getAssetUrl(deckId: string, path: string): Promise<string 
 
 type DirHandle = any; // FileSystemDirectoryHandle — typed loosely for TS<->lib compat
 
-export async function setDeviceHandle(deckId: string, handle: DirHandle): Promise<void> {
-  await idbPut(STORE_HANDLES, handle, deckId);
-}
+export type HandleAccessState = "granted" | "prompt" | "denied" | "missing";
 
-export async function getDeviceHandle(deckId: string): Promise<DirHandle | null> {
-  try {
-    const h = await idbGet<DirHandle>(STORE_HANDLES, deckId);
-    return h ?? null;
-  } catch {
-    return null;
-  }
-}
-
-export async function removeDeviceHandle(deckId: string): Promise<void> {
-  await idbDelete(STORE_HANDLES, deckId);
-  const rec = await getRecord(deckId);
-  if (rec) {
-    rec.device = false;
-    await putRecord(rec);
-  }
-}
-
-/** permission helpers (must run on a user gesture for "prompt" → grant) */
+/** ask the browser whether THIS handle may be written — no prompt, no gesture.
+ *  Returns the raw queryPermission state ("denied" also covers broken handles). */
 export async function handlePermission(handle: DirHandle): Promise<PermissionState> {
   if (!handle?.queryPermission) return "denied";
   try {
@@ -1201,11 +1183,150 @@ export async function handlePermission(handle: DirHandle): Promise<PermissionSta
   }
 }
 
+/** true when the folder the handle points at still exists on disk.
+ *  Probes by reading the FIRST directory entry (cheap, permission-gated);
+ *  a moved / renamed / deleted folder rejects with NotFoundError. */
+export async function folderUsable(handle: DirHandle): Promise<boolean> {
+  try {
+    const it = handle.entries();
+    await it.next();
+    return true;
+  } catch (e) {
+    return (e as Error)?.name === "NotFoundError" ? false : true;
+  }
+}
+
+/** The full truth about one handle, used everywhere a write is about to run:
+ *  queryPermission first (free), then — because a handle derived from a
+ *  granted PARENT folder can report "prompt" while actually working — a
+ *  one-entry probe as the tie-breaker. "granted" also verifies the folder
+ *  still exists, so a moved folder surfaces as "missing" instead of
+ *  failing half-way through a save. */
+export async function handleAccessState(handle: DirHandle): Promise<HandleAccessState> {
+  if (!handle) return "missing";
+  const queried = await handlePermission(handle);
+  if (queried === "granted") {
+    return (await folderUsable(handle)) ? "granted" : "missing";
+  }
+  // query says prompt/denied — the derived-handle case may still work
+  try {
+    await handle.entries().next();
+    return "granted";
+  } catch (e) {
+    if ((e as Error)?.name === "NotFoundError") return "missing";
+    return queried === "denied" ? "denied" : "prompt";
+  }
+}
+
+/** requestPermission on a handle — ONLY meaningful inside a user gesture
+ *  (banner/card button, Ctrl+S, a confirmed delete). Without one Chromium
+ *  rejects with SecurityError, which is a TEMPORARY "still prompt", never a
+ *  hard "denied" — mapping it there would pin the deck in the wrong state. */
 export async function requestHandlePermission(handle: DirHandle): Promise<PermissionState> {
   if (!handle?.requestPermission) return "denied";
   try {
     return await handle.requestPermission({ mode: "readwrite" });
+  } catch (e) {
+    return (e as Error)?.name === "SecurityError" ? "prompt" : "denied";
+  }
+}
+
+/* ---- durable storage for handles ---------------------------------- */
+
+let persistAsked = false;
+
+/** ask the browser to keep our IndexedDB (and thus the stored handles)
+ *  out of automatic eviction — called once per session when a handle is
+ *  stored (Chrome shows no UI for this unless it decides to). */
+async function askPersistOnce(): Promise<void> {
+  if (persistAsked) return;
+  persistAsked = true;
+  try {
+    await navigator.storage?.persist?.();
   } catch {
-    return "denied";
+    /* unsupported / private mode — handles still work, just less durable */
+  }
+}
+
+export async function setDeviceHandle(deckId: string, handle: DirHandle): Promise<void> {
+  await idbPut(STORE_HANDLES, handle, deckId);
+  void askPersistOnce();
+}
+
+/** dev-only simulated handles (see permission.ts __ssAccessSim) — IndexedDB
+ *  can't structured-clone functions, so simulated FolderHandles live in
+ *  memory instead of STORE_HANDLES. The map is only ever populated by the
+ *  dev simulation hook; production builds never touch it. */
+const devHandleOverrides = new Map<string, DirHandle>();
+
+export function setDevHandleOverride(deckId: string, handle: DirHandle | null): void {
+  if (handle === null) devHandleOverrides.delete(deckId);
+  else devHandleOverrides.set(deckId, handle);
+}
+
+export async function getDeviceHandle(deckId: string): Promise<DirHandle | null> {
+  if (devHandleOverrides.size) {
+    const override = devHandleOverrides.get(deckId);
+    if (override) return override;
+  }
+  try {
+    const h = await idbGet<DirHandle>(STORE_HANDLES, deckId);
+    return h ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** ids of every deck that mirrors to a device folder (permission checks,
+ *  the access banner, one-click re-grants). Lightweight — no blob merges. */
+export async function listDeviceDeckIds(): Promise<string[]> {
+  try {
+    const raws = await idbGetAll<BrowserDeckRecord>(STORE_DECKS);
+    return raws.filter((r) => r && r.device && validDeckId(r.id)).map((r) => r.id);
+  } catch {
+    return [];
+  }
+}
+
+/* ---- shared parent folders (one click re-grants every deck inside) --
+ *
+ * When "New project…"/"Open folder…" put the deck in a SUBFOLDER of the
+ * picked root, the picked root is ALSO remembered (composite key inside
+ * STORE_HANDLES — no DB migration needed). Requesting permission on that
+ * one parent and re-deriving every child handle from it restores access to
+ * all of the decks it contains with a single permission click. */
+
+const PARENT_KEY = (deckId: string) => `__parent__::${deckId}`;
+
+export interface DeviceParentInfo {
+  parent: DirHandle;
+  childName: string;
+}
+
+export async function setDeviceParent(deckId: string, parent: DirHandle, childName: string): Promise<void> {
+  await idbPut(STORE_HANDLES, { parent, childName } satisfies DeviceParentInfo, PARENT_KEY(deckId));
+  void askPersistOnce();
+}
+
+export async function getDeviceParent(deckId: string): Promise<DeviceParentInfo | null> {
+  try {
+    const v = await idbGet<DeviceParentInfo>(STORE_HANDLES, PARENT_KEY(deckId));
+    return v && v.parent && typeof v.childName === "string" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearDeviceParent(deckId: string): Promise<void> {
+  await idbDelete(STORE_HANDLES, PARENT_KEY(deckId));
+}
+
+export async function removeDeviceHandle(deckId: string): Promise<void> {
+  await idbDelete(STORE_HANDLES, deckId);
+  await idbDelete(STORE_HANDLES, PARENT_KEY(deckId));
+  const rec = await getRecord(deckId);
+  if (rec) {
+    rec.device = false;
+    await putRecord(rec);
   }
 }

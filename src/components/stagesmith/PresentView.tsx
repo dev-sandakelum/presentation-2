@@ -10,6 +10,9 @@ import { QrPanel } from "./QrPanel";
 import { LiveThumb } from "./LiveThumb";
 import { useDeckUpdated, useSync } from "@/hooks/useSync";
 import { useAssetPreloader } from "@/hooks/useAssetPreloader";
+import { useAccessStates } from "@/hooks/useDeviceAccess";
+import { requestDeckAccess, pickFolderAgain } from "@/lib/stagesmith/permission";
+import { AccessBanner } from "./AccessBanner";
 import { BrandLogo } from "./BrandLogo";
 import { SplashVeil } from "./LoadingScreen";
 import { download, type SsNav } from "./shared";
@@ -98,6 +101,13 @@ export function PresentView({
   const [bootRetry, setBootRetry] = useState(0);
   const [bootError, setBootError] = useState<string | null>(null);
   const [stageReady, setStageReady] = useState(false);
+
+  /* present-mode permission notice — the deck itself always presents from
+   * the browser copy (never fails halfway); a lapsed folder permission or a
+   * gone folder shows the same compact Allow/Choose-folder step as the
+   * dashboard, so access gets restored before the user returns to editing */
+  const access = useAccessStates();
+  const presentAccessState = bundle?.device ? access[deckId] : undefined;
   const start = fromParam ? Math.max(0, Number(fromParam) || 0) : 0;
   const preload = useAssetPreloader(deck, deckId, version, { startIndex: start });
   // the deck starts once the critical window settled AND any failed item was
@@ -506,6 +516,32 @@ export function PresentView({
         <div className="ss-bgload" role="status" aria-live="polite">
           <Loader2 size={12} style={{ animation: "ss-rot 1s linear infinite" }} />
           Loading more slides…
+        </div>
+      )}
+
+      {/* lapsed device-folder permission — compact, floating under the top
+          chrome; presenting itself is unaffected (browser copy) */}
+      {(presentAccessState === "prompt" || presentAccessState === "missing") && (
+        <div
+          style={{
+            position: "absolute",
+            top: 58,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 45,
+            width: "min(560px, calc(100vw - 32px))",
+            pointerEvents: "auto",
+          }}
+        >
+          <AccessBanner
+            compact
+            count={presentAccessState === "prompt" ? 1 : 0}
+            missing={presentAccessState === "missing"}
+            actionLabel={presentAccessState === "missing" ? "Choose folder again" : undefined}
+            onAllow={() =>
+              void (presentAccessState === "missing" ? pickFolderAgain(deckId) : requestDeckAccess(deckId))
+            }
+          />
         </div>
       )}
 

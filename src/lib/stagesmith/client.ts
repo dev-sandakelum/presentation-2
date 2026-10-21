@@ -3,6 +3,7 @@
 import type { DeckJson, DeckBundle, DeckSummary, FileRow, Source, ThemeMode } from "./types";
 import * as local from "./browser-store";
 import * as transfer from "./transfer";
+import { ensureWriteAccess, maybeRequestWriteAccess } from "./permission";
 
 export type { DeckBundle };
 
@@ -219,6 +220,12 @@ export interface DeleteDeckResult {
   /** device-folder cleanup couldn't remove the files (permission/IO) —
    *  shown in the delete toast instead of being swallowed */
   folderCleanupError?: string;
+  /** nothing was deleted: the device folder's write permission lapsed (or
+   *  the folder is gone) and couldn't be restored with the delete click's
+   *  gesture. The UI offers "Allow access" and re-runs the delete after
+   *  the grant — "Deck deleted" is never claimed while the files remain. */
+  needsAccess?: boolean;
+  accessState?: "prompt" | "denied" | "missing";
 }
 
 /** import result row */
@@ -306,18 +313,31 @@ export const api = {
     if (await isLocalDeck(deckId)) {
       const rec = await local.getRecord(deckId);
       let root = "this browser";
-      let folderCleanupError: string | undefined;
       if (rec?.device) {
-        // best-effort: also remove the deck's files from the device folder
-        // (permission may have lapsed — the browser-store copy is deleted
-        // regardless, and the reason is surfaced instead of swallowed)
+        // deleting a device deck must also remove its FILES — that needs the
+        // folder's write permission. Try to restore it while the confirm
+        // click's gesture is live; if it can't be restored, NOTHING is
+        // deleted (neither files nor the browser copy) and the reason is
+        // returned so the UI can offer "Allow access" and finish the delete.
         const { cleanupDeviceProject, deviceFolderName } = await import("./device");
         root = (await deviceFolderName(deckId)) ?? deckId;
+        const state = await ensureWriteAccess(deckId);
+        if (state !== "granted") {
+          return {
+            ok: false,
+            removed: false,
+            external: false,
+            root,
+            needsAccess: true,
+            accessState: state === "missing" ? "missing" : state,
+          };
+        }
         const cleanup = await cleanupDeviceProject(deckId);
-        folderCleanupError = cleanup.error;
+        await local.deleteDeck(deckId);
+        return { ok: true, removed: true, external: false, root, folderCleanupError: cleanup.error };
       }
       await local.deleteDeck(deckId);
-      return { ok: true, removed: true, external: false, root, folderCleanupError };
+      return { ok: true, removed: true, external: false, root };
     }
     const res = await fetch(`/api/decks/${deckId}`, { method: "DELETE" });
     return j<DeleteDeckResult>(res);
@@ -334,7 +354,10 @@ export const api = {
   },
 
   saveFile: async (deckId: string, path: string, content: string): Promise<string> => {
-    if (await isLocalDeck(deckId)) return local.saveFile(deckId, path, content);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.saveFile(deckId, path, content);
+    }
     const res = await fetch(`/api/decks/${deckId}/files`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -348,7 +371,13 @@ export const api = {
    *  for server decks). Returns the deck's new signature. */
   saveFiles: async (deckId: string, entries: Array<{ path: string; content: string }>): Promise<string> => {
     if (!entries.length) return api.poll(deckId);
-    if (await isLocalDeck(deckId)) return local.saveFiles(deckId, entries);
+    if (await isLocalDeck(deckId)) {
+      // gesture-gated: an explicit save (Ctrl+S / Save button) whose folder
+      // permission lapsed shows the permission sheet NOW; autosave without
+      // a gesture is a no-op here and simply keeps the folder mirror queued
+      maybeRequestWriteAccess(deckId);
+      return local.saveFiles(deckId, entries);
+    }
     let sig = "";
     for (const e of entries) {
       const res = await fetch(`/api/decks/${deckId}/files`, {
@@ -362,7 +391,10 @@ export const api = {
   },
 
   deleteFile: async (deckId: string, path: string): Promise<void> => {
-    if (await isLocalDeck(deckId)) return local.deleteFile(deckId, path);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.deleteFile(deckId, path);
+    }
     const res = await fetch(`/api/decks/${deckId}/files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
     await j(res);
   },
@@ -373,7 +405,10 @@ export const api = {
     deckId: string,
     opts: { template?: string; label?: string; position?: number; code?: string },
   ): Promise<DeckJson> => {
-    if (await isLocalDeck(deckId)) return local.addSlide(deckId, opts);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.addSlide(deckId, opts);
+    }
     const res = await fetch(`/api/decks/${deckId}/slides`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -387,7 +422,10 @@ export const api = {
     slideId: string,
     patch: { label?: string; theme?: ThemeMode | null; bg?: Source | null; overlay?: Source | null },
   ): Promise<DeckJson> => {
-    if (await isLocalDeck(deckId)) return local.patchSlide(deckId, slideId, patch);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.patchSlide(deckId, slideId, patch);
+    }
     const res = await fetch(`/api/decks/${deckId}/slides/${slideId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -397,19 +435,28 @@ export const api = {
   },
 
   deleteSlide: async (deckId: string, slideId: string): Promise<DeckJson> => {
-    if (await isLocalDeck(deckId)) return local.deleteSlide(deckId, slideId);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.deleteSlide(deckId, slideId);
+    }
     const res = await fetch(`/api/decks/${deckId}/slides/${slideId}`, { method: "DELETE" });
     return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   duplicateSlide: async (deckId: string, slideId: string): Promise<DeckJson> => {
-    if (await isLocalDeck(deckId)) return local.duplicateSlide(deckId, slideId);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.duplicateSlide(deckId, slideId);
+    }
     const res = await fetch(`/api/decks/${deckId}/slides/${slideId}/duplicate`, { method: "POST" });
     return (await j<{ deck: DeckJson }>(res)).deck;
   },
 
   reorder: async (deckId: string, order: string[]): Promise<DeckJson> => {
-    if (await isLocalDeck(deckId)) return local.reorderSlides(deckId, order);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.reorderSlides(deckId, order);
+    }
     const res = await fetch(`/api/decks/${deckId}/reorder`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -422,7 +469,10 @@ export const api = {
     deckId: string,
     patch: { title?: string; bg?: Source; overlay?: Source; settings?: Partial<DeckJson["settings"]> },
   ): Promise<DeckJson> => {
-    if (await isLocalDeck(deckId)) return local.patchDeck(deckId, patch);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.patchDeck(deckId, patch);
+    }
     const res = await fetch(`/api/decks/${deckId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -463,7 +513,10 @@ export const api = {
   },
 
   uploadAssets: async (deckId: string, files: File[]): Promise<Array<{ path: string; display: string }>> => {
-    if (await isLocalDeck(deckId)) return local.uploadAssets(deckId, files);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.uploadAssets(deckId, files);
+    }
     const form = new FormData();
     for (const f of files) form.append("file", f);
     const res = await fetch(`/api/decks/${deckId}/assets`, { method: "POST", body: form });
@@ -479,7 +532,10 @@ export const api = {
   },
 
   uploadCodeFile: async (deckId: string, dir: "overlay" | "bg", files: File[]): Promise<Array<{ path: string }>> => {
-    if (await isLocalDeck(deckId)) return local.uploadCodeFile(deckId, dir, files);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.uploadCodeFile(deckId, dir, files);
+    }
     const form = new FormData();
     for (const f of files) form.append("file", f);
     const res = await fetch(`/api/decks/${deckId}/code-files?dir=${dir}`, { method: "POST", body: form });
@@ -487,7 +543,10 @@ export const api = {
   },
 
   deleteCodeFile: async (deckId: string, path: string): Promise<void> => {
-    if (await isLocalDeck(deckId)) return local.deleteCodeFile(deckId, path);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.deleteCodeFile(deckId, path);
+    }
     const res = await fetch(`/api/decks/${deckId}/code-files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
     await j(res);
   },
@@ -511,7 +570,10 @@ export const api = {
   },
 
   restoreSnapshot: async (deckId: string, name: string): Promise<void> => {
-    if (await isLocalDeck(deckId)) return local.restoreSnapshot(deckId, name);
+    if (await isLocalDeck(deckId)) {
+      maybeRequestWriteAccess(deckId);
+      return local.restoreSnapshot(deckId, name);
+    }
     const res = await fetch(`/api/decks/${deckId}/snapshots`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -24,8 +24,10 @@ import {
   getRecord,
   putRecord,
   setDeviceHandle,
+  setDeviceParent,
   getDeviceHandle,
   handlePermission,
+  handleAccessState,
   requestHandlePermission,
   validDeckId,
   type BrowserDeckRecord,
@@ -172,11 +174,27 @@ async function runMirror(deckId: string): Promise<void> {
         setMirrorStatus(deckId, true);
         return;
       }
-      if ((await handlePermission(handle)) !== "granted") {
-        // permission lapsed (needs a user gesture to re-grant) — keep the
-        // changes queued, surface the reason, never fail the store save
-        setMirrorStatus(deckId, false, "Device folder needs permission again — changes are saved in this browser. Open the deck folder picker to re-grant access.");
-        return;
+      if (handle) {
+        const state = await handleAccessState(handle);
+        if (state === "missing") {
+          // folder moved / deleted / handle evicted — changes stay queued
+          setMirrorStatus(
+            deckId,
+            false,
+            "The device folder couldn't be found — it may have been moved or deleted. Changes are saved in this browser; choose the folder again on the deck card to re-attach it.",
+          );
+          return;
+        }
+        if (state !== "granted") {
+          // permission lapsed (needs a user gesture to re-grant) — keep the
+          // changes queued, surface the reason, never fail the store save
+          setMirrorStatus(
+            deckId,
+            false,
+            "Device folder needs permission again — changes are saved in this browser. Click “Allow access” to restore the sync.",
+          );
+          return;
+        }
       }
       try {
         // deletions first (cheap), then files, then assets
@@ -265,7 +283,7 @@ export function installDeviceMirror(): void {
 export async function readDeviceAsset(deckId: string, rel: string): Promise<File | null> {
   const handle = await getDeviceHandle(deckId);
   if (!handle) return null;
-  if ((await handlePermission(handle)) !== "granted") return null;
+  if ((await handleAccessState(handle)) !== "granted") return null;
   try {
     const fh = await getFileHandleRecursive(handle, rel, false);
     return await fh.getFile();
@@ -280,7 +298,7 @@ export async function readDeviceAsset(deckId: string, rel: string): Promise<File
 export async function scanDeviceAssets(deckId: string): Promise<Array<{ path: string; file: File }> | null> {
   const handle = await getDeviceHandle(deckId);
   if (!handle) return null;
-  if ((await handlePermission(handle)) !== "granted") return null;
+  if ((await handleAccessState(handle)) !== "granted") return null;
   const out: Array<{ path: string; file: File }> = [];
   const walk = async (dir: DirHandle, rel: string, depth: number): Promise<void> => {
     if (depth > 3) return;
@@ -302,11 +320,14 @@ export async function scanDeviceAssets(deckId: string): Promise<Array<{ path: st
 
 /** best-effort removal of the deck's files from the device folder (called
  *  after a confirmed deck delete). The folder itself and any files the user
- *  put there themselves stay untouched. */
+ *  put there themselves stay untouched. Reached only with verified write
+ *  access — the branches below are safety nets. */
 export async function cleanupDeviceProject(deckId: string): Promise<{ error?: string }> {
   const handle = await getDeviceHandle(deckId);
-  if (!handle) return {};
-  if ((await handlePermission(handle)) !== "granted") {
+  if (!handle) return { error: "The device folder couldn't be found — its files were kept" };
+  const state = await handleAccessState(handle);
+  if (state === "missing") return { error: "The device folder couldn't be found — its files were kept" };
+  if (state !== "granted") {
     return { error: "No write permission for the device folder — its files were kept" };
   }
   let failed = false;
@@ -372,6 +393,9 @@ export async function createDeviceProject(
     device: true,
   });
   await setDeviceHandle(finalId, projectDir ?? root);
+  // the picked root is the deck folder's PARENT — remember it so one
+  // permission click on it later re-covers every deck created inside
+  if (projectDir) await setDeviceParent(finalId, root, projectDir.name);
   // mirror already-written — mark record device
   const rec = await getRecord(finalId);
   if (rec) {
@@ -431,6 +455,9 @@ export async function openDeviceProject(): Promise<{ deckId: string; title: stri
     await putRecord(rec);
   }
   await setDeviceHandle(finalId, projectDir);
+  // picked root contains the project one level deep — one later permission
+  // click on the root re-covers this deck together with its siblings
+  if (projectDir !== root) await setDeviceParent(finalId, root, projectDir.name);
   return { deckId: finalId, title };
 }
 
@@ -472,4 +499,4 @@ export async function downloadStarterZip(title: string, files: Record<string, st
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
-export { handlePermission, requestHandlePermission, getDeviceHandle, setDeviceHandle, removeDeviceFile };
+export { handlePermission, handleAccessState, requestHandlePermission, getDeviceHandle, setDeviceHandle, setDeviceParent, removeDeviceFile };

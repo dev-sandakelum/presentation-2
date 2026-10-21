@@ -17,6 +17,9 @@ import {
 import { api } from "@/lib/stagesmith/client";
 import type { DeckBundle } from "@/lib/stagesmith/client";
 import type { DeckJson, Source, ThemeMode } from "@/lib/stagesmith/types";
+import { requestDeckAccess, pickFolderAgain } from "@/lib/stagesmith/permission";
+import { useAccessStates } from "@/hooks/useDeviceAccess";
+import { AccessChip } from "./AccessBanner";
 import { Filmstrip } from "./Filmstrip";
 import { PreviewPane } from "./PreviewPane";
 import { CodePane, type CodeTab, type GotoError } from "./CodePane";
@@ -98,6 +101,12 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   useEffect(() => {
     hydrateUiTheme();
   }, []);
+
+  /* this deck's device-folder permission (checked on open by the shell) —
+   * drives the toolbar access chip; granted shows nothing at all */
+  const access = useAccessStates();
+  const deckAccessState = bundle?.device ? access[deckId] : undefined;
+
   // code pane minimize state — persisted (fix-list item 1)
   useEffect(() => {
     setCodeMinimized(readCodeMinimized());
@@ -667,6 +676,13 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
             </span>
           );
         })()}
+        {deckAccessState && (
+          <AccessChip
+            state={deckAccessState}
+            onAllow={() => void requestDeckAccess(deckId)}
+            onChooseFolder={() => void pickFolderAgain(deckId)}
+          />
+        )}
         {save.mirrorWarning && (
           <span
             className="ss-chip warn"

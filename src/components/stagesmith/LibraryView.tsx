@@ -2,15 +2,25 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderOpen, FolderPlus, Home, Import, Layers, Play, Plus, ArrowUp, RefreshCw, HardDrive } from "lucide-react";
-import { api, getCapabilities, type FsBrowse } from "@/lib/stagesmith/client";
+import { api, getCapabilities, type DeleteDeckResult, type FsBrowse } from "@/lib/stagesmith/client";
 import type { DeckSummary } from "@/lib/stagesmith/types";
 import { openDeviceProject, supportsDeviceFolders } from "@/lib/stagesmith/device";
+import {
+  grantNextPending,
+  pickFolderAgain,
+  requestDeckAccess,
+  ensureWriteAccess,
+  type DeckAccessState,
+} from "@/lib/stagesmith/permission";
+import { useAccessStates } from "@/hooks/useDeviceAccess";
+import { AccessBanner, DeckAccessNotice } from "./AccessBanner";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { LiveThumb } from "./LiveThumb";
 import { BrandLogo } from "./BrandLogo";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { download, formatWhen, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import {
   Dialog,
   DialogContent,
@@ -60,6 +70,34 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
   const [pastedName, setPastedName] = useState("");
   const [busy, setBusy] = useState(false);
   const smdeckInput = useRef<HTMLInputElement | null>(null);
+
+  /* ---------- lapsed device-folder permissions (banner + cards) ----------
+   * Filled in asynchronously by the shell-level check — rendering never
+   * waits for it; a granted deck simply shows nothing extra. */
+  const access = useAccessStates();
+  const [grantBusy, setGrantBusy] = useState(false);
+  const promptDeckIds = (decks ?? [])
+    .filter((d) => d.device && d.store === "browser")
+    .filter((d) => access[d.id] === "prompt")
+    .map((d) => d.id);
+  // high-water mark so a partially-restored multi-deck banner can say
+  // “Access restored for N of M — click Allow again for the rest”
+  const promptHighRef = useRef(0);
+  if (promptDeckIds.length > promptHighRef.current) promptHighRef.current = promptDeckIds.length;
+  const restoredCount = Math.max(0, promptHighRef.current - promptDeckIds.length);
+
+  const allowAll = useCallback(async () => {
+    if (grantBusy || !promptDeckIds.length) return;
+    setGrantBusy(true);
+    try {
+      // one parent sheet covers every deck inside a remembered shared
+      // folder; otherwise ONE deck per click (chained requestPermission
+      // calls after an await lose the user-gesture context)
+      await grantNextPending(promptDeckIds);
+    } finally {
+      setGrantBusy(false);
+    }
+  }, [grantBusy, promptDeckIds]);
 
   const refresh = useCallback(async () => {
     try {
@@ -228,6 +266,14 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
       </header>
 
       <main style={{ padding: "26px clamp(18px, 4vw, 44px) 60px" }}>
+        {/* the permission banner — ONLY when a device folder actually came
+            back as "prompt" after a restart; granted shows nothing */}
+        <AccessBanner
+          count={promptDeckIds.length}
+          restored={restoredCount}
+          busy={grantBusy}
+          onAllow={() => void allowAll()}
+        />
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 16 }}>
           <div className="ss-label" style={{ fontSize: 11 }}>Decks — {decks ? decks.length : "…"}</div>
           <div className="ss-label">~/chasse/decks · the folder is the project</div>
@@ -672,12 +718,89 @@ function DeckCard({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const deletingRef = useRef(false); // rapid double-clicks → ONE delete
 
+  /* per-card permission state — granted shows nothing extra, the device
+   * chip above already marks the healthy case */
+  const access = useAccessStates();
+  const accessState: DeckAccessState | undefined =
+    deck.device && deck.store === "browser" ? access[deck.id] : undefined;
+
   // big decks ask for the title to be typed (decks can share a title — the
   // folder/id line + the typed title together pin down the right deck)
   const requireText = deck.slideCount >= 20 ? deck.title : null;
   const folderName = deck.folderName ?? deck.id;
 
-  const doDelete = async () => {
+  /* ---------- delete without permission: honest, resumable ----------
+   * api.deleteDeck returns needsAccess when the device folder couldn't be
+   * written: NOTHING is deleted then (files stay, browser copy stays) and
+   * this toast offers the recovery click — a fresh user gesture that
+   * re-grants and finishes the delete. "Deck deleted" is only ever shown
+   * after the files are actually gone. */
+  const deleteNeedsAccessToast = (r: DeleteDeckResult) => {
+    if (r.accessState === "missing") {
+      toast({
+        title: "Folder not found — nothing was deleted",
+        description: `Chassé can't find the “${folderName}” folder on your device, so the deck was kept. Choose the folder again to finish deleting it.`,
+        duration: 60_000, // recovery action — keep it around long enough to click
+        action: (
+          <ToastAction
+            altText="Choose folder again"
+            onClick={() => {
+              void (async () => {
+                const state = await pickFolderAgain(deck.id);
+                if (state === "granted") await runDelete();
+                else
+                  toast({
+                    title: "Folder not re-attached",
+                    description: "The deck was kept — nothing was deleted.",
+                    variant: "destructive",
+                  });
+              })();
+            }}
+          >
+            Choose folder again
+          </ToastAction>
+        ),
+      });
+      return;
+    }
+    toast({
+      title: "Access needed to delete files",
+      duration: 60_000, // recovery action — keep it around long enough to click
+      description:
+        r.accessState === "denied"
+          ? `Chassé is blocked from writing the “${folderName}” folder, so nothing was deleted. Allow it in the browser's site settings (chrome://settings/content/filesystem), then delete the deck again.`
+          : `Chassé can't write to the “${folderName}” folder, so nothing was deleted yet. Allow access to finish the delete.`,
+      action: (
+        <ToastAction
+          altText="Allow access"
+          onClick={() => {
+            void (async () => {
+              // this click is a fresh user gesture — the permission sheet
+              // can appear, then the delete completes
+              const state = await ensureWriteAccess(deck.id);
+              if (state !== "granted") {
+                toast({
+                  title: "Delete not finished",
+                  description:
+                    state === "denied"
+                      ? "Access is still blocked. Allow Chassé under the browser's site settings → File System editing for sites, then delete the deck again."
+                      : "Access couldn't be restored — the deck was kept. Try deleting it again after restoring folder access.",
+                  variant: "destructive",
+                });
+                return;
+              }
+              await runDelete();
+            })();
+          }}
+        >
+          Allow access
+        </ToastAction>
+      ),
+    });
+  };
+
+  /** the actual delete — safe to re-run after a grant (idempotent guard) */
+  const runDelete = async (): Promise<void> => {
     if (deletingRef.current) return;
     deletingRef.current = true;
     setDeleting(true);
@@ -685,12 +808,17 @@ function DeckCard({
     try {
       const r = await api.deleteDeck(deck.id);
       setDeleteOpen(false);
+      if (r.needsAccess) {
+        // permission slipped away again mid-flow — nothing deleted
+        deleteNeedsAccessToast(r);
+        return;
+      }
       onDeleted();
       toast(
         r.external
           ? { title: "Removed from library", description: `Files kept on disk at ${r.root}` }
           : {
-              title: "Deck deleted",
+              title: r.folderCleanupError ? "Removed from this browser" : "Deck deleted",
               description: r.folderCleanupError
                 ? `${r.folderCleanupError} (${folderName})`
                 : deck.device
@@ -705,6 +833,10 @@ function DeckCard({
       setDeleting(false);
       deletingRef.current = false;
     }
+  };
+
+  const doDelete = () => {
+    void runDelete();
   };
 
   // keep the cover thumbnail fresh without a full refresh
@@ -789,6 +921,13 @@ function DeckCard({
         <div className="ss-card-meta">
           {deck.slideCount} slides · {deck.id} · modified {formatWhen(deck.modified)}
         </div>
+        {accessState && (
+          <DeckAccessNotice
+            state={accessState}
+            onAllow={() => void requestDeckAccess(deck.id)}
+            onChooseFolder={() => void pickFolderAgain(deck.id)}
+          />
+        )}
       </div>
       <div className="ss-card-acts">
         <button className="ss-btn" style={{ height: 30, padding: "0 12px" }} onClick={() => nav.deck(deck.id)}>

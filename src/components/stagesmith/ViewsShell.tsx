@@ -8,6 +8,7 @@ import { DashboardView } from "./DashboardView";
 import { PresentView } from "./PresentView";
 import { RemoteView } from "./RemoteView";
 import { installDeviceMirror } from "@/lib/stagesmith/device";
+import { useAccessLifecycle } from "@/hooks/useDeviceAccess";
 import { SplashVeil, type SplashMode } from "./LoadingScreen";
 import type { SsNav } from "./shared";
 
@@ -46,6 +47,12 @@ export function ViewsShell({
   useEffect(() => {
     installDeviceMirror();
   }, []);
+
+  // permission check on every app open (library OR a deck opened directly):
+  // queries every device deck's folder without prompting; a lapsed "prompt"
+  // state drives the banner/cards, and focus flips re-check in the
+  // background. Never blocks rendering.
+  useAccessLifecycle();
 
   /* ---------- pending-navigation loading veil ---------- */
   const viewKey = `${remote ?? ""}|${deck ?? ""}|${present ?? ""}`;
