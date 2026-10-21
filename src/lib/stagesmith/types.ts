@@ -82,14 +82,16 @@ export interface DeckSummary {
   signature: string;
   /** true when the project folder lives outside decks/ (linked project) */
   external?: boolean;
-  /** where this deck lives: "server" (app folder, local runs) or "browser"
-   *  (this browser's storage — hosted/read-only deployments) */
-  store?: "server" | "browser";
+  /** where this deck lives: "server" (app folder, local runs), "browser"
+   *  (this browser's storage — hosted/read-only deployments) or "desktop"
+   *  (the Chassé desktop app's chosen folder, via the fs bridge) */
+  store?: "server" | "browser" | "desktop";
   /** true when the deck mirrors into a folder on the user's device
    *  (File System Access API — Chromium browsers) */
   device?: boolean;
   /** device-folder name (decks can share a title — the delete dialog needs
-   *  the folder to say exactly what will be removed) */
+   *  the folder to say exactly what will be removed); for desktop decks this
+   *  is the absolute path of the deck folder */
   folderName?: string;
   /** minimal payload to render a live cover thumbnail without loading the deck */
   cover?: DeckCover;
@@ -110,8 +112,9 @@ export interface DeckBundle {
   files: FileRow[];
   signature: string;
   themeCss: string;
-  /** "browser" decks live in this browser's storage (hosted deployments) */
-  store?: "server" | "browser";
+  /** "browser" decks live in this browser's storage; "desktop" decks live
+   *  in the Chassé desktop app's chosen folder (fs bridge) */
+  store?: "server" | "browser" | "desktop";
   /** device-folder mirror is attached (File System Access API) */
   device?: boolean;
 }

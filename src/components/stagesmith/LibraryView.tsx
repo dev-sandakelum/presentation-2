@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderOpen, FolderPlus, Home, Import, Layers, Play, Plus, ArrowUp, RefreshCw, HardDrive } from "lucide-react";
-import { api, getCapabilities, type DeleteDeckResult, type FsBrowse } from "@/lib/stagesmith/client";
+import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderOpen, FolderPlus, Home, Import, Layers, MonitorSmartphone, Play, Plus, ArrowUp, RefreshCw, HardDrive } from "lucide-react";
+import { api, getCapabilities, defaultStore, type DeleteDeckResult, type FsBrowse } from "@/lib/stagesmith/client";
 import type { DeckSummary } from "@/lib/stagesmith/types";
 import { openDeviceProject, supportsDeviceFolders } from "@/lib/stagesmith/device";
+import { desktopFsStatus } from "@/lib/stagesmith/desktop-store";
+import { useDesktopFs } from "@/hooks/useDesktopFs";
 import {
   grantNextPending,
   pickFolderAgain,
@@ -76,6 +78,29 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
    * waits for it; a granted deck simply shows nothing extra. */
   const access = useAccessStates();
   const [grantBusy, setGrantBusy] = useState(false);
+
+  /* ---------- the desktop app's decks folder (fs capability) ----------
+   * When the studio runs inside Chassé Studio, Java owns the folder — one
+   * native pick, persisted on the Java side, nothing expires. The banner
+   * appears when no folder is chosen yet (first run) or when the saved one
+   * went missing / read-only (moved, unmounted, permissions). */
+  const desktopFs = useDesktopFs();
+  const desktopNeedsFolder =
+    desktopFs.status?.available === true && !(desktopFs.status.configured && desktopFs.status.valid);
+  const chooseDesktopFolder = async () => {
+    try {
+      const s = await desktopFs.choose();
+      if (s?.configured && s.valid) {
+        toast({ title: "Decks folder ready", description: s.path });
+        refresh();
+      } else if (s?.configured && !s.valid) {
+        toast({ title: "Folder not usable", description: `${s.path} — ${s.problem === "no-permission" ? "no write permission" : "folder missing"}`, variant: "destructive" });
+      }
+    } catch (e) {
+      toast({ title: "Could not choose folder", description: (e as Error).message, variant: "destructive" });
+    }
+  };
+
   const promptDeckIds = (decks ?? [])
     .filter((d) => d.device && d.store === "browser")
     .filter((d) => access[d.id] === "prompt")
@@ -120,15 +145,16 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
     const title = newTitle.trim() || "Untitled deck";
     setBusy(true);
     try {
-      const caps = await getCapabilities();
-      const store = caps.fsWritable ? "server" : "browser";
+      const store = await defaultStore();
       const deck = await api.createDeck(title, { store });
       toast({
         title: `Deck “${deck.title}” created`,
         description:
-          store === "browser"
-            ? "Saved in this browser — this site can’t write server files (use Export for a portable copy)."
-            : undefined,
+          store === "desktop"
+            ? "Saved in the Chassé Studio desktop folder you picked — no permission to renew, ever."
+            : store === "browser"
+              ? "Saved in this browser — this site can’t write server files (use Export for a portable copy)."
+              : undefined,
       });
       nav.deck(deck.id);
     } catch (e) {
@@ -274,6 +300,62 @@ export function LibraryView({ nav, initialDecks }: { nav: SsNav; initialDecks: D
           busy={grantBusy}
           onAllow={() => void allowAll()}
         />
+
+        {/* the desktop decks-folder banner — first run (no folder yet) or a
+            folder that went missing / read-only since the last run */}
+        {desktopNeedsFolder && (
+          <div
+            role="status"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+              flexWrap: "wrap",
+              border: "1px solid var(--ss-line-strong)",
+              borderRadius: 14,
+              padding: "14px 16px",
+              marginBottom: 18,
+              background: "color-mix(in srgb, var(--ss-acc, #5b52cc) 8%, var(--ss-bg))",
+            }}
+          >
+            <MonitorSmartphone size={18} style={{ flex: "0 0 auto", opacity: 0.8 }} />
+            <div style={{ flex: "1 1 320px", minWidth: 240 }}>
+              <div style={{ font: "600 13.5px var(--ss-fb)", color: "var(--ss-ink)" }}>
+                {desktopFs.status?.configured
+                  ? "The desktop decks folder needs to be chosen again"
+                  : "Choose the folder where Chassé Studio should keep your decks"}
+              </div>
+              <div style={{ font: "400 12.5px/1.6 var(--ss-fb)", color: "var(--ss-mut)", marginTop: 3 }}>
+                {desktopFs.status?.configured ? (
+                  <>
+                    {desktopFs.status.problem === "no-permission" ? "No write permission — " : "Couldn’t find — "}
+                    <code style={{ font: "500 11.5px var(--ss-fm)" }}>{desktopFs.status.path}</code>. The desktop app
+                    remembers the folder for you, so this only appears when it moved or lost write access.
+                  </>
+                ) : (
+                  <>
+                    The desktop app keeps decks as plain folders (deck.json + slides + assets) and remembers your choice —
+                    no permission prompts on restart, ever. Picking a folder that already contains decks adopts them.
+                  </>
+                )}
+              </div>
+            </div>
+            <button
+              className="ss-btn ss-btn-acc"
+              disabled={desktopFs.choosing}
+              onClick={() => void chooseDesktopFolder()}
+              style={{ flex: "0 0 auto" }}
+            >
+              <FolderOpen size={14} />
+              {desktopFs.choosing
+                ? "Choose in the app…"
+                : desktopFs.status?.configured
+                  ? "Choose folder again…"
+                  : "Choose decks folder…"}
+            </button>
+          </div>
+        )}
+
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 16 }}>
           <div className="ss-label" style={{ fontSize: 11 }}>Decks — {decks ? decks.length : "…"}</div>
           <div className="ss-label">~/chasse/decks · the folder is the project</div>
@@ -422,6 +504,7 @@ function OpenFolderDialog({
   const [fsWritable, setFsWritable] = useState<boolean | null>(null);
   const [deviceSupported, setDeviceSupported] = useState(false);
   const [opening, setOpening] = useState(false);
+  const [desktopRoot, setDesktopRoot] = useState<string | null>(null);
 
   // server browser state (local runs only)
   const [dir, setDir] = useState<string | null>(null);
@@ -436,6 +519,11 @@ function OpenFolderDialog({
     getCapabilities()
       .then((c) => setFsWritable(c.fsWritable))
       .catch(() => setFsWritable(false));
+    // inside the desktop app, Java owns the decks folder — the browser's
+    // folder permission is exactly what we DON'T rely on there
+    desktopFsStatus().then((s) =>
+      setDesktopRoot(s.available && s.configured && s.valid ? s.path : null),
+    );
   }, [open]);
 
   useEffect(() => {
@@ -516,9 +604,30 @@ function OpenFolderDialog({
         </DialogHeader>
 
         <div style={{ display: "grid", gap: 14, padding: "2px 0 6px" }}>
-          {/* device folder — the primary path */}
-          <div>
-            <div className="ss-label" style={{ marginBottom: 6 }}>A folder on this device</div>
+          {desktopRoot ? (
+            <div
+              style={{
+                border: "1px solid var(--ss-line-strong)",
+                borderRadius: 12,
+                padding: "14px 16px",
+                font: "400 12.5px/1.7 var(--ss-sans)",
+                color: "var(--ss-mut)",
+              }}
+            >
+              <div style={{ font: "600 13.5px var(--ss-sans)", color: "var(--ss-ink)", marginBottom: 4 }}>
+                The Chassé Studio desktop app owns your decks folder
+              </div>
+              Decks live in{" "}
+              <code style={{ font: "500 11px var(--ss-mono)", color: "var(--ss-ink2)" }}>{desktopRoot}</code>. Drop a
+              deck folder (any folder with a <code style={{ font: "500 11px var(--ss-mono)" }}>deck.json</code>) in there
+              and it appears in the library — no permission to grant. To switch to a different folder, use the banner on
+              the library page.
+            </div>
+          ) : (
+            <>
+              {/* device folder — the primary path */}
+              <div>
+                <div className="ss-label" style={{ marginBottom: 6 }}>A folder on this device</div>
             {deviceSupported ? (
               <>
                 <button
@@ -683,6 +792,8 @@ function OpenFolderDialog({
                 {opening ? "Opening…" : "Open this server folder"}
               </button>
             </div>
+          )}
+            </>
           )}
 
           <div style={{ font: "400 12px var(--ss-sans)", color: "var(--ss-mut)" }}>
@@ -917,6 +1028,26 @@ function DeckCard({
               {deck.device ? "device" : "this browser"}
             </span>
           )}
+          {deck.store === "desktop" && (
+            <span
+              title={deck.folderName ? `Stored in the Chassé Studio desktop folder: ${deck.folderName}` : "Stored in the Chassé Studio desktop folder"}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 3,
+                marginLeft: 7,
+                verticalAlign: "middle",
+                font: "500 10px var(--ss-fm)",
+                color: "var(--ss-mut)",
+                border: "1px solid var(--ss-line)",
+                borderRadius: 99,
+                padding: "1px 7px",
+                letterSpacing: ".06em",
+              }}
+            >
+              <MonitorSmartphone size={10} /> desktop
+            </span>
+          )}
         </div>
         <div className="ss-card-meta">
           {deck.slideCount} slides · {deck.id} · modified {formatWhen(deck.modified)}
@@ -1014,7 +1145,11 @@ function DeckCard({
             </div>
             <div style={{ color: "var(--ss-mut, #9894b0)", font: "400 12px var(--ss-fm, monospace)" }}>
               {deck.slideCount} slides · folder: {folderName}
-              {deck.store === "browser" && !deck.device ? " · stored in this browser" : ""}
+              {deck.store === "desktop"
+                ? " · Chassé Studio desktop folder"
+                : deck.store === "browser" && !deck.device
+                  ? " · stored in this browser"
+                  : ""}
             </div>
             <div style={{ marginTop: 4 }}>
               {deck.external ? (
@@ -1027,9 +1162,11 @@ function DeckCard({
                   This permanently deletes the deck and its files from{" "}
                   {deck.device
                     ? "this device"
-                    : deck.store === "server"
-                      ? "the app's decks folder"
-                      : "this browser"}
+                    : deck.store === "desktop"
+                      ? "the Chassé Studio desktop folder"
+                      : deck.store === "server"
+                        ? "the app's decks folder"
+                        : "this browser"}
                   . This cannot be undone.
                 </>
               )}

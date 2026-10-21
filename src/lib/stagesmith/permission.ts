@@ -32,6 +32,7 @@ import {
   setDeviceHandle,
   getDeviceHandle,
   getDeviceParent,
+  setDeviceParent,
   clearDeviceParent,
   handleAccessState,
   requestHandlePermission,

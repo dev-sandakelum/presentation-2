@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { api, getCapabilities, type FsBrowse } from "@/lib/stagesmith/client";
 import { slugify } from "@/lib/stagesmith/browser-store";
+import { desktopFsStatus } from "@/lib/stagesmith/desktop-store";
 import { starterDeckFiles } from "@/lib/stagesmith/templates";
 import {
   createDeviceProject,
@@ -37,15 +38,19 @@ import {
  * that's a stranger's computer, and the browser never asked for permission
  * to touch the user's own files.
  *
- * Now the primary flow is the user's DEVICE via the File System Access API:
- * the browser shows its permission prompt (showDirectoryPicker), the project
- * folder structure is created in the folder they pick, and every later edit
- * is mirrored there (write-through). Browsers without the API get a .zip
- * download of the same structure. Local runs additionally keep the classic
- * server-folder browser (the server IS the user's machine there).
+ * Inside the Chassé Studio desktop app, the "desktop" mode wins: the Java
+ * side owns the folder (fs capability), so the project lands in the chosen
+ * decks folder with no browser permission that could expire.
+ *
+ * Otherwise the primary flow is the user's DEVICE via the File System Access
+ * API: the browser shows its permission prompt (showDirectoryPicker), the
+ * project folder structure is created in the folder they pick, and every
+ * later edit is mirrored there (write-through). Browsers without the API get
+ * a .zip download of the same structure. Local runs additionally keep the
+ * classic server-folder browser (the server IS the user's machine there).
  */
 
-type LocationMode = "device" | "server" | "zip";
+type LocationMode = "device" | "server" | "zip" | "desktop";
 
 export function NewProjectDialog({
   open,
@@ -62,6 +67,7 @@ export function NewProjectDialog({
   const [fsWritable, setFsWritable] = useState<boolean | null>(null);
   const [deviceSupported, setDeviceSupported] = useState(false);
   const [pickedFolder, setPickedFolder] = useState<string | null>(null);
+  const [desktopPath, setDesktopPath] = useState<string | null>(null);
 
   // server browser state (only used in "server" mode)
   const [dir, setDir] = useState<string | null>(null);
@@ -76,18 +82,27 @@ export function NewProjectDialog({
     const caps = getCapabilities().then((c) => setFsWritable(c.fsWritable));
     setDeviceSupported(supportsDeviceFolders());
     caps.catch(() => setFsWritable(false));
+    desktopFsStatus().then((s) => {
+      if (s.available && s.configured && s.valid) {
+        setDesktopPath(s.path);
+      } else {
+        setDesktopPath(null);
+      }
+    });
     return () => {};
   }, [open]);
 
-  // pick a sensible default mode once capabilities arrive
+  // pick a sensible default mode once capabilities arrive — the desktop
+  // folder wins whenever the fs capability is active
   useEffect(() => {
     if (fsWritable === null) return;
     setMode((cur) => {
       if (cur !== "device") return cur;
+      if (desktopPath) return "desktop";
       if (supportsDeviceFolders()) return "device";
       return fsWritable ? "server" : "zip";
     });
-  }, [fsWritable]);
+  }, [fsWritable, desktopPath]);
 
   // server-side folder browsing (local runs only)
   useEffect(() => {
@@ -116,11 +131,32 @@ export function NewProjectDialog({
   const files = useMemo(() => starterDeckFiles(projectName), [projectName]);
 
   const target = useMemo(() => {
+    if (mode === "desktop") return desktopPath ? `${desktopPath}/${projectName}` : "…the desktop app's decks folder";
     if (mode === "device") return pickedFolder ? `${pickedFolder}/${projectName}` : "…pick a folder on your device";
     if (mode === "zip") return `${projectName}.smdeck (download)`;
     if (!browse) return "…/";
     return `${browse.path.replace(/\/+$/, "")}/${projectName}`;
-  }, [mode, browse, projectName, pickedFolder]);
+  }, [mode, browse, projectName, pickedFolder, desktopPath]);
+
+  /* ---------------- create: Chassé desktop folder (fs bridge) ---------------- */
+  const createOnDesktop = async () => {
+    setCreating(true);
+    setError(null);
+    try {
+      const { createDeck } = await import("@/lib/stagesmith/desktop-store");
+      const { deck, deckId } = await createDeck(projectName, files);
+      toast({
+        title: `Project “${deck.title}” created`,
+        description: `Written to the Chassé Studio decks folder${desktopPath ? ` (${desktopPath})` : ""} — it stays there across restarts.`,
+      });
+      onOpenChange(false);
+      nav.deck(deckId);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   /* ---------------- create: device folder ---------------- */
   const createOnDevice = async () => {
@@ -176,13 +212,16 @@ export function NewProjectDialog({
   ];
 
   const canCreate =
-    mode === "device"
-      ? true // the picker itself is the gesture — createOnDevice prompts first
-      : mode === "zip"
-        ? true
-        : Boolean(browse?.path) && !error && (browse?.writable ?? false);
+    mode === "desktop"
+      ? true // the Java side owns the folder — no permission to grant
+      : mode === "device"
+        ? true // the picker itself is the gesture — createOnDevice prompts first
+        : mode === "zip"
+          ? true
+          : Boolean(browse?.path) && !error && (browse?.writable ?? false);
 
   const create = () => {
+    if (mode === "desktop") return createOnDesktop();
     if (mode === "device") return createOnDevice();
     if (mode === "zip") return downloadZip();
     return createOnServer();
@@ -231,7 +270,16 @@ export function NewProjectDialog({
           <div>
             <div className="ss-label" style={{ marginBottom: 6 }}>Location — where should the project live?</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {deviceSupported && (
+              {desktopPath && (
+                <ModeChip
+                  active={mode === "desktop"}
+                  onClick={() => setMode("desktop")}
+                  icon={<MonitorSmartphone size={13} />}
+                  label="Chassé app folder"
+                  title={`The Chassé Studio desktop app owns this folder (${desktopPath}) — no permission to renew, ever`}
+                />
+              )}
+              {deviceSupported && !desktopPath && (
                 <ModeChip
                   active={mode === "device"}
                   onClick={() => setMode("device")}
@@ -240,7 +288,7 @@ export function NewProjectDialog({
                   title="Pick a folder on your computer — the browser asks for permission and the project is written there"
                 />
               )}
-              {fsWritable && (
+              {fsWritable && !desktopPath && (
                 <ModeChip
                   active={mode === "server"}
                   onClick={() => setMode("server")}
@@ -258,6 +306,21 @@ export function NewProjectDialog({
               />
             </div>
           </div>
+
+          {/* desktop mode info */}
+          {mode === "desktop" && (
+            <div style={{ font: "400 12px/1.6 var(--ss-sans)", color: "var(--ss-mut)" }}>
+              The Chassé Studio desktop app writes the project into the decks folder it owns
+              {desktopPath ? (
+                <>
+                  {" — "}
+                  <code style={{ font: "500 11px var(--ss-mono)", color: "var(--ss-ink2)" }}>{desktopPath}</code>
+                </>
+              ) : null}
+              . The choice is remembered by the app itself: no permission prompts, nothing to renew after a restart,
+              and every deck stays a plain folder you can open anywhere.
+            </div>
+          )}
 
           {/* device folder picker */}
           {mode === "device" && (
@@ -480,10 +543,16 @@ export function NewProjectDialog({
         </div>
 
         <DialogFooter>
-          {mode !== "device" && (
+          {mode !== "device" && mode !== "desktop" && (
             <button className="ss-btn ss-btn-acc" disabled={creating || !canCreate} onClick={create}>
               {creating ? <Check size={15} /> : mode === "zip" ? <Download size={15} /> : <FolderPlus size={15} />}
               {creating ? "Working…" : mode === "zip" ? "Download project" : "Create project"}
+            </button>
+          )}
+          {mode === "desktop" && (
+            <button className="ss-btn ss-btn-acc" disabled={creating || !canCreate} onClick={create}>
+              {creating ? <Check size={15} /> : <MonitorSmartphone size={15} />}
+              {creating ? "Working…" : "Create project"}
             </button>
           )}
           {mode === "device" && (

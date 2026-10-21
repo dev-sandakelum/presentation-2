@@ -1,0 +1,73 @@
+"use client";
+
+/**
+ * Desktop decks-folder state for the library UI — the Chassé Studio desktop
+ * app owns the folder (fs capability). Surfaces:
+ *   · available     — the desktop app + "fs" capability are present
+ *   · configured    — a folder has been chosen (survives restarts on the
+ *                     Java side — nothing expires)
+ *   · valid         — the folder exists and is writable
+ *   · path/problem  — what to show when the folder needs (re-)choosing
+ * plus `choose()` — the native folder dialog on the Java side — and
+ * `refresh()`. Rendering never waits: the snapshot starts `null` and fills
+ * in asynchronously, exactly like the device-access states.
+ */
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  chooseDesktopRoot,
+  desktopFsStatus,
+  invalidateDesktopFsStatus,
+  refreshDesktopFsStatus,
+  type DesktopFsStatus,
+} from "@/lib/stagesmith/desktop-store";
+
+export function useDesktopFs(): {
+  status: DesktopFsStatus | null;
+  choose: () => Promise<DesktopFsStatus | null>;
+  refresh: () => void;
+  choosing: boolean;
+} {
+  const [status, setStatus] = useState<DesktopFsStatus | null>(null);
+  const [choosing, setChoosing] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    desktopFsStatus().then((s) => {
+      if (!cancelled) setStatus(s);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refresh = useCallback(() => {
+    refreshDesktopFsStatus().then((s) => setStatus(s)).catch(() => {});
+  }, []);
+
+  const choose = useCallback(async () => {
+    if (choosing) return null;
+    setChoosing(true);
+    try {
+      // the native dialog opens on the Java side — this click is the gesture
+      const s = await chooseDesktopRoot();
+      setStatus(s);
+      return s;
+    } finally {
+      setChoosing(false);
+    }
+  }, [choosing]);
+
+  // re-check when the window regains focus (the user may have picked the
+  // folder in another window, or the disk may have changed)
+  useEffect(() => {
+    const onFocus = () => {
+      invalidateDesktopFsStatus();
+      refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
+
+  return { status, choose, refresh, choosing };
+}

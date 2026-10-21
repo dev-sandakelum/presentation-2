@@ -1168,7 +1168,7 @@ export async function getAssetUrl(deckId: string, path: string): Promise<string 
 /* device folder handles (File System Access API)                      */
 /* ------------------------------------------------------------------ */
 
-type DirHandle = any; // FileSystemDirectoryHandle — typed loosely for TS<->lib compat
+export type DirHandle = any; // FileSystemDirectoryHandle — typed loosely for TS<->lib compat
 
 export type HandleAccessState = "granted" | "prompt" | "denied" | "missing";
 

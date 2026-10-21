@@ -259,6 +259,21 @@ export async function importTextToBrowser(text: string, name: string): Promise<I
   return finishImport(await importDeckText(text, name), name);
 }
 
+/** import any supported file into the desktop store (fs bridge) */
+export async function importFileToDesktop(file: File): Promise<ImportReport> {
+  const baseName = file.name.replace(/\.(smdeck|zip|deck\.tsx|tsx|txt)$/i, "");
+  const parsed = /\.(smdeck|zip)$/i.test(file.name)
+    ? await importZipFile(file)
+    : await importDeckText(await file.text(), baseName);
+  return finishImportDesktop(parsed, baseName);
+}
+
+/** import pasted/AI text into the desktop store (fs bridge) */
+export async function importTextToDesktop(text: string, name: string): Promise<ImportReport> {
+  if (!text.trim()) throw new Error("Nothing to import");
+  return finishImportDesktop(await importDeckText(text, name), name);
+}
+
 async function finishImport(parsed: ParsedProject, baseName: string): Promise<ImportReport> {
   const deck = JSON.parse(parsed.files["deck.json"]) as DeckJson;
   const title = deck.title || baseName || "Imported deck";
@@ -268,6 +283,29 @@ async function finishImport(parsed: ParsedProject, baseName: string): Promise<Im
     id: deckId,
     assets: parsed.assets,
   });
+  const created = JSON.parse(parsed.files["deck.json"]) as DeckJson;
+  return {
+    deckId: finalId,
+    slides: created.slides.length,
+    files: Object.keys(parsed.files).length + Object.keys(parsed.assets).length,
+    warnings: parsed.warnings,
+  };
+}
+
+/** desktop variant — text files via fs.createDeck, assets via PUT uploads */
+async function finishImportDesktop(parsed: ParsedProject, baseName: string): Promise<ImportReport> {
+  const deck = JSON.parse(parsed.files["deck.json"]) as DeckJson;
+  const title = deck.title || baseName || "Imported deck";
+  const desktop = await import("./desktop-store");
+  const deckId = await desktop.uniqueDeckId(baseName || deck.title || "imported-deck");
+  const { deckId: finalId } = await desktop.createDeck(title, parsed.files, { id: deckId });
+  for (const [path, blob] of Object.entries(parsed.assets)) {
+    try {
+      await desktop.putAssetBytes(finalId, path, blob);
+    } catch {
+      parsed.warnings.push(`Asset could not be uploaded: ${path}`);
+    }
+  }
   const created = JSON.parse(parsed.files["deck.json"]) as DeckJson;
   return {
     deckId: finalId,
