@@ -24,7 +24,7 @@ import type { DeckJson, FileRow, Source } from "@/lib/stagesmith/types";
  *     Nothing else is cancelled; the user sees which item failed with Retry
  *     and "Continue anyway" (the deck starts, the missing item renders as
  *     the runtime's placeholder card)
- *   · STALL ≠ SLOW — if NOTHING settles for 60 s while work remains, a soft
+ *   · STALL ≠ SLOW — if NOTHING settles for 30 s while work remains, a soft
  *     "seems stuck" notice appears (never the red error state); it clears
  *     itself the moment progress resumes
  *   · SHARED WORK — identical backgrounds (same bgKey) load once, modules
@@ -36,11 +36,27 @@ const IMAGE_EXT = /\.(png|jpe?g|webp|gif|avif|svg|bmp|ico)$/i;
 const TASK_ATTEMPTS = 3;
 const TASK_RETRY_DELAYS = [400, 1200];
 /** no progress for this long → soft "seems stuck" notice (not an error) */
-const STALL_MS = 60_000;
+const STALL_MS = 30_000;
 /** concurrent warm jobs — keeps the browser responsive on big decks */
 const CONCURRENCY = 4;
 /** how many slides must be ready before the deck reveals (spec: ~first 3) */
 const CRITICAL_WINDOW = 3;
+const TASK_TIMEOUT_MS = 10_000;
+const FONT_TIMEOUT_MS = 3_000;
+
+async function withTimeout<T>(promise: Promise<T>, label: string, ms = TASK_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export interface PreloadFailure {
   label: string;
@@ -123,7 +139,7 @@ function rememberDecoded(url: string): void {
 async function decodeImage(url: string): Promise<void> {
   if (/^(data|blob):/i.test(url)) {
     if (decodedDataUrls.has(url)) return; // already decoded this session
-    await new Promise<void>((resolve, reject) => {
+    await withTimeout(new Promise<void>((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
         if (typeof img.decode === "function") img.decode().then(() => resolve(), () => resolve());
@@ -131,11 +147,11 @@ async function decodeImage(url: string): Promise<void> {
       };
       img.onerror = () => reject(new Error("the image didn't load"));
       img.src = url;
-    });
+    }), "Image load");
     rememberDecoded(url);
     return;
   }
-  await new Promise<void>((resolve, reject) => {
+  await withTimeout(new Promise<void>((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       if (typeof img.decode === "function") {
@@ -145,15 +161,15 @@ async function decodeImage(url: string): Promise<void> {
     };
     img.onerror = () => reject(new Error("the image didn't load"));
     img.src = url;
-  });
+  }), "Image load");
 }
 
 /** resolve + warm a deck module; rejects on resolve/fetch failure */
 async function warmModule(deckId: string, path: string, version: string | number): Promise<void> {
-  const m = await resolveModule(deckId, path, version);
+  const m = await withTimeout(resolveModule(deckId, path, version), path);
   if (m.error) throw new Error(m.error);
   if (m.url) {
-    const res = await fetch(m.url, { cache: "force-cache" });
+    const res = await withTimeout(fetch(m.url, { cache: "force-cache" }), path);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   }
 }
@@ -245,7 +261,7 @@ export function useAssetPreloader(
           for (let attempt = 0; attempt < TASK_ATTEMPTS; attempt++) {
             if (run.cancelled) return;
             try {
-              await task.run();
+              await withTimeout(task.run(), task.label, task.label === "fonts" ? FONT_TIMEOUT_MS : TASK_TIMEOUT_MS);
               lastErr = null;
               break;
             } catch (e) {
@@ -352,7 +368,7 @@ export function useAssetPreloader(
         status: "pending",
         run: async () => {
           try {
-            if (document.fonts?.ready) await document.fonts.ready;
+            if (document.fonts?.ready) await withTimeout(document.fonts.ready.then(() => undefined), "fonts", FONT_TIMEOUT_MS);
           } catch {
             /* fonts api unavailable — nothing to wait for */
           }

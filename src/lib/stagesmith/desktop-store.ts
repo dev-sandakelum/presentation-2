@@ -176,6 +176,7 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const BINARY_EXT = /\.(png|jpe?g|svg|webp|gif|avif|bmp|ico|mp4|webm|mp3|wav|ogg|woff2?|ttf|otf|zip)$/i;
 
 const records = new Map<string, DesktopDeckRecord>();
+const pendingTextReads = new Map<string, Promise<string>>();
 let deckIndex: DesktopDeckInfo[] | null = null;
 let deckIndexAt = 0;
 const summaryCache = new Map<string, DeckSummary>();
@@ -183,6 +184,22 @@ const summaryCache = new Map<string, DeckSummary>();
 const urlCache = new Map<string, string>();
 /** original upload display names (sanitized names stay disk/URL-safe) */
 const displayNames = new Map<string, Map<string, string>>();
+
+function loadPhase(name: string, phase: "start" | "end", details?: Record<string, unknown>): void {
+  const mark = `stagesmith:desktop:${name}:${phase}`;
+  if (typeof performance !== "undefined") {
+    if (phase === "start") performance.clearMarks(`stagesmith:desktop:${name}:start`);
+    performance.mark(mark);
+    if (phase === "end") {
+      try {
+        performance.measure(`stagesmith:desktop:${name}`, `stagesmith:desktop:${name}:start`, mark);
+      } catch {
+        // A matching start may not exist when a cached phase is skipped.
+      }
+    }
+  }
+  console.info(`[deck-load] ${phase.toUpperCase()} ${name}`, details ?? "");
+}
 
 export function validDeckId(id: string): boolean {
   return ID_RE.test(id);
@@ -325,24 +342,38 @@ export async function getRecord(deckId: string): Promise<DesktopDeckRecord | nul
   const cached = records.get(deckId);
   if (cached) return cached;
   if (!(await hasDeck(deckId))) return null;
+  loadPhase("deck-file-index", "start", { deckId });
   const rows = (await walkFiles(deckId)).filter((r) => !isHidden(r.path));
+  loadPhase("deck-file-index", "end", { deckId, files: rows.length });
   const files: Record<string, string> = {};
   const assets: Record<string, { size: number; modified: number }> = {};
-  let deckJsonRaw: string | null = null;
+  const textRows = rows.filter((r) => !BINARY_EXT.test(r.path) && r.size <= 1_500_000);
   for (const r of rows) {
-    if (BINARY_EXT.test(r.path) || r.size > 1_500_000) {
-      assets[r.path] = { size: r.size, modified: r.modified };
-      continue;
-    }
-    try {
-      const text = await fsReadText(deckId, r.path);
-      if (r.path === "deck.json") deckJsonRaw = text;
-      files[r.path] = text;
-    } catch {
-      // unreadable text file — keep it listed as binary metadata instead
-      assets[r.path] = { size: r.size, modified: r.modified };
-    }
+    if (BINARY_EXT.test(r.path) || r.size > 1_500_000) assets[r.path] = { size: r.size, modified: r.modified };
   }
+  // The first editor paint only needs the manifest, theme and selected slide.
+  // Read these ahead of the rest so a large deck cannot hold slide 1 hostage.
+  let deckJsonRaw: string | null = null;
+  const firstDeckRead = textRows.find((r) => r.path === "deck.json");
+  if (firstDeckRead) {
+    loadPhase("deck-manifest-read", "start", { path: firstDeckRead.path });
+    deckJsonRaw = await fsReadText(deckId, "deck.json");
+    files["deck.json"] = deckJsonRaw;
+    loadPhase("deck-manifest-read", "end", { bytes: deckJsonRaw.length });
+  }
+  const deck = deckJsonRaw ? (JSON.parse(deckJsonRaw) as DeckJson) : null;
+  const initialPaths = new Set(["theme.css"]);
+  if (deck?.slides?.[0]?.id) initialPaths.add(`slides/${deck.slides[0].id}.tsx`);
+  loadPhase("first-slide-and-theme-read", "start", { paths: [...initialPaths] });
+  await Promise.all([...initialPaths].map(async (path) => {
+    if (!textRows.some((r) => r.path === path)) return;
+    try {
+      files[path] = await fsReadText(deckId, path);
+    } catch {
+      // A missing first slide is left absent and will surface as a compile error.
+    }
+  }));
+  loadPhase("first-slide-and-theme-read", "end", { files: [...initialPaths].filter((path) => files[path] !== undefined) });
   if (deckJsonRaw === null) throw new Error("Deck not found (no readable deck.json)");
   const rec: DesktopDeckRecord = {
     id: deckId,
@@ -360,6 +391,25 @@ export async function getRecord(deckId: string): Promise<DesktopDeckRecord | nul
     /* tolerate a slightly off deck.json — reads surface the real error */
   }
   records.set(deckId, rec);
+  // Return the first slide now. Hydrate the remaining text cache in a small
+  // pool; individual read failures stay retryable through api.readFile().
+  const remaining = textRows.filter((r) => files[r.path] === undefined && r.path !== "deck.json");
+  void (async () => {
+    loadPhase("background-text-hydration", "start", { files: remaining.length, concurrency: Math.min(4, remaining.length) });
+    let next = 0;
+    const readWorker = async () => {
+      while (next < remaining.length) {
+        const r = remaining[next++];
+        try {
+          rec.files[r.path] = await fsReadText(deckId, r.path);
+        } catch {
+          // Keep unreadable files absent; the editor can report/retry on demand.
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, remaining.length) }, () => readWorker()));
+    loadPhase("background-text-hydration", "end", { files: remaining.length });
+  })();
   return rec;
 }
 
@@ -584,9 +634,18 @@ function validRelPath(p: string): boolean {
 export async function readFile(deckId: string, rel: string): Promise<string> {
   const rec = await getRecord(deckId);
   if (!rec) throw new Error("Deck not found");
-  const content = rec.files[rel];
-  if (content === undefined) throw new Error(`File not found: ${rel}`);
-  return content; // portable form (url(./assets/…) stays as-is)
+  const cached = rec.files[rel];
+  if (cached !== undefined) return cached; // portable form (url(./assets/…) stays as-is)
+  const key = `${deckId}:${rel}`;
+  let pending = pendingTextReads.get(key);
+  if (!pending) {
+    pending = fsReadText(deckId, rel).then((content) => {
+      rec.files[rel] = content;
+      return content;
+    }).finally(() => pendingTextReads.delete(key));
+    pendingTextReads.set(key, pending);
+  }
+  return pending;
 }
 
 export async function saveFile(deckId: string, rel: string, content: string): Promise<string> {

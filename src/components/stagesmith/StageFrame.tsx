@@ -74,6 +74,20 @@ function tagOf(version: string | number, sig: string) {
   return `${version}|${sig}`;
 }
 
+async function resolveWithDeadline(deckId: string, path: string, version: string | number): Promise<MetaInfo> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      resolveCode(deckId, path, version),
+      new Promise<MetaInfo>((resolve) => {
+        timer = setTimeout(() => resolve({ url: null, code: null, ver: "timeout", steps: 1, error: `${path} timed out while loading` }), 12_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export function useResolvedSources(
   deckId: string,
   version: string | number,
@@ -87,7 +101,7 @@ export function useResolvedSources(
       const out: Record<string, MetaInfo> = {};
       for (const e of entries) {
         if (e.source && e.source.type === "code") {
-          out[e.kind] = await resolveCode(deckId, e.source.path, version);
+          out[e.kind] = await resolveWithDeadline(deckId, e.source.path, version);
         } else {
           out[e.kind] = { url: null, code: null, ver: "", steps: 1, error: null };
         }

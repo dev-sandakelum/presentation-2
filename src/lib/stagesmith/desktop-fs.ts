@@ -107,6 +107,8 @@ export interface DesktopFileRow {
 /* ------------------------------------------------------------------ */
 
 let helloPromise: Promise<DesktopHello | null> | null = null;
+const pendingFsCalls = new Map<string, { startedAt: number }>();
+const FS_TIMEOUT_MS = 10_000;
 
 /**
  * The hello handshake — null when there is no bridge (normal browser) or the
@@ -147,9 +149,26 @@ function cmd<T = unknown>(name: string, params?: object): Promise<T> {
       reject(new DesktopFsError("FORBIDDEN", "Desktop bridge unavailable"));
       return;
     }
+    const id = `fs-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    pendingFsCalls.set(id, { startedAt: Date.now() });
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pendingFsCalls.delete(id);
+      fn();
+    };
+    let queryId: number | null = null;
+    const timer = setTimeout(() => finish(() => {
+      try {
+        if (queryId !== null && typeof (window as any).cefQueryCancel === "function") (window as any).cefQueryCancel(queryId);
+      } catch { /* timeout still settles even if native cancellation is unavailable */ }
+      reject(new DesktopFsError("IO_ERROR", `Desktop ${name} timed out after ${FS_TIMEOUT_MS} ms`));
+    }), FS_TIMEOUT_MS);
     const request = JSON.stringify({ cmd: name, ...(params ?? {}) });
     try {
-      (window as any).cefQuery({
+      queryId = (window as any).cefQuery({
         request,
         persistent: false,
         onSuccess: (response: string) => {
@@ -163,22 +182,27 @@ function cmd<T = unknown>(name: string, params?: object): Promise<T> {
               typeof body.message === "string" &&
               !("ok" in body)
             ) {
-              reject(new DesktopFsError(body.code, body.message));
+              finish(() => reject(new DesktopFsError(body.code as string, body.message as string)));
               return;
             }
-            resolve(body as T);
+            finish(() => resolve(body as T));
           } catch {
-            reject(new DesktopFsError("IO_ERROR", "Malformed bridge response"));
+            finish(() => reject(new DesktopFsError("IO_ERROR", "Malformed bridge response")));
           }
         },
         onFailure: (errorCode: number, errorMessage: string) => {
-          reject(new DesktopFsError("IO_ERROR", errorMessage || `Bridge error ${errorCode}`));
+          finish(() => reject(new DesktopFsError("IO_ERROR", errorMessage || `Bridge error ${errorCode}`)));
         },
       });
     } catch (e) {
-      reject(e instanceof Error ? e : new DesktopFsError("IO_ERROR", String(e)));
+      finish(() => reject(e instanceof Error ? e : new DesktopFsError("IO_ERROR", String(e))));
     }
   });
+}
+
+export function getPendingDesktopFsCalls(): Array<{ id: string; elapsedMs: number }> {
+  const now = Date.now();
+  return [...pendingFsCalls].map(([id, call]) => ({ id, elapsedMs: now - call.startedAt }));
 }
 
 /* ------------------------------------------------------------------ */

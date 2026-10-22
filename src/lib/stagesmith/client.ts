@@ -175,6 +175,9 @@ export function resolveModule(deckId: string, path: string, version: string | nu
   if (hit) return Promise.resolve(hit);
   const pending = inflightModules.get(key);
   if (pending) return pending;
+  const compilePhase = `stagesmith:compile:${deckId}:${path}:${version}`;
+  if (typeof performance !== "undefined") performance.mark(`${compilePhase}:start`);
+  console.info(`[deck-load] START compile-module`, { deckId, path, version });
   const p = (async () => {
     try {
       let info: ModuleInfo;
@@ -182,6 +185,12 @@ export function resolveModule(deckId: string, path: string, version: string | nu
       if (store === "desktop" || store === "browser") {
         const rec = store === "desktop" ? await desktop.getRecord(deckId) : await local.getRecord(deckId);
         if (!rec) throw new Error("Deck not found");
+        if (store === "desktop" && rec.files[path] === undefined) {
+          // Desktop records stream their noncritical source files after the
+          // first slide. Resolve a requested module on demand instead of
+          // compiling against an incomplete startup snapshot.
+          rec.files[path] = await desktop.readFile(deckId, path);
+        }
         const res = await fetch("/api/compile", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -217,7 +226,14 @@ export function resolveModule(deckId: string, path: string, version: string | nu
     } catch (e) {
       return { url: null, code: null, ver: "err", steps: 1, error: (e as Error).message };
     }
-  })().finally(() => inflightModules.delete(key));
+  })().finally(() => {
+    if (typeof performance !== "undefined") {
+      performance.mark(`${compilePhase}:end`);
+      try { performance.measure(compilePhase, `${compilePhase}:start`, `${compilePhase}:end`); } catch { /* mark may be cleared during navigation */ }
+    }
+    console.info(`[deck-load] END compile-module`, { deckId, path, version });
+    inflightModules.delete(key);
+  });
   inflightModules.set(key, p);
   return p;
 }

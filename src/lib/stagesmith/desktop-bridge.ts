@@ -86,6 +86,8 @@ type EventHandler = (e: DesktopBridgeEvent) => void;
 
 const subscribers = new Set<EventHandler>();
 let callSeq = 0;
+const pendingCalls = new Map<string, { action: string; startedAt: number }>();
+const BRIDGE_TIMEOUT_MS = 10_000;
 /** cached getBridgeInfo — info never changes for a page lifetime; failures stay uncached */
 let infoPromise: Promise<DesktopBridgeInfo | null> | null = null;
 
@@ -152,31 +154,53 @@ export function call<T = any>(action: string, payload?: object): Promise<T> {
     }
     ensureBridge();
     const id = `ss-${Date.now().toString(36)}-${(++callSeq).toString(36)}`;
+    pendingCalls.set(id, { action, startedAt: Date.now() });
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      pendingCalls.delete(id);
+      fn();
+    };
+    let queryId: number | null = null;
+    const timer = setTimeout(() => finish(() => {
+      try {
+        if (queryId !== null && typeof (window as any).cefQueryCancel === "function") (window as any).cefQueryCancel(queryId);
+      } catch { /* timeout still settles even if native cancellation is unavailable */ }
+      reject(new Error(`Desktop bridge timed out after ${BRIDGE_TIMEOUT_MS} ms: ${action}`));
+    }), BRIDGE_TIMEOUT_MS);
     const request = JSON.stringify({ id, action, payload: payload ?? {} });
     try {
-      (window as any).cefQuery({
+      queryId = (window as any).cefQuery({
         request,
         persistent: false,
         onSuccess: (response: string) => {
           try {
             const body = JSON.parse(response) as { ok?: boolean; data?: T; error?: string };
             if (body && body.ok) {
-              resolve((body.data ?? null) as T);
+              finish(() => resolve((body.data ?? null) as T));
             } else {
-              reject(new Error(body?.error || "Bridge call failed"));
+              finish(() => reject(new Error(body?.error || "Bridge call failed")));
             }
           } catch {
-            reject(new Error("Malformed bridge response"));
+            finish(() => reject(new Error("Malformed bridge response")));
           }
         },
         onFailure: (errorCode: number, errorMessage: string) => {
-          reject(new Error(errorMessage || `Bridge error ${errorCode}`));
+          finish(() => reject(new Error(errorMessage || `Bridge error ${errorCode}`)));
         },
       });
     } catch (e) {
-      reject(e instanceof Error ? e : new Error(String(e)));
+      finish(() => reject(e instanceof Error ? e : new Error(String(e))));
     }
   });
+}
+
+/** Snapshot for diagnostics panels and field reports; never exposes payloads. */
+export function getPendingBridgeCalls(): Array<{ id: string; action: string; elapsedMs: number }> {
+  const now = Date.now();
+  return [...pendingCalls].map(([id, call]) => ({ id, action: call.action, elapsedMs: now - call.startedAt }));
 }
 
 /**

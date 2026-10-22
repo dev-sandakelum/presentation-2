@@ -66,23 +66,30 @@ export const Filmstrip = memo(function Filmstrip(props: {
   const { deck, deckId, selId } = props;
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // fetch compile meta for all slides (filmstrip badges — plan §6)
+  // Compile diagnostics at low priority, with bounded parallelism. The
+  // selected slide preview must not queue behind every filmstrip request.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const out: Record<string, string> = {};
-      await Promise.all(
-        deck.slides.map(async (s) => {
+      const selectedIndex = Math.max(deck.slides.findIndex((s) => s.id === selId), 0);
+      const order = [...deck.slides.slice(selectedIndex + 1), ...deck.slides.slice(0, selectedIndex)];
+      let cursor = 0;
+      const worker = async () => {
+        while (!cancelled && cursor < order.length) {
+          const s = order[cursor++];
           const meta = await resolveCode(deckId, `slides/${s.id}.tsx`, props.version);
           if (meta.error) out[s.id] = meta.error;
-        }),
-      );
+          if (!cancelled) setErrors((prev) => (meta.error ? { ...prev, [s.id]: meta.error! } : prev));
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(2, deck.slides.length) }, () => worker()));
       if (!cancelled) setErrors(out);
     })();
     return () => {
       cancelled = true;
     };
-  }, [deckId, props.version, deck.slides.map((s) => s.id).join(",")]);
+  }, [deckId, props.version, selId, deck.slides.map((s) => s.id).join(",")]);
 
   const mergedError = useCallback((id: string): string | undefined => {
     return errors[id];
