@@ -100,6 +100,13 @@ let checkInFlight: Promise<AccessMap> | null = null;
  * into the single in-flight run.
  */
 export function refreshAccessStates(): Promise<AccessMap> {
+  // Inside the desktop webview the browser permission prompts can never
+  // appear (JCEF has no permission handler), so there is nothing to query or
+  // restore — device decks there are surfaced through the migration notice
+  // instead (see LibraryView's desktop-webview card state).
+  if (typeof window !== "undefined" && "cefQuery" in window) {
+    return Promise.resolve(EMPTY);
+  }
   if (checkInFlight) return checkInFlight;
   checkInFlight = (async () => {
     const ids = await listDeviceDeckIds();
@@ -360,8 +367,8 @@ export function maybeRequestWriteAccess(deckId: string): void {
  */
 export function offersPersistentGrant(): boolean {
   if (typeof window === "undefined") return false;
+  if ("cefQuery" in window) return false; // embedded desktop webview — no permission prompts at all
   if (!("showDirectoryPicker" in window)) return false;
-  if ("cefQuery" in window) return false; // embedded desktop webview
   const m = navigator.userAgent.match(/Chrom(?:e|ium)\/(\d+)/);
   return !!m && Number(m[1]) >= 122;
 }

@@ -2,18 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Copy, ExternalLink, FileUp, FolderOpen, FolderPlus, Home, Import, Layers, MonitorSmartphone, Play, Plus, ArrowUp, RefreshCw, HardDrive } from "lucide-react";
-import { api, getCapabilities, defaultStore, type DeleteDeckResult, type FsBrowse } from "@/lib/stagesmith/client";
+import { api, getCapabilities, defaultStore, type FsBrowse } from "@/lib/stagesmith/client";
 import type { DeckSummary } from "@/lib/stagesmith/types";
-import { openDeviceProject, supportsDeviceFolders } from "@/lib/stagesmith/device";
+import { openDeviceProject, supportsDeviceFolders, isDesktopWebview } from "@/lib/stagesmith/device";
 import { desktopFsStatus } from "@/lib/stagesmith/desktop-store";
-import { DesktopFsError } from "@/lib/stagesmith/desktop-fs";
+import { DesktopFsError, fsChooseDeckFolder, fsConfirmAddDecks, type DesktopDeckCandidate } from "@/lib/stagesmith/desktop-fs";
 import { hasCefQuery } from "@/lib/stagesmith/desktop-bridge";
 import { useDesktopFs } from "@/hooks/useDesktopFs";
 import {
   grantNextPending,
   pickFolderAgain,
   requestDeckAccess,
-  ensureWriteAccess,
   type DeckAccessState,
 } from "@/lib/stagesmith/permission";
 import { useAccessStates } from "@/hooks/useDeviceAccess";
@@ -24,7 +23,6 @@ import { BrandLogo } from "./BrandLogo";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { download, formatWhen, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
-import { ToastAction } from "@/components/ui/toast";
 import {
   Dialog,
   DialogContent,
@@ -562,6 +560,11 @@ function OpenFolderDialog({
   const [deviceSupported, setDeviceSupported] = useState(false);
   const [opening, setOpening] = useState(false);
   const [desktopRoot, setDesktopRoot] = useState<string | null>(null);
+  // desktop folder-chooser flow (fs.chooseDeckFolder via the bridge)
+  const [choosingDesktop, setChoosingDesktop] = useState(false);
+  const [candidates, setCandidates] = useState<DesktopDeckCandidate[] | null>(null);
+  const [candidatePick, setCandidatePick] = useState<Set<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
 
   // server browser state (local runs only)
   const [dir, setDir] = useState<string | null>(null);
@@ -604,6 +607,67 @@ function OpenFolderDialog({
       cancelled = true;
     };
   }, [open, dir, fsWritable]);
+
+  /** desktop app: native folder chooser through the fs bridge — the Java side
+   *  opens a real JFileChooser; a folder with a deck.json is added to the
+   *  library, a parent folder offers its deck subfolders for confirmation */
+  const openDesktopFolder = async () => {
+    if (choosingDesktop) return;
+    setChoosingDesktop(true);
+    try {
+      const r = await fsChooseDeckFolder({
+        title: "Choose a deck folder",
+        startPath: desktopRoot ?? undefined,
+      });
+      if ("cancelled" in r) return; // user closed the chooser — nothing changed
+      if ("alreadyInLibrary" in r) {
+        toast({ title: "Already in your library", description: "That deck folder is already listed." });
+        return;
+      }
+      if ("needsConfirm" in r) {
+        setCandidates(r.candidates);
+        setCandidatePick(new Set(r.candidates.map((c) => c.token)));
+        return;
+      }
+      if ("added" in r && r.added.length) {
+        const first = r.added[0];
+        toast({
+          title: `Opened “${first.title}”`,
+          description: `${first.path} — added to your library.`,
+        });
+        onOpenChange(false);
+        nav.deck(first.id);
+      }
+    } catch (e) {
+      if (e instanceof DesktopFsError && e.code === "BUSY") {
+        toast({ title: "Folder chooser already open", description: "Finish or close the open chooser first." });
+      } else {
+        toast({ title: "Could not open folder", description: (e as Error).message, variant: "destructive" });
+      }
+    } finally {
+      setChoosingDesktop(false);
+    }
+  };
+
+  const confirmCandidates = async () => {
+    if (!candidates || confirming) return;
+    setConfirming(true);
+    try {
+      const r = await fsConfirmAddDecks([...candidatePick]);
+      const added = r.added ?? [];
+      toast({
+        title: added.length === 1 ? `Opened “${added[0].title}”` : `${added.length} decks added`,
+        description: added.map((a) => a.path).join("\n"),
+      });
+      setCandidates(null);
+      onOpenChange(false);
+      if (added[0]) nav.deck(added[0].id);
+    } catch (e) {
+      toast({ title: "Could not add the decks", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setConfirming(false);
+    }
+  };
 
   /** open a folder from the USER'S device (File System Access API) */
   const openDeviceFolder = async () => {
@@ -665,23 +729,89 @@ function OpenFolderDialog({
 
         <div style={{ display: "grid", gap: 14, padding: "2px 0 6px" }}>
           {desktopRoot ? (
-            <div
-              style={{
-                border: "1px solid var(--ss-line-strong)",
-                borderRadius: 12,
-                padding: "14px 16px",
-                font: "400 12.5px/1.7 var(--ss-sans)",
-                color: "var(--ss-mut)",
-              }}
-            >
-              <div style={{ font: "600 13.5px var(--ss-sans)", color: "var(--ss-ink)", marginBottom: 4 }}>
-                The Chassé Studio desktop app owns your decks folder
+            <div>
+              <button
+                className="ss-btn ss-btn-acc"
+                style={{ width: "100%", height: 40, justifyContent: "center", gap: 8 }}
+                disabled={choosingDesktop}
+                onClick={() => void openDesktopFolder()}
+              >
+                <FolderOpen size={15} />
+                {choosingDesktop ? "Choose in the app…" : "Choose a deck folder…"}
+              </button>
+              <div style={{ font: "400 12px/1.6 var(--ss-sans)", color: "var(--ss-mut)", marginTop: 7 }}>
+                The desktop app opens its own folder picker. A folder with a{" "}
+                <code style={{ font: "500 11px var(--ss-mono)" }}>deck.json</code> is added to your library
+                as-is — anywhere on your computer. Decks also live in{" "}
+                <code style={{ font: "500 11px var(--ss-mono)" }}>{desktopRoot}</code>; drop a deck folder in
+                there and it appears automatically.
               </div>
-              Decks live in{" "}
-              <code style={{ font: "500 11px var(--ss-mono)", color: "var(--ss-ink2)" }}>{desktopRoot}</code>. Drop a
-              deck folder (any folder with a <code style={{ font: "500 11px var(--ss-mono)" }}>deck.json</code>) in there
-              and it appears in the library — no permission to grant. To switch to a different folder, use the banner on
-              the library page.
+              {candidates && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    border: "1px solid var(--ss-line)",
+                    borderRadius: 10,
+                    background: "var(--ss-panel2)",
+                    padding: 10,
+                  }}
+                >
+                  <div className="ss-label" style={{ marginBottom: 6 }}>
+                    Decks found in that folder — choose which to add
+                  </div>
+                  {candidates.map((c) => (
+                    <label
+                      key={c.token}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "5px 4px",
+                        font: "400 12.5px var(--ss-sans)",
+                        color: "var(--ss-ink2)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={candidatePick.has(c.token)}
+                        onChange={(e) =>
+                          setCandidatePick((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(c.token);
+                            else next.delete(c.token);
+                            return next;
+                          })
+                        }
+                      />
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {c.title}
+                      </span>
+                      <span style={{ font: "400 11px var(--ss-mono)", color: "var(--ss-mut)", flex: "none" }}>
+                        {c.slides} slides
+                      </span>
+                    </label>
+                  ))}
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <button
+                      className="ss-btn ss-btn-acc"
+                      style={{ height: 30, flex: 1, justifyContent: "center" }}
+                      disabled={confirming || candidatePick.size === 0}
+                      onClick={() => void confirmCandidates()}
+                    >
+                      {confirming ? "Adding…" : `Add ${candidatePick.size} deck${candidatePick.size === 1 ? "" : "s"}`}
+                    </button>
+                    <button
+                      className="ss-btn"
+                      style={{ height: 30 }}
+                      disabled={confirming}
+                      onClick={() => setCandidates(null)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <>
@@ -889,88 +1019,44 @@ function DeckCard({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const deletingRef = useRef(false); // rapid double-clicks → ONE delete
 
-  /* per-card permission state — granted shows nothing extra, the device
-   * chip above already marks the healthy case */
+  /* per-card permission state (browser mode only — the desktop webview has
+   * no permission prompts at all, so device decks there get the migration
+   * notice instead of an impossible "Allow access" flow) */
   const access = useAccessStates();
+  const inDesktopWebview = isDesktopWebview();
   const accessState: DeckAccessState | undefined =
-    deck.device && deck.store === "browser" ? access[deck.id] : undefined;
+    !inDesktopWebview && deck.device && deck.store === "browser" ? access[deck.id] : undefined;
+  const showMigration = inDesktopWebview && deck.store === "browser" && deck.device === true;
 
   // big decks ask for the title to be typed (decks can share a title — the
   // folder/id line + the typed title together pin down the right deck)
   const requireText = deck.slideCount >= 20 ? deck.title : null;
+
   const folderName = deck.folderName ?? deck.id;
 
-  /* ---------- delete without permission: honest, resumable ----------
-   * api.deleteDeck returns needsAccess when the device folder couldn't be
-   * written: NOTHING is deleted then (files stay, browser copy stays) and
-   * this toast offers the recovery click — a fresh user gesture that
-   * re-grants and finishes the delete. "Deck deleted" is only ever shown
-   * after the files are actually gone. */
-  const deleteNeedsAccessToast = (r: DeleteDeckResult) => {
-    if (r.accessState === "missing") {
+  /* ---------- move a browser/device deck into the desktop app's folder ---------- */
+  const [moving, setMoving] = useState(false);
+  const moveToDesktopFolder = async () => {
+    if (moving) return;
+    setMoving(true);
+    try {
+      const { deckId } = await api.duplicateIntoDesktop(deck.id, deck.title);
+      await api.deleteDeck(deck.id); // removes the browser copy (device folder files stay)
       toast({
-        title: "Folder not found — nothing was deleted",
-        description: `Chassé can't find the “${folderName}” folder on your device, so the deck was kept. Choose the folder again to finish deleting it.`,
-        duration: 60_000, // recovery action — keep it around long enough to click
-        action: (
-          <ToastAction
-            altText="Choose folder again"
-            onClick={() => {
-              void (async () => {
-                const state = await pickFolderAgain(deck.id);
-                if (state === "granted") await runDelete();
-                else
-                  toast({
-                    title: "Folder not re-attached",
-                    description: "The deck was kept — nothing was deleted.",
-                    variant: "destructive",
-                  });
-              })();
-            }}
-          >
-            Choose folder again
-          </ToastAction>
-        ),
+        title: `“${deck.title}” moved to the app’s decks folder`,
+        description: "It now saves through the desktop app — no permissions to renew, ever.",
       });
-      return;
+      onDeleted();
+      nav.deck(deckId);
+    } catch (e) {
+      toast({ title: "Could not move the deck", description: (e as Error).message, variant: "destructive" });
+    } finally {
+      setMoving(false);
     }
-    toast({
-      title: "Access needed to delete files",
-      duration: 60_000, // recovery action — keep it around long enough to click
-      description:
-        r.accessState === "denied"
-          ? `Chassé is blocked from writing the “${folderName}” folder, so nothing was deleted. Allow it in the browser's site settings (chrome://settings/content/filesystem), then delete the deck again.`
-          : `Chassé can't write to the “${folderName}” folder, so nothing was deleted yet. Allow access to finish the delete.`,
-      action: (
-        <ToastAction
-          altText="Allow access"
-          onClick={() => {
-            void (async () => {
-              // this click is a fresh user gesture — the permission sheet
-              // can appear, then the delete completes
-              const state = await ensureWriteAccess(deck.id);
-              if (state !== "granted") {
-                toast({
-                  title: "Delete not finished",
-                  description:
-                    state === "denied"
-                      ? "Access is still blocked. Allow Chassé under the browser's site settings → File System editing for sites, then delete the deck again."
-                      : "Access couldn't be restored — the deck was kept. Try deleting it again after restoring folder access.",
-                  variant: "destructive",
-                });
-                return;
-              }
-              await runDelete();
-            })();
-          }}
-        >
-          Allow access
-        </ToastAction>
-      ),
-    });
   };
 
-  /** the actual delete — safe to re-run after a grant (idempotent guard) */
+  /** the actual delete — remove the LIBRARY ENTRY ONLY; the folder and every
+   *  file in it stay on disk (all stores). No permission is needed. */
   const runDelete = async (): Promise<void> => {
     if (deletingRef.current) return;
     deletingRef.current = true;
@@ -979,27 +1065,15 @@ function DeckCard({
     try {
       const r = await api.deleteDeck(deck.id);
       setDeleteOpen(false);
-      if (r.needsAccess) {
-        // permission slipped away again mid-flow — nothing deleted
-        deleteNeedsAccessToast(r);
-        return;
-      }
       onDeleted();
-      toast(
-        r.external
-          ? { title: "Removed from library", description: `Files kept on disk at ${r.root}` }
-          : {
-              title: r.folderCleanupError ? "Removed from this browser" : "Deck deleted",
-              description: r.folderCleanupError
-                ? `${r.folderCleanupError} (${folderName})`
-                : deck.device
-                  ? `Removed from this browser and the “${folderName}” folder.`
-                  : undefined,
-            },
-      );
+      toast({
+        title: "Removed from library",
+        description: `The project folder and its files were kept${r.root && r.root !== "this browser" ? ` (${r.root})` : ""} — the deck is no longer listed here.`,
+        duration: 8000,
+      });
     } catch (e) {
       // keep the dialog open with the reason — confirm button becomes Retry
-      setDeleteError((e as Error).message || "The deck couldn't be deleted");
+      setDeleteError((e as Error).message || "The deck couldn’t be removed");
     } finally {
       setDeleting(false);
       deletingRef.current = false;
@@ -1009,7 +1083,6 @@ function DeckCard({
   const doDelete = () => {
     void runDelete();
   };
-
   // keep the cover thumbnail fresh without a full refresh
   useEffect(() => {
     setSig(deck.signature);
@@ -1041,48 +1114,23 @@ function DeckCard({
         )}
       </div>
       <div className="ss-card-body">
-        <div className="ss-card-title">
+        <div className="ss-card-title" title={deck.title}>
           {deck.title}
+        </div>
+        <div className="ss-card-badges">
           {deck.external && (
-            <span
-              title="Linked project — folder lives outside decks/"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 3,
-                marginLeft: 7,
-                verticalAlign: "middle",
-                font: "500 10px var(--ss-fm)",
-                color: "var(--ss-mut)",
-                border: "1px solid var(--ss-line)",
-                borderRadius: 99,
-                padding: "1px 7px",
-                letterSpacing: ".06em",
-              }}
-            >
+            <span className="ss-badge" title="Linked project — folder lives outside decks/">
               <ExternalLink size={10} /> linked
             </span>
           )}
           {isBrowserDeck && (
             <span
+              className="ss-badge"
               title={
                 deck.device
                   ? "Stored in this browser, mirrored to a folder on your device"
                   : "Stored in this browser (this deployment can't write server files)"
               }
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 3,
-                marginLeft: 7,
-                verticalAlign: "middle",
-                font: "500 10px var(--ss-fm)",
-                color: "var(--ss-mut)",
-                border: "1px solid var(--ss-line)",
-                borderRadius: 99,
-                padding: "1px 7px",
-                letterSpacing: ".06em",
-              }}
             >
               {deck.device ? <HardDrive size={10} /> : <Layers size={10} />}
               {deck.device ? "device" : "this browser"}
@@ -1090,26 +1138,14 @@ function DeckCard({
           )}
           {deck.store === "desktop" && (
             <span
+              className="ss-badge"
               title={deck.folderName ? `Stored in the Chassé Studio desktop folder: ${deck.folderName}` : "Stored in the Chassé Studio desktop folder"}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 3,
-                marginLeft: 7,
-                verticalAlign: "middle",
-                font: "500 10px var(--ss-fm)",
-                color: "var(--ss-mut)",
-                border: "1px solid var(--ss-line)",
-                borderRadius: 99,
-                padding: "1px 7px",
-                letterSpacing: ".06em",
-              }}
             >
               <MonitorSmartphone size={10} /> desktop
             </span>
           )}
         </div>
-        <div className="ss-card-meta">
+        <div className="ss-card-meta" title={`${deck.slideCount} slides · ${deck.id} · modified ${formatWhen(deck.modified)}`}>
           {deck.slideCount} slides · {deck.id} · modified {formatWhen(deck.modified)}
         </div>
         {accessState && (
@@ -1118,6 +1154,17 @@ function DeckCard({
             onAllow={() => void requestDeckAccess(deck.id)}
             onChooseFolder={() => void pickFolderAgain(deck.id)}
           />
+        )}
+        {showMigration && (
+          <div className="ss-card-migrate">
+            <span>
+              This deck lives in a browser folder. The desktop app can’t renew browser folder
+              permissions — move it to the app’s decks folder to keep editing it here.
+            </span>
+            <button className="ss-btn" style={{ height: 26, padding: "0 10px", flex: "none" }} disabled={moving} onClick={() => void moveToDesktopFolder()}>
+              <FolderPlus size={12} /> {moving ? "Moving…" : "Move to app folder"}
+            </button>
+          </div>
         )}
       </div>
       <div className="ss-card-acts">
@@ -1128,6 +1175,17 @@ function DeckCard({
           <Play size={13} /> Present
         </button>
         <div style={{ flex: 1 }} />
+        {isBrowserDeck && inDesktopWebview && (
+          <button
+            className="ss-btn"
+            style={{ height: 30, padding: "0 10px" }}
+            disabled={moving}
+            title="Copy this deck into the desktop app's decks folder (files on your device stay)"
+            onClick={() => void moveToDesktopFolder()}
+          >
+            <FolderPlus size={13} /> {moving ? "Moving…" : "Move"}
+          </button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="ss-btn ss-btn-icon" style={{ height: 30, width: 30 }} title="More">
@@ -1181,14 +1239,14 @@ function DeckCard({
                 setDeleteOpen(true);
               }}
             >
-              <ExternalLink size={0} style={{ display: "none" }} />
-              {deck.external ? "Remove from library (keeps files)" : "Delete"}
+              Remove from library
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
 
-      {/* the delete confirmation — nothing is removed until Confirm */}
+      {/* the delete confirmation — nothing is removed until Confirm. Files
+          are ALWAYS kept on disk; this only removes the deck from the library. */}
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={(o) => {
@@ -1197,7 +1255,7 @@ function DeckCard({
             setDeleteError(null);
           }
         }}
-        title={deck.external ? "Remove deck from library?" : "Delete deck?"}
+        title="Remove deck from library?"
         description={
           <>
             <div style={{ font: "600 13.5px var(--ss-fb, sans-serif)", color: "var(--ss-ink, #f2f0fa)" }}>
@@ -1205,41 +1263,21 @@ function DeckCard({
             </div>
             <div style={{ color: "var(--ss-mut, #9894b0)", font: "400 12px var(--ss-fm, monospace)" }}>
               {deck.slideCount} slides · folder: {folderName}
-              {deck.store === "desktop"
-                ? " · Chassé Studio desktop folder"
-                : deck.store === "browser" && !deck.device
-                  ? " · stored in this browser"
-                  : ""}
             </div>
             <div style={{ marginTop: 4 }}>
-              {deck.external ? (
-                <>
-                  This removes the deck from the library only. Its files stay on disk at{" "}
-                  <code style={{ font: "500 11.5px var(--ss-fm, monospace)" }}>{deck.id}</code>.
-                </>
-              ) : (
-                <>
-                  This permanently deletes the deck and its files from{" "}
-                  {deck.device
-                    ? "this device"
-                    : deck.store === "desktop"
-                      ? "the Chassé Studio desktop folder"
-                      : deck.store === "server"
-                        ? "the app's decks folder"
-                        : "this browser"}
-                  . This cannot be undone.
-                </>
-              )}
+              This only removes the deck from your library. The project folder and its files stay on
+              disk{deck.store === "browser" ? (deck.device ? " (your device folder is untouched)" : " (this browser's working copy is removed)") : ""}.
+              You can get the deck back by opening the folder again.
             </div>
           </>
         }
-        confirmLabel={deck.external ? "Remove from library" : "Delete deck"}
+        confirmLabel="Remove from library"
         danger
         busy={deleting}
         error={deleteError}
         requireText={requireText}
         onConfirm={doDelete}
-        closeLabel="Close without deleting"
+        closeLabel="Close without removing"
       />
     </div>
   );

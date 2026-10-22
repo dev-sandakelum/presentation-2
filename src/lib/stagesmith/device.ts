@@ -33,11 +33,22 @@ import {
   type BrowserDeckRecord,
   type MirrorChanges,
 } from "./browser-store";
+import { hasCefQuery } from "./desktop-bridge";
 
 type DirHandle = any;
 
+/** Device folders need the browser's own permission UI (showDirectoryPicker /
+ *  requestPermission sheets). The desktop webview (JCEF) has no permission
+ *  handler at all — those prompts can NEVER appear there — so the whole File
+ *  System Access surface is disabled inside the app and the desktop app's own
+ *  folder (the fs bridge) is used instead. */
 export function supportsDeviceFolders(): boolean {
-  return typeof window !== "undefined" && "showDirectoryPicker" in window;
+  return typeof window !== "undefined" && !hasCefQuery() && "showDirectoryPicker" in window;
+}
+
+/** true when this window is the desktop app's embedded webview */
+export function isDesktopWebview(): boolean {
+  return typeof window !== "undefined" && hasCefQuery();
 }
 
 /** open the browser's directory picker (must run on a user gesture) */

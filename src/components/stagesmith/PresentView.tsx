@@ -13,6 +13,7 @@ import { useAssetPreloader } from "@/hooks/useAssetPreloader";
 import { useAccessStates } from "@/hooks/useDeviceAccess";
 import { useToast } from "@/hooks/use-toast";
 import { requestDeckAccess, pickFolderAgain } from "@/lib/stagesmith/permission";
+import { hasCefQuery, call, getBridgeInfo } from "@/lib/stagesmith/desktop-bridge";
 import { AccessBanner } from "./AccessBanner";
 import { BrandLogo } from "./BrandLogo";
 import { SplashVeil } from "./LoadingScreen";
@@ -125,7 +126,11 @@ export function PresentView({
   const access = useAccessStates();
   const presentAccessState = bundle?.device ? access[deckId] : undefined;
   const start = fromParam ? Math.max(0, Number(fromParam) || 0) : 0;
-  const preload = useAssetPreloader(deck, deckId, version, { startIndex: start });
+  // Issue 28: EVERY slide must be fully loaded before the deck reveals — the
+  // critical window is the whole deck (modules, backgrounds, overlays and
+  // raster assets alike). Genuine failures still offer Retry / Continue
+  // anyway instead of blocking forever.
+  const preload = useAssetPreloader(deck, deckId, version, { startIndex: start, criticalWindow: Number.POSITIVE_INFINITY });
   // the deck starts once the critical window settled AND any failed item was
   // either retried away or explicitly acknowledged (Continue anyway)
   const revealReady = preload.ready && stageReady && (!preload.failures.length || preload.failuresAcknowledged);
@@ -735,6 +740,29 @@ function isOnButton(target: EventTarget | null): boolean {
 }
 
 function toggleFull() {
+  // Inside the desktop app the Fullscreen API is unavailable (JCEF has no
+  // fullscreen handler) — ask the Java window to toggle its own fullscreen
+  // over the bridge instead. In a normal browser, use the standard API.
+  if (hasCefQuery()) {
+    getBridgeInfo()
+      .then((info) => {
+        if (info?.trusted) {
+          call("toggleFullscreen").catch(() => {
+            /* the bridge action may not exist in an older desktop build —
+             * fall through to the browser API below */
+            fullscreenApi();
+          });
+        } else {
+          fullscreenApi();
+        }
+      })
+      .catch(() => fullscreenApi());
+    return;
+  }
+  fullscreenApi();
+}
+
+function fullscreenApi() {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   else document.documentElement.requestFullscreen().catch(() => {});
 }
@@ -769,6 +797,8 @@ function OvItem(props: {
             deckDefaultMode={defaultMode}
             deckBg={props.deckBg}
             deckOverlay={props.deckOverlay}
+            slideBg={entry.bg}
+            slideOverlay={entry.overlay}
             themeCss={props.themeCss}
             version={props.version}
           />

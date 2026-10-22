@@ -115,7 +115,10 @@ html[data-ss-theme="light"] {
   font: 500 10px var(--ss-fm);
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--ss-mut);
+  /* small labels need MORE contrast than body text, not less — the old mut
+     grey fell below readable on the light theme */
+  color: var(--ss-ink2);
+  opacity: 0.82;
 }
 
 /* ---------- buttons (Chassé .btn) ---------- */
@@ -325,9 +328,11 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
 }
 @keyframes ss-shimmer { from { background-position: 180% 0; } to { background-position: -80% 0; } }
 
+/* number badge sits in the bottom-RIGHT corner — slide titles are usually
+   bottom-left, and the old position covered them */
 .ss-thumb-num {
   position: absolute;
-  left: 5px;
+  right: 5px;
   bottom: 4px;
   z-index: 3;
   min-width: 20px;
@@ -342,10 +347,12 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
   color: #fff;
 }
 .ss-thumb-item.sel .ss-thumb-num { background: var(--ss-acc); color: var(--ss-acc-ink); }
+/* the error badge is a small round button anchored by `right` — the old
+   `left` here plus the inline `right` stretched it into a full-width bar */
 .ss-thumb-err {
   position: absolute;
   top: 5px;
-  left: 5px;
+  right: 5px;
   z-index: 4;
   width: 20px;
   height: 20px;
@@ -360,6 +367,7 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
   cursor: pointer;
 }
 .ss-thumb-err:hover { background: var(--ss-err); }
+.ss-thumb-err + .ss-thumb-dot, .ss-thumb-dot { top: 5px; }
 .ss-thumb-dot {
   position: absolute;
   top: 5px;
@@ -621,6 +629,8 @@ html[data-ss-theme="light"] .ss-btn.ss-btn-acc { color: #ffffff; }
 }
 .ss-card {
   position: relative;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--ss-line);
   border-radius: 14px;
   background: var(--ss-panel);
@@ -642,10 +652,54 @@ html[data-ss-theme="light"] .ss-card:hover { box-shadow: 0 18px 50px rgba(40, 30
   overflow: hidden;
   border-bottom: 1px solid var(--ss-line);
 }
-.ss-card-body { padding: 14px 16px 10px; }
-.ss-card-title { font: 600 15px/1.3 var(--ss-fb); letter-spacing: 0; }
-.ss-card-meta { margin-top: 4px; font: 400 12px var(--ss-fm); color: var(--ss-mut); }
-.ss-card-acts { display: flex; gap: 8px; padding: 0 16px 14px; }
+.ss-card-body { padding: 14px 16px 10px; flex: 1; min-height: 0; }
+.ss-card-title {
+  font: 600 15px/1.3 var(--ss-fb);
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* badges live on their OWN row — a long title never wraps them mid-line */
+.ss-card-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.ss-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3;
+  font: 500 10px var(--ss-fm);
+  color: var(--ss-ink2);
+  border: 1px solid var(--ss-line);
+  background: var(--ss-panel2);
+  border-radius: 99px;
+  padding: 2px 8px;
+  letter-spacing: .05em;
+  white-space: nowrap;
+}
+/* one line, never wrapped mid-phrase — long ids fold into an ellipsis */
+.ss-card-meta {
+  margin-top: 7px;
+  font: 400 12px var(--ss-fm);
+  color: var(--ss-mut);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* actions pinned to the card's bottom — no floating gap on shorter cards */
+.ss-card-acts { display: flex; gap: 8px; padding: 0 16px 14px; margin-top: auto; align-items: center; }
+/* compact migration notice (device decks inside the desktop app) */
+.ss-card-migrate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--ss-line-strong);
+  border-radius: 10px;
+  font: 400 11.5px/1.5 var(--ss-fb);
+  color: var(--ss-mut);
+}
+.ss-card-migrate span { flex: 1 1 180px; }
 
 /* ---------- present display (Chassé .present) ---------- */
 .ss-display {

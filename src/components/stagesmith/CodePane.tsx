@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import type { EditorView } from "@codemirror/view";
 import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, PanelBottom, PanelRight, Save, Trash2, Upload, WandSparkles } from "lucide-react";
 import type { DeckJson, FileRow, SlideEntry, Source } from "@/lib/stagesmith/types";
-import { api, assetLoadFailureReason, resolveAssetUrl } from "@/lib/stagesmith/client";
+import { api, assetLoadFailureReason, isTransientLoadError, resolveAssetUrl } from "@/lib/stagesmith/client";
 import { FORMATABLE_EXT, formatTsx } from "@/lib/stagesmith/format";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import { copyText, fixPrompt, sourceLabel } from "./shared";
@@ -81,6 +81,9 @@ export const CodePane = memo(function CodePane(props: {
   onCommonSource: (layer: "bg" | "overlay", source: Source) => void;
   onOverride: (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => void;
   version: string;
+  /** live-edit revision (deck signature:compileRevision) — the Slide tab's
+   *  error badge must track live edits, not just saved versions */
+  compileVersion?: string;
   /** fix-list item 1: minimized = tab bar only, preview grows */
   minimized: boolean;
   onToggleMinimize: () => void;
@@ -164,16 +167,30 @@ export const CodePane = memo(function CodePane(props: {
     if (path) ensureBuffer(path);
   }, [tab, slidePath, notesPath, ensureBuffer]);
 
+  // slide compile status for the Slide tab badge — compileVersion so it
+  // tracks live edits; transient transport failures are NOT slide errors
+  const [slideErrorTransient, setSlideErrorTransient] = useState(false);
   useEffect(() => {
-    if (!sel) return setSlideError(null);
+    if (!sel) {
+      setSlideError(null);
+      setSlideErrorTransient(false);
+      return;
+    }
     let cancelled = false;
-    resolveCode(deckId, slidePath, props.version).then((m) => {
-      if (!cancelled) setSlideError(m.error);
+    resolveCode(deckId, slidePath, props.compileVersion ?? props.version).then((m) => {
+      if (cancelled) return;
+      if (m.error && isTransientLoadError(m.error)) {
+        setSlideError(null);
+        setSlideErrorTransient(true);
+        return;
+      }
+      setSlideErrorTransient(false);
+      setSlideError(m.error);
     });
     return () => {
       cancelled = true;
     };
-  }, [deckId, slidePath, props.version, sel]);
+  }, [deckId, slidePath, props.version, props.compileVersion, sel]);
 
   const slideCode = buffers[slidePath] ?? "";
 
@@ -1009,6 +1026,7 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
                           src ? <div style={{ position: "relative", aspectRatio: "4/3", overflow: "hidden", background: "var(--ss-card)" }}>
                             {previewLoaded[a.path] !== src && <div aria-hidden="true" style={{ position: "absolute", inset: 0, background: "linear-gradient(100deg, transparent 20%, rgba(140,140,160,.16) 40%, transparent 60%)", backgroundSize: "200% 100%", animation: "ss-shimmer 1.4s ease-in-out infinite" }} />}
                             <img
+                              key={src}
                               src={src}
                               alt={displayName}
                               loading="lazy"
@@ -1017,6 +1035,27 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
                               onError={() => {
                                 console.warn(`[assets] preview failed to load: ${a.path} (src=${src})`);
                                 void assetLoadFailureReason(src).then((reason) => setBroken((b) => ({ ...b, [a.path]: reason })));
+                              }}
+                              ref={(el) => {
+                                if (!el) return;
+                                // watchdog: a request that neither loads nor
+                                // errors (a hanging interception, a dead
+                                // bridge) must not shimmer forever — report
+                                // honestly after a generous window
+                                const path = a.path;
+                                const startedAt = Date.now();
+                                const timer = setTimeout(() => {
+                                  if (!el.complete || el.naturalWidth === 0) {
+                                    console.warn(`[assets] preview never finished loading: ${path} (src=${src})`);
+                                    setBroken((b) =>
+                                      b[path]
+                                        ? b
+                                        : { ...b, [path]: "The image never finished loading — the desktop app may be busy or an older version. Retry, or update the app." },
+                                    );
+                                  }
+                                }, 9000);
+                                el.addEventListener("load", () => clearTimeout(timer), { once: true });
+                                el.addEventListener("error", () => clearTimeout(timer), { once: true });
                               }}
                             />
                           </div> : <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", color: "var(--ss-mut)" }}>Resolving {displayName}…</div>

@@ -474,7 +474,9 @@ try {
   ok(onDisk.includes('url("./assets/pic.png")'), "portable url(./assets/…) written as-is");
   ok(!onDisk.includes("/__chasse_files__"), "no virtual URL leaked into theme.css");
   const rewritten = await store.rewriteThemeCssDesktop(onDisk, "bridge-demo");
-  ok(rewritten.startsWith("/__chasse_files__/") && rewritten !== onDisk, "rewriteThemeCssDesktop maps it for display");
+  // the rewrite returns the whole CSS sheet (":root { … }") — the virtual
+  // URL must be INSIDE it, and the original relative form must be gone
+  ok(rewritten.includes("/__chasse_files__/bridge-demo/assets/pic.png") && rewritten !== onDisk, "rewriteThemeCssDesktop maps it for display");
 
   await step("save-queue retry ladder (pure logic)");
   // mirror of useSaveQueue's backoff: 1s → 3s → 10s, then "failed"

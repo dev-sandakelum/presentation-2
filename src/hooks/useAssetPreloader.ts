@@ -405,7 +405,11 @@ export function useAssetPreloader(
         });
       }
 
-      tasksRef.current = [...tasks];
+      // THE task list = fonts + every deduped slide/bg/overlay/asset task.
+      // (Regression fixed here: the dedup map was built but never merged, so
+      // the preload gate used to run — and gate on — ONLY the fonts task;
+      // slides were never actually preloaded before the reveal.)
+      tasksRef.current = [...tasks, ...byKey.values()];
       publish();
       if (cancelled) return;
 

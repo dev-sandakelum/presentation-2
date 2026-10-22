@@ -173,6 +173,7 @@ export function useSync(deckId: string | null, role: SyncRole, token?: string | 
           return;
         }
         if (ev.type === "server-log") return; // consumed by the QR panel, not the room
+        if (ev.type === "download") return; // consumed by useDownloadFeedback
         if (ev.deckId !== deckId) return;
         if (ev.type === "sync-state") setState(ev.state);
         else if (ev.type === "sync-presence") setRemotes(ev.remotes);

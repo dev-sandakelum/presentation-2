@@ -20,6 +20,7 @@ import type { DeckJson, ThemeMode } from "@/lib/stagesmith/types";
 import { LiveThumb } from "./LiveThumb";
 import { useInView } from "./LibraryView";
 import { resolveCode } from "./StageFrame";
+import { isTransientLoadError } from "@/lib/stagesmith/client";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -77,8 +78,11 @@ export const Filmstrip = memo(function Filmstrip(props: {
         while (!cancelled && cursor < order.length) {
           const s = order[cursor++];
           const meta = await resolveCode(deckId, `slides/${s.id}.tsx`, props.compileVersion ?? props.version, "background");
-          if (meta.error) out[s.id] = meta.error;
-          if (!cancelled) setErrors((prev) => (meta.error ? { ...prev, [s.id]: meta.error! } : prev));
+          // transient transport failures (aborted fetches, network drops) are
+          // NOT slide errors — a retry will fix them; only real compile errors
+          // get the red badge
+          if (meta.error && !isTransientLoadError(meta.error)) out[s.id] = meta.error;
+          if (!cancelled) setErrors((prev) => (meta.error && !isTransientLoadError(meta.error) ? { ...prev, [s.id]: meta.error! } : prev));
         }
       };
       await Promise.all(Array.from({ length: Math.min(2, deck.slides.length) }, () => worker()));
@@ -244,6 +248,8 @@ const SortableThumb = memo(function SortableThumb(props: {
                   deckDefaultMode={deck.settings.defaultMode}
                   deckBg={deck.bg}
                   deckOverlay={deck.overlay}
+                  slideBg={entry.bg}
+                  slideOverlay={entry.overlay}
                   themeCss={props.themeCss}
                   version={props.version}
                   compileVersion={props.compileVersion}

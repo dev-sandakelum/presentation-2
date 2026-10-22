@@ -266,6 +266,47 @@ export function fsDeleteDeck(deck: string): Promise<{ ok: boolean }> {
   return cmd<{ ok: boolean }>("fs.deleteDeck", { deck });
 }
 
+/** fs.removeDeck {id} → {ok, filesKept, path} — removes the deck from the
+ *  library ONLY: the folder and every file in it stay on disk (tombstoned so
+ *  the next scan doesn't re-adopt it). */
+export function fsRemoveDeck(id: string): Promise<{ ok: boolean; filesKept: boolean; path: string }> {
+  return cmd<{ ok: boolean; filesKept: boolean; path: string }>("fs.removeDeck", { id });
+}
+
+/** one candidate deck folder found inside a folder picked via fsChooseDeckFolder */
+export interface DesktopDeckCandidate {
+  token: string;
+  title: string;
+  folder: string;
+  slides: number;
+}
+
+/** fs.chooseDeckFolder result — {cancelled} | {ok, added:[…]} |
+ *  {needsConfirm, candidates} | {alreadyInLibrary} (Java opens a NATIVE
+ *  folder chooser — this is how "Open folder…" works inside the desktop app). */
+export type FsChooseDeckFolderResult =
+  | { cancelled: true }
+  | { ok: true; added: Array<{ id: string; title: string; folder: string; path: string; slides: number }> }
+  | { needsConfirm: true; candidates: DesktopDeckCandidate[] }
+  | { alreadyInLibrary: true };
+
+/** fs.chooseDeckFolder {title?, startPath?} → native folder chooser */
+export function fsChooseDeckFolder(options: { title?: string; startPath?: string } = {}): Promise<FsChooseDeckFolderResult> {
+  return cmd<FsChooseDeckFolderResult>("fs.chooseDeckFolder", options);
+}
+
+/** fs.confirmAddDecks {tokens:[…]} → {ok, added:[…]} (short-lived tokens from
+ *  a needsConfirm answer — valid 5 minutes) */
+export function fsConfirmAddDecks(tokens: string[]): Promise<{ ok: boolean; added: Array<{ id: string; title: string; folder: string; path: string; slides: number }> }> {
+  return cmd<{ ok: boolean; added: Array<{ id: string; title: string; folder: string; path: string; slides: number }> }>("fs.confirmAddDecks", { tokens });
+}
+
+/** fs.relinkDeck {id, title?, startPath?} → re-link an existing library id to a
+ *  freshly picked folder (native chooser). */
+export function fsRelinkDeck(id: string, options: { title?: string; startPath?: string } = {}): Promise<FsChooseDeckFolderResult> {
+  return cmd<FsChooseDeckFolderResult>("fs.relinkDeck", { id, ...options });
+}
+
 /** fs.duplicateDeck {deck, copyId, title?} → {ok, id} */
 export function fsDuplicateDeck(
   deck: string,

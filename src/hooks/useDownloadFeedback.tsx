@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { subscribe, hasCefQuery, call } from "@/lib/stagesmith/desktop-bridge";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 
 /**
  * useDownloadFeedback — export/download toasts for BOTH environments.
@@ -20,12 +21,22 @@ import { useToast } from "@/hooks/use-toast";
  *  · progress → NOT toasted: the native dialog + the file appearing ARE the
  *               progress UI; toasting throttled percent values would spam.
  *
+ * <b>Older desktop builds</b> (no download events — the user would otherwise
+ * see NOTHING after an export): when the page fires {@code ss-export-started}
+ * and no bridge download event arrives within ~1.2 s, the normal browser
+ * toast is shown after all ("Export started — check the dialog / downloads").
+ *
  * <b>Normal browser</b>: exports fire a {@code ss-export-started} DOM event
  * from the shared {@link download()} helper; this hook shows one quiet
  * "Export started" toast so the click always gives feedback.
  *
  * Mounted once by ViewsShell.
  */
+
+/** how long to wait for a bridge download event before falling back to the
+ *  plain browser toast (older desktop builds never send one) */
+const BRIDGE_GRACE_MS = 1200;
+
 export function useDownloadFeedback() {
   const { toast } = useToast();
 
@@ -43,14 +54,18 @@ export function useDownloadFeedback() {
         toast({
           title: `Saved ${ev.fileName}`,
           description: ev.path ? `Saved to ${ev.path}` : undefined,
-          action: {
-            label: "Open folder",
-            onClick: () => {
-              call("openDownloadFolder").catch(() => {
-                /* the folder open failed — the toast is still correct about the save */
-              });
-            },
-          },
+          action: (
+            <ToastAction
+              altText="Open folder"
+              onClick={() => {
+                call("openDownloadFolder").catch(() => {
+                  /* the folder open failed — the toast is still correct about the save */
+                });
+              }}
+            >
+              Open folder
+            </ToastAction>
+          ),
         });
       } else if (ev.stage === "failed") {
         toast({
@@ -63,14 +78,38 @@ export function useDownloadFeedback() {
   }, [toast]);
 
   useEffect(() => {
-    if (hasCefQuery()) return; // desktop events cover it (no double toast)
     const onExport = (e: Event) => {
       const detail = (e as CustomEvent<{ filename?: string }>).detail ?? {};
-      toast({
-        title: "Export started",
-        description: detail.filename
-          ? `${detail.filename} — check your browser downloads.`
-          : "Check your browser downloads.",
+      const fire = () =>
+        toast({
+          title: "Export started",
+          description: detail.filename
+            ? `${detail.filename} — check your browser downloads.`
+            : "Check your browser downloads.",
+        });
+      if (!hasCefQuery()) {
+        fire();
+        return;
+      }
+      // Inside the desktop app the bridge's native download events are the
+      // better feedback (Save-as dialog + "Saved to <path>"). Older desktop
+      // builds never push them — after a short grace period, show the plain
+      // toast anyway so an export is never completely silent.
+      let gotBridgeEvent = false;
+      const unsub = subscribe((ev) => {
+        if (ev.type === "download") gotBridgeEvent = true;
+      });
+      const t = setTimeout(() => {
+        unsub();
+        if (!gotBridgeEvent) fire();
+      }, BRIDGE_GRACE_MS);
+      // if a bridge event arrives early, stop the fallback
+      const earlyUnsub = subscribe((ev) => {
+        if (ev.type === "download") {
+          clearTimeout(t);
+          unsub();
+          earlyUnsub();
+        }
       });
     };
     window.addEventListener("ss-export-started", onExport as EventListener);

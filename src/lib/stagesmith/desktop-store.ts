@@ -33,6 +33,7 @@ import {
   fsDelete,
   fsDeleteDeck,
   fsDuplicateDeck,
+  fsRemoveDeck,
   fsAssetUrl,
   fsGetRoot,
   fsListDecks,
@@ -606,6 +607,33 @@ export async function deleteDeck(deckId: string): Promise<void> {
   invalidateDeckIndex();
 }
 
+/** Removes the deck from the library WITHOUT touching its files — the folder
+ *  stays on disk (tombstoned on the Java side so the next scan doesn't
+ *  re-adopt it). This is what "Delete" in the UI means now. */
+export async function removeFromLibrary(deckId: string): Promise<{ path: string }> {
+  let r: { ok: boolean; filesKept: boolean; path: string };
+  try {
+    r = await fsRemoveDeck(deckId);
+  } catch (e) {
+    // desktop builds before 1.5.0 only know fs.deleteDeck (which deletes the
+    // FILES) — never fall back to that; ask for the update instead
+    if (e instanceof DesktopFsError && e.code === "UNKNOWN_CMD") {
+      throw new Error(
+        "This desktop app version can only delete deck files. Update the Chassé Studio desktop app (1.5 or newer) to remove decks from the library while keeping their files.",
+      );
+    }
+    throw e;
+  }
+  records.delete(deckId);
+  summaryCache.delete(deckId);
+  displayNames.delete(deckId);
+  for (const key of [...urlCache.keys()]) {
+    if (key.startsWith(`${deckId}::`)) urlCache.delete(key);
+  }
+  invalidateDeckIndex();
+  return { path: r?.path ?? "" };
+}
+
 export async function duplicateDeck(sourceId: string, title: string): Promise<{ deck: DeckJson; deckId: string }> {
   const src = await getRecord(sourceId);
   if (!src) throw new Error("Source deck not found");
@@ -1044,7 +1072,10 @@ export async function listAssetPaths(deckId: string): Promise<string[]> {
 /* ------------------------------------------------------------------ */
 
 /** fresh signature from the DISK (walk) — catches edits made outside this
- *  app (another window, a text editor, …). Same basis as saveFiles returns. */
+ *  app (another window, a text editor, …). Same basis as saveFiles returns.
+ *  Deliberately NOT cached: the editor's poll runs a 400 ms stability
+ *  double-check that compares two consecutive signatures — a cached answer
+ *  would make mid-write states look stable. */
 export async function poll(deckId: string): Promise<string> {
   if (!(await hasDeck(deckId))) return "";
   try {

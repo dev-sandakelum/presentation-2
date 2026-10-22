@@ -453,7 +453,7 @@ export function StageFrame(props: StageFrameProps) {
     return () => window.removeEventListener("message", onMessage);
   }, [frameId, onSteps, onRuntimeError, postLatest]);
 
-  const src = useMemo(() => `/runtime?f=${frameId}`, [frameId]);
+  const src = useMemo(() => `/runtime?f=${frameId}${thumbnail ? "&thumb=1" : ""}`, [frameId, thumbnail]);
 
   return (
     <div

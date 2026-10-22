@@ -658,6 +658,17 @@ export async function deleteDeck(deckId: string): Promise<void> {
   recordCache.delete(deckId);
   persistedStates.delete(deckId);
   displayNames.delete(deckId);
+  // release any object URLs this deck's previews created (memory hygiene)
+  for (const key of [...objectUrlCache.keys()]) {
+    if (key.startsWith(`${deckId}::`)) {
+      try {
+        URL.revokeObjectURL(objectUrlCache.get(key)!.url);
+      } catch {
+        /* already gone */
+      }
+      objectUrlCache.delete(key);
+    }
+  }
   // drop snapshots
   try {
     const db = await openDb();
@@ -725,7 +736,14 @@ export async function saveFiles(deckId: string, entries: Array<{ path: string; c
       throw new Error(`Refusing to replace non-empty ${e.path} with empty content without confirmation`);
     }
   }
-  await snapshotDeck(deckId, "before-save");
+  // NOTE (save-reliability): no per-save snapshot. Writing a full snapshot —
+  // one IndexedDB record carrying every file AND every asset blob — on every
+  // save is exactly the giant single-put that triggers Chromium's
+  // "Failed to write blobs (IOError)" inside the desktop webview and makes a
+  // one-character edit take minutes. Snapshots are taken only around
+  // destructive operations (delete slide / restore), and they are TEXT-ONLY:
+  // asset blobs live untouched in the blob store, so a restore just puts the
+  // text files back.
   for (const e of entries) {
     if (!validRelPath(e.path)) throw new Error(`Illegal path: ${e.path}`);
     rec.files[e.path] = e.content;
@@ -885,7 +903,12 @@ export async function patchDeck(
 }
 
 /* ------------------------------------------------------------------ */
-/* snapshots (last 10)                                                 */
+/* snapshots (last 10) — TEXT FILES ONLY.
+ * Asset blobs are deliberately excluded: they live in the blob store and a
+ * snapshot never touches them (a giant inline-blob put is what made the old
+ * per-save snapshots fail with "Failed to write blobs (IOError)" in the
+ * desktop webview). Restoring a snapshot puts the text files back and keeps
+ * the deck's assets exactly as they are. */
 /* ------------------------------------------------------------------ */
 
 export async function snapshotDeck(deckId: string, tag: string): Promise<string> {
@@ -893,7 +916,7 @@ export async function snapshotDeck(deckId: string, tag: string): Promise<string>
   if (!rec) throw new Error("Deck not found");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const name = `${stamp}--${tag.replace(/[^a-z0-9-]/gi, "-").slice(0, 40)}`;
-  await idbPut(STORE_SNAPSHOTS, { files: { ...rec.files }, assets: { ...rec.assets } }, `${deckId}::${name}`);
+  await idbPut(STORE_SNAPSHOTS, { files: { ...rec.files } }, `${deckId}::${name}`);
   // keep last 10
   const all = await listSnapshots(deckId);
   for (const old of all.slice(10)) await idbDelete(STORE_SNAPSHOTS, `${deckId}::${old}`);
@@ -924,7 +947,7 @@ export async function listSnapshots(deckId: string): Promise<string[]> {
 
 export async function restoreSnapshot(deckId: string, name: string): Promise<void> {
   if (!/^[0-9TZ-]+--[a-z0-9-]+$/i.test(name)) throw new Error("Bad snapshot name");
-  const snap = await idbGet<{ files: Record<string, string>; assets: Record<string, Blob> }>(
+  const snap = await idbGet<{ files: Record<string, string> }>(
     STORE_SNAPSHOTS,
     `${deckId}::${name}`,
   );
@@ -932,7 +955,6 @@ export async function restoreSnapshot(deckId: string, name: string): Promise<voi
   const rec = await getRecord(deckId);
   if (!rec) throw new Error("Deck not found");
   rec.files = { ...snap.files };
-  rec.assets = { ...snap.assets };
   rec.modified = new Date().toISOString();
   await putRecord(rec, true);
 }

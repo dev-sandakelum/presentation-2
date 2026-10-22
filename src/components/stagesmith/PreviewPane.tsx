@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Moon, Sun } from "lucide-react";
 import type { DeckJson, SlideEntry, Source, ThemeMode } from "@/lib/stagesmith/types";
 import { StageFrame, resolveCode } from "./StageFrame";
+import { isTransientLoadError } from "@/lib/stagesmith/client";
 
 type PreviewMode = "final" | "bg" | "content" | "overlay";
 
@@ -72,19 +73,30 @@ export const PreviewPane = memo(function PreviewPane(props: {
     setError(null);
   }, [sel?.id, version]);
 
-  // compile meta for the selected slide (error banner + literal step count)
+  // compile meta for the selected slide (error banner + literal step count).
+  // compileVersion (not version) so the banner tracks LIVE edits, and
+  // transient transport failures never show as "Compile error" — the code is
+  // fine, the request was just aborted/dropped and is retrying.
+  const [transient, setTransient] = useState(false);
   useEffect(() => {
     if (!sel) return;
     let cancelled = false;
-    resolveCode(deckId, `slides/${sel.id}.tsx`, version).then((meta) => {
+    setTransient(false);
+    resolveCode(deckId, `slides/${sel.id}.tsx`, compileVersion ?? version).then((meta) => {
       if (cancelled) return;
+      if (meta.error && isTransientLoadError(meta.error)) {
+        setError(null);
+        setTransient(true);
+        return;
+      }
+      setTransient(false);
       setError(meta.error);
       if (meta.steps > 1) setSteps(meta.steps);
     });
     return () => {
       cancelled = true;
     };
-  }, [deckId, sel?.id, version, sel]);
+  }, [deckId, sel?.id, version, compileVersion, sel]);
 
   const onSteps = useCallback((n: number) => {
     setSteps((prev) => (n > prev ? n : prev));
@@ -185,10 +197,19 @@ export const PreviewPane = memo(function PreviewPane(props: {
           )}
         </div>
       </div>
-      {error && (
+      {(error || transient) && (
         <div className="ss-error-banner" style={{ borderTop: "1px solid var(--ss-errline)", borderBottom: 0 }}>
-          <span style={{ color: "var(--ss-err)", fontWeight: 600 }}>Compile error</span>
-          <span>{error}</span>
+          {transient ? (
+            <>
+              <span style={{ color: "var(--ss-warn)", fontWeight: 600 }}>Reconnecting</span>
+              <span>The slide request was interrupted — retrying automatically.</span>
+            </>
+          ) : (
+            <>
+              <span style={{ color: "var(--ss-err)", fontWeight: 600 }}>Compile error</span>
+              <span>{error}</span>
+            </>
+          )}
         </div>
       )}
     </>

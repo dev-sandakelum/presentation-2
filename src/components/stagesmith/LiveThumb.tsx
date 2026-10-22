@@ -16,6 +16,10 @@ import { StageFrame } from "./StageFrame";
  * box. Because module versions are part of the render config, every thumb
  * refreshes automatically after ANY change — edits, undo/redo, theme, bg —
  * with nothing stored server-side.
+ *
+ * `slideBg` / `slideOverlay` carry the slide's OWN layer overrides — without
+ * them a slide with its own (TSX or image) background renders the deck
+ * default in every thumbnail instead of what the slide actually shows.
  */
 export const LiveThumb = memo(function LiveThumb(props: {
   deckId: string;
@@ -25,6 +29,10 @@ export const LiveThumb = memo(function LiveThumb(props: {
   deckDefaultMode: ThemeMode;
   deckBg?: Source;
   deckOverlay?: Source;
+  /** the slide's OWN background override (falls back to deckBg) */
+  slideBg?: Source;
+  /** the slide's OWN overlay override (falls back to deckOverlay) */
+  slideOverlay?: Source;
   themeCss: string;
   /** deck signature — bump re-resolves modules */
   version: string | number;
@@ -33,7 +41,10 @@ export const LiveThumb = memo(function LiveThumb(props: {
   onError?: (message: string) => void;
   loadPriority?: "selected" | "normal" | "background";
 }) {
-  const { deckId, slideId, slideTheme, deckDefaultMode, deckBg, deckOverlay, themeCss, version, compileVersion, className, onError, loadPriority } = props;
+  const {
+    deckId, slideId, slideTheme, deckDefaultMode, deckBg, deckOverlay, slideBg, slideOverlay,
+    themeCss, version, compileVersion, className, onError, loadPriority,
+  } = props;
   if (!slideId || !themeCss) {
     return <span className="ss-shimmer" aria-hidden />;
   }
@@ -41,7 +52,13 @@ export const LiveThumb = memo(function LiveThumb(props: {
     <StageFrame
       className={className}
       deckId={deckId}
-      slide={{ id: slideId, label: "", ...(slideTheme ? { theme: slideTheme } : {}) }}
+      slide={{
+        id: slideId,
+        label: "",
+        ...(slideTheme ? { theme: slideTheme } : {}),
+        ...(slideBg !== undefined ? { bg: slideBg } : {}),
+        ...(slideOverlay !== undefined ? { overlay: slideOverlay } : {}),
+      }}
       deckBg={deckBg}
       deckOverlay={deckOverlay}
       themeCss={themeCss}

@@ -53,6 +53,17 @@
 <script>
 /* boot watchdog — reports module load failures back to the parent */
 window.__ssErrors = [];
+/* Thumbnail frames announce themselves via ?thumb=1 — apply the class BEFORE
+   anything can error, so a pre-config error can never paint the (huge,
+   overflow-hidden) error card inside a tiny thumb box (the "SL" tile). */
+(function () {
+  try {
+    if (new URLSearchParams(location.search).get("thumb") === "1") {
+      document.body.classList.add("ss-thumbnail");
+      window.__ssThumb = true;
+    }
+  } catch (e) {}
+})();
 window.addEventListener("error", function (e) {
   window.__ssErrors.push(String(e.message || e.error));
   try { parent.postMessage({ type: "boot-error", frameId: new URLSearchParams(location.search).get("f") || "boot", message: String(e.message || e.error) }, "*"); } catch (err) {}
@@ -147,9 +158,13 @@ function showPhase(phase, extra) {
 }
 
 function showError(phase, message, stack) {
-  if (!cfg || (!cfg.thumbnail && !cfg.managedErrors)) {
-    errCard.hidden = false;
-    errMsg.textContent = (message || "Unknown error") + (stack ? "\n\n" + String(stack).slice(0, 1400) : "");
+  // thumbnails NEVER paint the in-stage error card (their box is tiny and the
+  // parent shows the failure UI instead) — the error still reaches the parent
+  if (!cfg || (!cfg.thumbnail && !window.__ssThumb && !cfg.managedErrors)) {
+    if (!window.__ssThumb) {
+      errCard.hidden = false;
+      errMsg.textContent = (message || "Unknown error") + (stack ? "\n\n" + String(stack).slice(0, 1400) : "");
+    }
   }
   post({ type: "error", phase, message: String(message), stack: stack ? String(stack) : undefined });
 }
@@ -576,14 +591,24 @@ function themeStyle() {
 }
 
 /** theme css, mode, static freeze and the runtime store (slide index for
- *  the overlay's progress bar, step for the incoming slide) */
-function applyChrome(next) {
+ *  the overlay's progress bar, step for the incoming slide).
+ *  `deferStore` keeps the store's slideIndex/slideTotal/mode untouched — used
+ *  mid-transition so the fixed overlay (progress bar, slide number) does not
+ *  refresh while the content is still animating; the caller applies the store
+ *  bits with applyStore() at the ENTER phase instead. */
+function applyChrome(next, deferStore) {
   const styleEl = themeStyle();
   styleEl.textContent = next.css || "";
-  document.documentElement.dataset.theme = next.mode;
-  rootEl.dataset.theme = next.mode;
+  if (!deferStore) {
+    document.documentElement.dataset.theme = next.mode;
+    rootEl.dataset.theme = next.mode;
+  }
   rootEl.classList.toggle("ss-static", !!next.static);
-  document.body.classList.toggle("ss-thumbnail", !!next.thumbnail);
+  document.body.classList.toggle("ss-thumbnail", !!next.thumbnail || !!window.__ssThumb);
+  if (!deferStore) initStore(next);
+}
+
+function initStore(next) {
   stagesmith.initRuntime({
     staticMode: !!next.static,
     mode: next.mode,
@@ -594,6 +619,17 @@ function applyChrome(next) {
     slideTotal: next.slideTotal ?? 0,
     declaredSteps: 1,
   });
+  queuedStep = null;
+}
+
+/** the deferred store/mode application at the ENTER phase — the overlay
+ *  refreshes exactly when the new content appears, never mid-transition */
+function applyStore(next) {
+  document.documentElement.dataset.theme = next.mode;
+  rootEl.dataset.theme = next.mode;
+  stagesmith.__setMode(next.mode);
+  stagesmith.__setSlideInfo(next.slideIndex ?? 0, next.slideTotal ?? 0);
+  stagesmith.__setStep(next.static ? 9999 : (queuedStep ?? 0));
   queuedStep = null;
 }
 
@@ -760,32 +796,47 @@ async function runTransition(next, keys, t, my) {
   run = { token: my, keys, cfg: next };
   showPhase("start", { dir: t.dir, bgChanged: currentBgKey() !== keys.bg });
 
-  // 1. EXIT — only the content layer leaves; bg and overlay untouched.
-  //    Target modules import concurrently (cache-warm from preloading).
+  // 1. PRE-IMPORT the target modules BEFORE the exit starts. Importing and
+  //    evaluating a slide module on the iframe's main thread mid-animation
+  //    drops frames — that was the "small jolt at the start" before the
+  //    smooth part. A soft cap keeps a cold import from stalling the
+  //    transition; swapLayers re-awaits whatever is still pending.
   const preload = [];
   for (const kind of ["overlay", "commonOverlay", "slide"]) {
     const ref = layerRef(next, kind);
     if (ref) preload.push(ensureMod(ref).catch(() => {}));
   }
+  try {
+    if (preload.length) {
+      await Promise.race([
+        Promise.all(preload),
+        new Promise((res) => setTimeout(res, 1500)),
+      ]);
+    }
+  } catch (e) { /* a failed import surfaces in swapLayers */ }
+  if (my !== transToken) return;
+
+  // 2. EXIT — only the content layer leaves; bg and overlay untouched.
   startExit(t);
   await waitExit();
   if (my !== transToken) return;
 
-  // 2. chrome (theme css, mode, store) applies while the content is hidden,
-  //    so colours never flip under visible content.
+  // 3. chrome (theme css) applies while the content is hidden. The STORE
+  //    (slideIndex/mode) is deferred to the ENTER phase so the fixed overlay
+  //    (progress bar, slide number) never refreshes mid-transition.
   const target = run.cfg || next; // a chrome refresh during the run wins
-  applyChrome(target);
+  applyChrome(target, true /* defer store + mode */);
 
-  // 3. BACKGROUND — crossfade only when the bg key differs (Case A);
+  // 4. BACKGROUND — crossfade only when the bg key differs (Case A);
   //    identical keys leave the layer completely untouched (Case B).
   if (currentBgKey() !== keys.bg) {
     await crossfadeBg(target, keys, t, my);
     if (my !== transToken) return;
   }
 
-  // 4. ENTER — swap the slide module (overlay swaps instantly too, only
-  //    when its key changed), then glide the content in. Re-read run.cfg so
-  //  a chrome refresh posted mid-run is the one applied.
+  // 5. ENTER — swap the slide module (overlay swaps instantly too, only
+  //    when its key changed), apply the deferred store/mode (the overlay
+  //    refreshes exactly now), then glide the content in.
   try {
     await swapLayers((run && run.cfg) || target, keys, my);
   } catch (e) {
@@ -794,6 +845,7 @@ async function runTransition(next, keys, t, my) {
     showError("import", e.message, e.stack);
   }
   if (my !== transToken) return;
+  applyStore((run && run.cfg) || target);
   showPhase("enter", { dir: t.dir });
   await nextPaint(); // React committed, refs attached
   if (my !== transToken) return;

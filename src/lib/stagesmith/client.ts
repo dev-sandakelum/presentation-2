@@ -4,7 +4,7 @@ import type { DeckJson, DeckBundle, DeckSummary, FileRow, Source, ThemeMode } fr
 import * as local from "./browser-store";
 import * as desktop from "./desktop-store";
 import * as transfer from "./transfer";
-import { ensureWriteAccess, maybeRequestWriteAccess } from "./permission";
+import { maybeRequestWriteAccess } from "./permission";
 
 export type { DeckBundle };
 
@@ -170,6 +170,16 @@ export async function assetLoadFailureReason(url: string): Promise<string> {
   }
 }
 
+/** classify a module-load failure as TRANSIENT (network hiccup, request
+ *  aborted mid-flight — Chromium reports fetch aborts as
+ *  "signal is aborted without reason" inside embedded webviews) — such
+ *  failures say nothing about the code and must be retried, never shown as
+ *  "Compile error". */
+export function isTransientLoadError(message: string | null | undefined): boolean {
+  if (!message) return false;
+  return /aborted|aborterror|failed to fetch|networkerror|timeout|timed out|temporarily|ERR_NETWORK|ERR_ABORTED|ERR_CONNECTION|ERR_INTERNET|load cancelled/i.test(message);
+}
+
 export interface ModuleInfo {
   /** compile URL (server decks) */
   url: string | null;
@@ -197,6 +207,10 @@ const moduleQueue: Array<{ key: string; priority: ModulePriority; queuedAt: numb
 let activeModuleJobs = 0;
 const moduleRequestStates = new Map<string, { status: "queued" | "started" | "finished" | "cancelled"; queuedAt: number; startedAt?: number }>();
 const liveCompileOverrides = new Map<string, Record<string, string>>();
+
+/** internal marker so transient transport failures keep their original
+ *  message through the retry ladder without turning into generic errors */
+class LoadFailure extends Error {}
 
 export function setLiveCompileOverrides(deckId: string, files: Record<string, string>): void {
   liveCompileOverrides.set(deckId, { ...files });
@@ -292,9 +306,10 @@ export function resolveModule(deckId: string, path: string, version: string | nu
   let p!: Promise<ModuleInfo>;
   p = scheduleModule(key, priority, deckId, path, async () => {
     if (typeof performance !== "undefined") performance.mark(`${compilePhase}:start`);
-    try {
-      let info: ModuleInfo;
-      const store = await deckStoreOf(deckId);
+    const runOnce = async (): Promise<ModuleInfo> => {
+      try {
+        let info: ModuleInfo;
+        const store = await deckStoreOf(deckId);
       if (store === "desktop" || store === "browser") {
         const rec = store === "desktop" ? await desktop.getRecord(deckId) : await local.getRecord(deckId);
         if (!rec) throw new Error("Deck not found");
@@ -336,18 +351,41 @@ export function resolveModule(deckId: string, path: string, version: string | nu
           ? { url: null, code: data.js ?? "", ver: data.ver ?? "", steps: data.steps || 1, error: null }
           : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
       }
-      // Successful modules are cacheable. A real failure remains retryable;
-      // a later save, file registration or manual Retry must be able to fix it.
       if (!info.error) moduleCache.set(key, info);
-      return info;
-    } catch (e) {
-      return { url: null, code: null, ver: "err", steps: 1, error: (e as Error).message };
+        return info;
+      } catch (e) {
+        throw new LoadFailure((e as Error).message || String(e));
+      }
+    };
+    try {
+      try {
+        return await runOnce();
+      } catch (first) {
+        const msg = first instanceof LoadFailure ? first.message : String(first);
+        if (!(first instanceof LoadFailure) || !isTransientLoadError(msg)) {
+          if (first instanceof LoadFailure) return { url: null, code: null, ver: "err", steps: 1, error: first.message };
+          throw first;
+        }
+        // Transient transport failure (aborted fetch, network drop — common in
+        // the embedded webview): retry once before anyone sees an error. A
+        // healthy compile must never be reported as "Compile error".
+        console.warn(`[slide-load] transient failure for ${path} (${msg}) — retrying once`);
+        await new Promise((r) => setTimeout(r, 600));
+        try {
+          return await runOnce();
+        } catch (second) {
+          const msg2 = second instanceof LoadFailure ? second.message : String(second);
+          // still transient → retryable, and honestly labelled as network
+          return { url: null, code: null, ver: "err", steps: 1, error: `${msg2} (network — will retry)` };
+        }
+      }
+    } finally {
+      if (typeof performance !== "undefined") {
+        performance.mark(`${compilePhase}:end`);
+        try { performance.measure(compilePhase, `${compilePhase}:start`, `${compilePhase}:end`); } catch { /* mark may be cleared during navigation */ }
+      }
     }
   }).finally(() => {
-    if (typeof performance !== "undefined") {
-      performance.mark(`${compilePhase}:end`);
-      try { performance.measure(compilePhase, `${compilePhase}:start`, `${compilePhase}:end`); } catch { /* mark may be cleared during navigation */ }
-    }
     if (inflightModules.get(key) === p) inflightModules.delete(key);
   });
   inflightModules.set(key, p);
@@ -389,21 +427,19 @@ export interface NetworkInfo {
   hint: string;
 }
 
-/** DELETE /api/decks/<id> result */
+/** DELETE /api/decks/<id> result — "delete" ALWAYS means "remove from the
+ *  library": the project folder and its files stay on disk in every store
+ *  (the server keeps the folder and hides it, the desktop app tombstones it,
+ *  the browser keeps the device folder). */
 export interface DeleteDeckResult {
   ok: boolean;
   removed: boolean;
   external: boolean;
   root: string;
-  /** device-folder cleanup couldn't remove the files (permission/IO) —
-   *  shown in the delete toast instead of being swallowed */
+  /** kept for API compatibility — never set by the current stores */
   folderCleanupError?: string;
-  /** nothing was deleted: the device folder's write permission lapsed (or
-   *  the folder is gone) and couldn't be restored with the delete click's
-   *  gesture. The UI offers "Allow access" and re-runs the delete after
-   *  the grant — "Deck deleted" is never claimed while the files remain. */
-  needsAccess?: boolean;
-  accessState?: "prompt" | "denied" | "missing";
+  needsAccess?: never;
+  accessState?: never;
 }
 
 /** import result row */
@@ -546,40 +582,29 @@ export const api = {
   },
 
   deleteDeck: async (deckId: string): Promise<DeleteDeckResult> => {
+    // "Delete" only ever removes the deck's entry from the library — the
+    // project folder and every file in it stay on disk in ALL stores. No
+    // permission is needed for that, so there is no needsAccess path anymore.
     const store = await deckStoreOf(deckId);
     if (store === "desktop") {
-      // Java removes the files and verifies they are gone — a locked or
-      // missing folder surfaces as a clear code+message error
+      // Java tombstones the folder (catalog removedFolders) — files kept,
+      // and it won't be re-adopted by the next folder scan
       const status = await desktop.desktopFsStatus();
-      const root = status.path || "the desktop decks folder";
-      await desktop.deleteDeck(deckId);
-      return { ok: true, removed: true, external: false, root };
+      const r = await desktop.removeFromLibrary(deckId);
+      return { ok: true, removed: true, external: false, root: r.path || status.path || "the desktop decks folder" };
     }
     if (store === "browser") {
-      const rec = await local.getRecord(deckId);
+      // removes THIS browser's working copy (IndexedDB records + blobs);
+      // a mirrored device folder and its files stay on disk untouched
       let root = "this browser";
-      if (rec?.device) {
-        // deleting a device deck must also remove its FILES — that needs the
-        // folder's write permission. Try to restore it while the confirm
-        // click's gesture is live; if it can't be restored, NOTHING is
-        // deleted (neither files nor the browser copy) and the reason is
-        // returned so the UI can offer "Allow access" and finish the delete.
-        const { cleanupDeviceProject, deviceFolderName } = await import("./device");
-        root = (await deviceFolderName(deckId)) ?? deckId;
-        const state = await ensureWriteAccess(deckId);
-        if (state !== "granted") {
-          return {
-            ok: false,
-            removed: false,
-            external: false,
-            root,
-            needsAccess: true,
-            accessState: state === "missing" ? "missing" : state,
-          };
+      try {
+        const rec = await local.getRecord(deckId);
+        if (rec?.device) {
+          const { deviceFolderName } = await import("./device");
+          root = (await deviceFolderName(deckId)) ?? deckId;
         }
-        const cleanup = await cleanupDeviceProject(deckId);
-        await local.deleteDeck(deckId);
-        return { ok: true, removed: true, external: false, root, folderCleanupError: cleanup.error };
+      } catch {
+        /* keep the generic label */
       }
       await local.deleteDeck(deckId);
       return { ok: true, removed: true, external: false, root };

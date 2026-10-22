@@ -29,7 +29,7 @@ import { SplashVeil } from "./LoadingScreen";
 import { useSync } from "@/hooks/useSync";
 import { useUiTheme, hydrateUiTheme } from "@/hooks/useUiTheme";
 import { useSaveQueue, readRecoverySnapshot } from "@/hooks/useSaveQueue";
-import { setLiveCompileOverrides } from "@/lib/stagesmith/client";
+import { setLiveCompileOverrides, resolveModule } from "@/lib/stagesmith/client";
 import { isExternalSignature, mayWriteContent } from "@/lib/stagesmith/save-safety";
 import { download, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
@@ -99,6 +99,13 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   const [notFound, setNotFound] = useState(false);
   /** transient load failure (network / server hiccup) — Retry-able */
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** editor boot gate (issues 21+22): the loading veil stays up until the
+   *  deck is loaded, the selected slide's file is in the buffer AND its module
+   *  resolved — with a status line that says what is loading and how far in.
+   *  The editor never appears half-built ("Saved" toolbar over a blank
+   *  preview with a Loading editor… pane). */
+  const [bootFilesReady, setBootFilesReady] = useState(false);
+  const [bootCompileDone, setBootCompileDone] = useState(false);
 
   // app chrome theme (fix-list item 8) — hydrate once per mount
   const [uiTheme, setUiTheme] = useUiTheme();
@@ -472,7 +479,16 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   const applyDeck = useCallback((d: DeckJson) => {
     setDeck(d);
     setBundle((b) => (b ? { ...b, deck: d } : b));
-  }, []);
+    // mutations above change deck.json on disk — adopt the new folder
+    // signature so the 1.5 s poll doesn't misread OUR OWN change as an
+    // external one ("Deck folder changes applied" false positive)
+    void api.poll(deckId).then((sig) => {
+      if (sig) {
+        versionRef.current = sig;
+        setVersion(sig);
+      }
+    }).catch(() => {});
+  }, [deckId]);
 
   const reorder = useCallback(
     async (order: string[]) => {
@@ -604,6 +620,56 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   );
 
   const sel = useMemo(() => slides.find((s) => s.id === selId) ?? null, [slides, selId]);
+
+  /* ---------- editor boot gate (issues 21 + 22) ----------
+   * The loading screen stays until the deck, the selected slide's file and
+   * its compiled module are all in — and it SAYS what it is doing and how far
+   * along it is. Everything else (thumbnails, background hydration) keeps
+   * loading afterwards; the editor itself is never half-built. */
+  const selSlidePath = sel ? `slides/${sel.id}.tsx` : "";
+  const bootOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!deck || !sel) return;
+    if (bootOpenedRef.current && bootFilesReady && bootCompileDone) return; // gate is one-shot per deck open
+    let cancelled = false;
+    (async () => {
+      try {
+        await ensureBuffer(selSlidePath);
+      } catch {
+        /* file-load errors are surfaced by the editor itself */
+      }
+      if (cancelled) return;
+      setBootFilesReady(true);
+      try {
+        const meta = await resolveModule(deckId, selSlidePath, `${version}:${compileRevision}`, "selected");
+        if (cancelled) return;
+        // settled — ok OR a real compile error (both mean the editor is built;
+        // the error shows in the preview where it belongs)
+        setBootCompileDone(true);
+        bootOpenedRef.current = true;
+        if (meta.error) console.warn(`[boot] selected slide compile: ${meta.error}`);
+      } catch {
+        if (!cancelled) {
+          setBootCompileDone(true);
+          bootOpenedRef.current = true;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deckId, selSlidePath, version]);
+
+  const bootReady = !deck || !sel ? true : bootFilesReady && bootCompileDone;
+  const bootProgress = bootCompileDone ? 1 : bootFilesReady ? 2 / 3 : deck ? 1 / 3 : 0;
+  const bootMessage = bootCompileDone
+    ? "Ready"
+    : bootFilesReady
+      ? `Compiling slide ${(slides.findIndex((s) => s.id === selId) + 1) || 1} of ${slides.length}`
+      : deck
+        ? `Loading slide files — ${(slides.findIndex((s) => s.id === selId) + 1) || 1} of ${slides.length}`
+        : `Opening ${deckId}`;
 
   /** single-flight file loader — never caches a failed fetch as "" */
   const inflightRef = useRef<Map<string, Promise<void>>>(new Map());
@@ -963,6 +1029,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
             onCommonSource={setCommonSource}
             onOverride={setSlideOverride}
             version={version}
+            compileVersion={`${version}:${compileRevision}`}
             minimized={codeMinimized}
             onToggleMinimize={toggleCodeMin}
             gotoError={gotoError}
@@ -971,6 +1038,20 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
           />
         </div>
       </div>
+
+      {/* editor boot gate — the branded loading screen stays over the editor
+          until the deck + selected slide file + its module are in, with a
+          status line and progress. The UI beneath builds progressively but is
+          only revealed fully-formed. */}
+      {!bootReady && (
+        <SplashVeil
+          active
+          mode="deck"
+          timing={{ showDelayMs: 0 }}
+          progress={bootProgress}
+          message={bootMessage}
+        />
+      )}
 
       {qrOpen && (
         <QrPanel

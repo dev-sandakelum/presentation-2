@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
-import { deckRootOf, listLinks, refreshLinks, unlinkDeck } from "./registry";
+import { deckRootOf, hideDeck, isHidden, listLinks, refreshLinks, unhideDeck, unlinkDeck } from "./registry";
 import { rewriteThemeCss } from "./themeurl";
 import type { DeckCover, DeckJson, DeckSummary, FileRow, SlideEntry, Source } from "./types";
 
@@ -119,6 +119,7 @@ export async function readDeck(deckId: string): Promise<DeckJson> {
 
 export async function deckExists(deckId: string): Promise<boolean> {
   refreshLinks(); // freshly-linked external projects must resolve immediately
+  if (isHidden(deckId)) return false; // removed from the library — files kept
   try {
     await fs.access(path.join(deckRoot(deckId), "deck.json"));
     return true;
@@ -157,6 +158,7 @@ export async function listDecks(): Promise<DeckSummary[]> {
   const seen = new Set<string>();
   for (const e of entries) {
     if (!e.isDirectory() || !validDeckId(e.name)) continue;
+    if (isHidden(e.name)) continue; // removed from the library — files kept on disk
     seen.add(e.name);
     try {
       const deck = await readDeck(e.name);
@@ -430,6 +432,9 @@ export async function createDeckFolder(
   deck.created = new Date().toISOString();
   const root = path.join(DECKS_ROOT, deckId);
   await fs.mkdir(root, { recursive: true });
+  // a previously removed deck with the same id may still own this folder
+  // (delete keeps files) — creating it again adopts the folder
+  unhideDeck(deckId);
   // write everything except the index first (plan §2: deck.json last)
   for (const [rel, content] of Object.entries(files)) {
     if (rel === "deck.json") continue;
@@ -440,8 +445,11 @@ export async function createDeckFolder(
 }
 
 /**
- * Remove a deck from the library. External (linked) projects keep their
- * files on disk — only the library link is removed.
+ * Remove a deck from the library. "Delete" NEVER deletes files: external
+ * (linked) projects keep their folder on disk (only the link is removed) and
+ * internal decks/<id> folders stay exactly where they are — they are hidden
+ * from the library instead (decks/.registry.json `hidden`). Re-creating a
+ * deck with the same id later adopts the folder again.
  */
 export async function deleteDeck(deckId: string): Promise<{
   removed: boolean;
@@ -453,7 +461,11 @@ export async function deleteDeck(deckId: string): Promise<{
   if (unlinkDeck(deckId)) {
     return { removed: true, external: true, root };
   }
-  await fs.rm(path.join(DECKS_ROOT, deckId), { recursive: true, force: true });
+  if (!(await fs.stat(path.join(DECKS_ROOT, deckId)).catch(() => null))) {
+    // nothing on disk under decks/ — treat as removed (already gone)
+    return { removed: true, external: false, root };
+  }
+  hideDeck(deckId); // folder + every file stay on disk
   return { removed: true, external: false, root };
 }
 
