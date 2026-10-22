@@ -191,7 +191,15 @@ export function Img({
   React.ImgHTMLAttributes<HTMLImageElement>,
   "src" | "alt" | "style"
 >) {
-  return <img src={asset(name)} alt={alt} style={style} {...rest} />;
+  const [error, setError] = useState(false);
+  const src = asset(name);
+  if (error) {
+    return <span role="img" aria-label={`${alt || name}: image failed to load`} title={`${name}: image failed to load`} style={{ display: "inline-grid", placeItems: "center", gap: 6, minWidth: 120, minHeight: 72, padding: 10, border: "1px solid #b94b55", background: "rgba(120,24,32,.18)", color: "#ffb6bd", font: "12px/1.4 sans-serif", ...style }}>
+      <span>{name}</span><span>Image failed to load</span>
+      <button type="button" onClick={(event) => { event.stopPropagation(); setError(false); }} style={{ cursor: "pointer" }}>Retry</button>
+    </span>;
+  }
+  return <img src={src} alt={alt} style={style} {...rest} onError={(event) => { setError(true); rest.onError?.(event); }} />;
 }
 
 /* ------------------------------------------------------------------ */

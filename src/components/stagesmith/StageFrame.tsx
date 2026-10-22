@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { RuntimeMessage, SlideEntry, Source, ThemeMode } from "@/lib/stagesmith/types";
-import { resolveModule, getAssetMap, getModuleRequestState, resolveImageUrl, type ModuleInfo } from "@/lib/stagesmith/client";
+import { resolveModule, getAssetMap, getAssetBaseUrl, getModuleRequestState, resolveImageUrl, type ModuleInfo } from "@/lib/stagesmith/client";
 
 /**
  * The sandboxed Stage Runtime wrapper (plan §5.1).
@@ -186,12 +186,13 @@ export function StageFrame(props: StageFrameProps) {
 
   // browser decks ship assets as data URLs (the sandbox can't fetch /api/assets)
   const [assetMap, setAssetMap] = useState<Record<string, string> | null>(null);
+  const [assetBase, setAssetBase] = useState(`/api/assets/${encodeURIComponent(deckId)}`);
   const [assetsLoaded, setAssetsLoaded] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setAssetsLoaded(false);
-    getAssetMap(deckId, version)
-      .then(async (m) => {
+    Promise.all([getAssetMap(deckId, version), getAssetBaseUrl(deckId)])
+      .then(async ([m, base]) => {
         const resolved = { ...(m ?? {}) };
         const images = [bgSource, overlaySource, commonOverlaySource].filter((s): s is Extract<Source, { type: "image" }> => s?.type === "image");
         await Promise.all(images.map(async (source) => {
@@ -201,6 +202,7 @@ export function StageFrame(props: StageFrameProps) {
         }));
         if (!cancelled) {
           setAssetMap(resolved);
+          setAssetBase(base);
           setAssetsLoaded(true);
         }
       })
@@ -282,7 +284,7 @@ export function StageFrame(props: StageFrameProps) {
       thumbnail,
       managedErrors: true,
       scale,
-      assetBase: `/api/assets/${deckId}`,
+      assetBase,
       assetMap: assetMap && Object.keys(assetMap).length ? assetMap : undefined,
       slide: slideMod?.url || null,
       slideCode: slideMod?.code || null,
@@ -309,7 +311,7 @@ export function StageFrame(props: StageFrameProps) {
   }, [
     frameId, themeCss, mode, staticMode, thumbnail, scale, deckId,
     slideId, slideMod, slideMeta?.error, bgMod, overlayMod, commonOverlayMod,
-    bgKey, overlayKey, showKey, slideIndex, slideTotal, assetMap,
+    bgKey, overlayKey, showKey, slideIndex, slideTotal, assetMap, assetBase,
   ]);
 
   // direction of travel for the next pending transition (index delta)

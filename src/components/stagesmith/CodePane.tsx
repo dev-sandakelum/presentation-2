@@ -843,7 +843,7 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
    *  blobs as object URLs — the /api/assets route 404s for them. */
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
   /** paths whose preview genuinely failed to load → error placeholder */
-  const [broken, setBroken] = useState<Record<string, boolean>>({});
+  const [broken, setBroken] = useState<Record<string, string>>({});
 
   /* asset trash → reusable confirmation dialog (never delete on first click) */
   const [trashTarget, setTrashTarget] = useState<FileRow | null>(null);
@@ -916,7 +916,7 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
             out[a.path] = await resolveImageUrl(deckId, a.path);
           } catch (error) {
             console.error(`[assets] URL resolution failed for ${a.path}`, error);
-            setBroken((b) => ({ ...b, [a.path]: true }));
+            setBroken((b) => ({ ...b, [a.path]: (error as Error)?.message || "Could not resolve image URL" }));
           }
         }
       }
@@ -966,7 +966,7 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
                   }}
                 />
               </label>
-              <span className="ss-label">Assets are copied into the deck folder — never linked (plan §2)</span>
+              <span className="ss-label">Files you upload are copied into this deck&apos;s folder</span>
             </div>
             {rows.length === 0 ? (
               <EmptyPane text={assets === null ? "Loading assets…" : "No assets — drop files into the deck via upload"} />
@@ -994,11 +994,14 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
                             }}
                           >
                             <AlertTriangle size={18} />
-                            <span style={{ font: "500 9px var(--ss-mono)", color: "var(--ss-mut)" }}>{displayName}: image request failed</span>
+                            <span style={{ font: "500 9px var(--ss-mono)", color: "var(--ss-mut)" }}>{displayName}: {broken[a.path]}</span>
                             <button className="ss-btn" style={{ height: 22, padding: "0 7px", fontSize: 10 }} onClick={() => {
                               setBroken((b) => { const next = { ...b }; delete next[a.path]; return next; });
                               setPreviewUrls((urls) => { const next = { ...urls }; delete next[a.path]; return next; });
-                              void resolveImageUrl(deckId, a.path).then((url) => setPreviewUrls((urls) => ({ ...urls, [a.path]: url }))).catch((error) => console.error(`[assets] retry URL resolution failed for ${a.path}`, error));
+                              void resolveImageUrl(deckId, a.path).then((url) => setPreviewUrls((urls) => ({ ...urls, [a.path]: url }))).catch((error) => {
+                                console.error(`[assets] retry URL resolution failed for ${a.path}`, error);
+                                setBroken((b) => ({ ...b, [a.path]: (error as Error)?.message || "Could not resolve image URL" }));
+                              });
                             }}>Retry</button>
                           </div>
                         ) : (
@@ -1007,8 +1010,9 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
                             alt={displayName}
                             loading="lazy"
                             onError={() => {
+                              const reason = `Image request failed (${src})`;
                               console.warn(`[assets] preview failed to load: ${a.path} (src=${src})`);
-                              setBroken((b) => ({ ...b, [a.path]: true }));
+                              setBroken((b) => ({ ...b, [a.path]: reason }));
                             }}
                           /> : <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", color: "var(--ss-mut)" }}>Resolving {displayName}…</div>
                         )

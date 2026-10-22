@@ -488,12 +488,11 @@ function nextPaint() {
 
 /** decode a URL before it is mounted (image-source backgrounds) */
 function decodeUrl(url) {
-  return new Promise((res) => {
+  return new Promise((res, reject) => {
     if (!url || /^(data|blob):/i.test(url)) return res();
     const img = new Image();
-    const done = () => res();
-    img.onload = () => (img.decode ? img.decode().then(done, done) : done());
-    img.onerror = done;
+    img.onload = () => (img.decode ? img.decode().then(() => res(), reject) : res());
+    img.onerror = () => reject(new Error(`Image failed to load: ${url}`));
     img.src = url;
   });
 }

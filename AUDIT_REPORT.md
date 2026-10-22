@@ -131,6 +131,29 @@ The available evidence does not identify one uniquely stuck runtime phase. The s
 - The 21-slide deck is not in this workspace, so throttled desktop timing, multi-duplicate, slow-compile-over-60-seconds, real hang, syntax-error isolation and far-slide selection checks remain unverified.
 - No actual queue/load timings for `slides/end-copy.tsx` are available; runtime logs now capture those timings on the next desktop reproduction.
 
+## Tasks 15–16 follow-up — 2026-10-22
+
+- Replaced the Assets panel's internal-plan hint with: “Files you upload are copied into this deck's folder”.
+- Asset URL resolution failures now retain and display their actual error text beside the filename; image request failures are logged with the resolved URL and shown as a visible retryable error card.
+- Present preloading now calls the shared `resolveImageUrl()` resolver for raster images instead of falling back directly to the server asset route. This keeps desktop, browser, and server-backed deck URL selection centralized.
+- The code still does **not** meet Task 16's full editor-ready gate: DashboardView reveals the editor after the bundle arrives, while image decoding and thumbnail generation continue afterward. Its deck-open status is still indeterminate and does not report stage counters, elapsed time, or per-item retry/skip. The reusable splash's anti-flash timing and Present preloader status are in place, but they are not yet a unified loading store or proof that every editor surface is ready.
+- No JCEF DevTools session, packaged desktop build, or target deck is available here. Therefore the exact request/status/CSP diagnosis, image-format matrix, cold/warm timings, restart behavior, and 20-cycle memory check remain **NOT VERIFIED**. The earlier static diagnosis and its limitations remain applicable; this follow-up does not claim runtime acceptance.
+
+## Task 15 recheck — desktop image transport
+
+### Confirmed code defects
+
+- `StageFrame` runs the slide renderer in `<iframe sandbox="allow-scripts">`, which gives that frame an opaque origin. Its image URLs point at the desktop loopback HTTP server. The server rejected every non-empty Origin other than the configured app origin, so a CORS/PNA request carrying `Origin: null` was refused even though its URL had the valid per-session token.
+- The runtime asset resolver in `public/vendor/stagesmith.js` falls back to `assetBase` when a path is not in `assetMap`. StageFrame always supplied the web API asset route as `assetBase`, which cannot read files from the selected desktop deck directory. Desktop map generation also skipped per-file URL failures silently, making this fallback likely for affected entries.
+- `runtime.html`'s background decoder treated image errors as successful completion. A failed background therefore proceeded to mount as an empty background, without surfacing its failed URL.
+
+### Corrections made
+
+- The loopback server now validates the bearer token before answering preflight requests, allows the sandbox's opaque `Origin: null` when the valid session URL is used, and sends `Cross-Origin-Resource-Policy: cross-origin` on file responses. Other non-trusted origins remain refused.
+- Added a desktop asset-base resolver using the same tokenized loopback URL scheme. StageFrame supplies that base so unresolved `asset(name)` paths still resolve against the selected desktop deck folder. The web/server route remains the base in web mode.
+- `runtime.html` now reports a failed background image URL through its existing runtime error surface instead of treating the failed decode as ready. The slide `<Img>` component now displays a named failure placeholder with Retry. Rebuilt `public/vendor/stagesmith.js` from its source.
+- Targeted ESLint completed without diagnostics. Vendor bundle rebuild succeeded. `npx tsc --noEmit` still reports only the same three unrelated errors in `useDownloadFeedback.ts`, `useSync.ts`, and `lib/db.ts`. Java compilation could not run because Maven is not installed. No packaged desktop/JCEF run was available, so browser policy behavior and the user's exact deck remain to be confirmed in DevTools.
+
 ## Local checks
 
 - Targeted ESLint on all modified TypeScript files: PASS.

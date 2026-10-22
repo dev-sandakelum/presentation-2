@@ -1023,6 +1023,14 @@ export async function getAssetUrl(deckId: string, path: string): Promise<string 
   }
 }
 
+/** Stable session URL prefix for runtime `asset()` fallbacks. Unlike the
+ *  Next asset route, this addresses files in the selected desktop deck. */
+export async function getAssetBaseUrl(deckId: string): Promise<string> {
+  if (!(await hasDeck(deckId))) throw new Error(`Deck not found: ${deckId}`);
+  const probe = await fsFileUrl(deckId, "__asset_base__");
+  return probe.slice(0, probe.lastIndexOf("/"));
+}
+
 /** upload arbitrary bytes at an explicit deck path (used by import/duplicate) */
 export async function putAssetBytes(deckId: string, path: string, data: Blob): Promise<void> {
   await fsUploadFile(deckId, path, data);

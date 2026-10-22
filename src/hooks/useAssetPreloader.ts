@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, getAssetMap, resolveModule, assetRouteUrl } from "@/lib/stagesmith/client";
+import { api, getAssetMap, resolveImageUrl, resolveModule } from "@/lib/stagesmith/client";
 import type { DeckJson, FileRow, Source } from "@/lib/stagesmith/types";
 
 /**
@@ -322,7 +322,7 @@ export function useAssetPreloader(
       const assetFiles: FileRow[] = await api.listAssets(deckId).catch(() => []);
       if (cancelled) return;
       if (runRef.current) runRef.current.lastProgressAt = Date.now();
-      const urlOf = (path: string): string => assetMap?.[path] ?? assetRouteUrl(deckId, path);
+      const urlOf = (path: string): Promise<string> => resolveImageUrl(deckId, path, assetMap);
 
       const byKey = new Map<string, Task>();
       const addTask = (t: Task): void => {
@@ -347,7 +347,7 @@ export function useAssetPreloader(
             critical,
             label: source.path,
             status: "pending",
-            run: () => decodeImage(urlOf(source.path)),
+            run: async () => decodeImage(await urlOf(source.path)),
           });
         }
       };
@@ -401,7 +401,7 @@ export function useAssetPreloader(
           critical: false,
           label: f.path,
           status: "pending",
-          run: () => decodeImage(urlOf(f.path)),
+          run: async () => decodeImage(await urlOf(f.path)),
         });
       }
 

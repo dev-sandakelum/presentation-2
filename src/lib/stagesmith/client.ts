@@ -130,6 +130,14 @@ export async function getAssetMap(deckId: string, version: string | number): Pro
   return null;
 }
 
+/** Base path for runtime asset() lookups. Desktop decks need the tokenized
+ *  loopback origin; server decks use the API route. */
+export async function getAssetBaseUrl(deckId: string): Promise<string> {
+  const store = await deckStoreOf(deckId);
+  if (store === "desktop") return desktop.getAssetBaseUrl(deckId);
+  return `/api/assets/${encodeURIComponent(deckId)}`;
+}
+
 /** Shared store-aware resolver used by the stage, thumbnails, and Present. */
 export async function resolveImageUrl(deckId: string, path: string, runtimeMap?: Record<string, string> | null): Promise<string> {
   const mapped = runtimeMap?.[path];
