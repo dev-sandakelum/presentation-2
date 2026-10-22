@@ -145,7 +145,7 @@ export function QrPanel({
 
   return (
     <div className="ss-qr-backdrop" style={absolute ? { position: "fixed" } : undefined} onClick={onClose}>
-      <div className="ss-qr-card" onClick={(e) => e.stopPropagation()}>
+      <div className={`ss-qr-card${desktop.mode === "ready" ? " ss-qr-card--desktop" : ""}`} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
           <span className="ss-label">
             {desktop.mode === "ready" ? "Phone remote — desktop app" : "Phone remote — scan to join"}
@@ -233,12 +233,11 @@ export function QrPanel({
             {/* QR / waiting / stopped note */}
             {running ? (
               token && desktopRemoteUrl ? (
-                <img src={desktopQrSrc} alt="Remote join QR code" style={{ width: 220, height: 220 }} />
+                <img className="ss-qr-desktop-code" src={desktopQrSrc} alt="Remote join QR code" />
               ) : (
                 <div
+                  className="ss-qr-desktop-state"
                   style={{
-                    width: 220,
-                    height: 220,
                     display: "grid",
                     placeItems: "center",
                     border: "1px dashed var(--ss-line-strong)",
@@ -259,9 +258,8 @@ export function QrPanel({
               )
             ) : st?.status === "starting" ? (
               <div
+                className="ss-qr-desktop-state"
                 style={{
-                  width: 220,
-                  height: 220,
                   display: "grid",
                   placeItems: "center",
                   border: "1px dashed var(--ss-line-strong)",
@@ -276,12 +274,10 @@ export function QrPanel({
               </div>
             ) : st?.status === "stopped" ? (
               <div
+                className="ss-qr-stopped-note"
                 style={{
-                  width: "100%",
                   font: "400 11.5px/1.55 var(--ss-sans)",
                   color: "var(--ss-mut)",
-                  textAlign: "center",
-                  padding: "4px 6px",
                 }}
               >
                 The server runs only on this machine while the desktop app is open. Phones connect over your
@@ -414,6 +410,7 @@ export function QrPanel({
 
             {/* hints */}
             <div
+              className="ss-qr-desktop-hints"
               style={{
                 width: "100%",
                 display: "flex",
