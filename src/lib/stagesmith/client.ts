@@ -31,7 +31,7 @@ async function j<T>(res: Response): Promise<T> {
     body = null;
   }
   if (!res.ok) {
-    throw new Error((body as { error?: string } | null)?.error || `Request failed (${res.status})`);
+    throw new Error(`HTTP ${res.status}: ${(body as { error?: string; message?: string } | null)?.error || (body as { message?: string } | null)?.message || "request failed"}`);
   }
   if (body === null || typeof body !== "object") {
     throw new Error("Malformed response from server");
@@ -130,6 +130,24 @@ export async function getAssetMap(deckId: string, version: string | number): Pro
   return null;
 }
 
+/** Shared store-aware resolver used by the stage, thumbnails, and Present. */
+export async function resolveImageUrl(deckId: string, path: string, runtimeMap?: Record<string, string> | null): Promise<string> {
+  const mapped = runtimeMap?.[path];
+  if (mapped) return mapped;
+  const store = await deckStoreOf(deckId);
+  if (store === "browser") {
+    const dataUrl = await local.getAssetDataUrl(deckId, path);
+    if (dataUrl) return dataUrl;
+    throw new Error(`Asset not found: ${path}`);
+  }
+  if (store === "desktop") {
+    const url = await desktop.getAssetUrl(deckId, path);
+    if (url) return url;
+    throw new Error(`Asset not found: ${path}`);
+  }
+  return assetRouteUrl(deckId, path);
+}
+
 export interface ModuleInfo {
   /** compile URL (server decks) */
   url: string | null;
@@ -156,9 +174,22 @@ const MODULE_CONCURRENCY = 4;
 const moduleQueue: Array<{ key: string; priority: ModulePriority; queuedAt: number; run: () => void; cancel: () => void }> = [];
 let activeModuleJobs = 0;
 const moduleRequestStates = new Map<string, { status: "queued" | "started" | "finished" | "cancelled"; queuedAt: number; startedAt?: number }>();
+const liveCompileOverrides = new Map<string, Record<string, string>>();
+
+export function setLiveCompileOverrides(deckId: string, files: Record<string, string>): void {
+  liveCompileOverrides.set(deckId, { ...files });
+}
+
+function liveOverrideKey(files: Record<string, string>): string {
+  const text = Object.keys(files).sort().map((p) => `${p}\0${files[p]}`).join("\x01");
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+  return (h >>> 0).toString(16);
+}
 
 export function getModuleRequestState(deckId: string, path: string, version: string | number) {
-  return moduleRequestStates.get(`${deckId}:${path}:${version}`) ?? null;
+  const prefix = `${deckId}:${path}:${version}:`;
+  return [...moduleRequestStates.entries()].filter(([key]) => key.startsWith(prefix)).sort((a, b) => b[1].queuedAt - a[1].queuedAt)[0]?.[1] ?? null;
 }
 
 function notifyModuleState(key: string, state: { status: "queued" | "started" | "finished" | "cancelled"; queuedAt: number; startedAt?: number }) {
@@ -222,7 +253,9 @@ export function resolveModule(deckId: string, path: string, version: string | nu
   }
   deckVersionSeen.set(deckId, version);
 
-  const key = `${deckId}:${path}:${version}`;
+  const overrides = liveCompileOverrides.get(deckId) ?? {};
+  const overrideHash = liveOverrideKey(overrides);
+  const key = `${deckId}:${path}:${version}:${overrideHash}`;
   const hit = moduleCache.get(key);
   if (hit && !force) return Promise.resolve(hit);
   const pending = inflightModules.get(key);
@@ -252,7 +285,7 @@ export function resolveModule(deckId: string, path: string, version: string | nu
         const res = await fetch("/api/compile", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ files: rec.files, entry: path }),
+          body: JSON.stringify({ files: { ...rec.files, ...overrides }, entry: path }),
         });
         const data = (await j<{ ok: boolean; js?: string; steps?: number; ver?: string; error?: string }>(res)) as {
           ok: boolean;
@@ -265,18 +298,20 @@ export function resolveModule(deckId: string, path: string, version: string | nu
           ? { url: null, code: data.js ?? "", ver: data.ver ?? String(data.js?.length ?? 0), steps: data.steps || 1, error: null }
           : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
       } else {
-        const res = await fetch(
-          `/api/compile?deck=${encodeURIComponent(deckId)}&file=${encodeURIComponent(path)}&meta=1`,
-        );
-        const data = (await j<{ ok: boolean; url?: string; steps?: number; error?: string; hash?: string }>(res)) as {
+        const res = await fetch("/api/compile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deckId, entry: path, overrides }),
+        });
+        const data = (await j<{ ok: boolean; js?: string; steps?: number; error?: string; ver?: string }>(res)) as {
           ok: boolean;
-          url?: string;
+          js?: string;
           steps?: number;
           error?: string;
-          hash?: string;
+          ver?: string;
         };
         info = data.ok
-          ? { url: data.url ?? null, code: null, ver: data.hash ?? "", steps: data.steps || 1, error: null }
+          ? { url: null, code: data.js ?? "", ver: data.ver ?? "", steps: data.steps || 1, error: null }
           : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
       }
       // Successful modules are cacheable. A real failure remains retryable;
@@ -392,6 +427,21 @@ export const api = {
       if (b) return b;
     }
     const res = await fetch(`/api/decks/${deckId}`);
+    return j<DeckBundle>(res);
+  },
+
+  /** Re-read a deck after an observed external folder change. */
+  refreshDeck: async (deckId: string): Promise<DeckBundle> => {
+    const store = await deckStoreOf(deckId);
+    if (store === "desktop") {
+      desktop.dropCaches(deckId);
+      const b = await desktop.getBundle(deckId);
+      if (b) return b;
+    } else if (store === "browser") {
+      const b = await local.getBundle(deckId);
+      if (b) return b;
+    }
+    const res = await fetch(`/api/decks/${deckId}`, { cache: "no-store" });
     return j<DeckBundle>(res);
   },
 
@@ -547,7 +597,7 @@ export const api = {
   /** batch save — the editor's save queue writes all dirty buffers in one
    *  call (one record mutation for browser/desktop decks, sequential atomic
    *  PUTs for server decks). Returns the deck's new signature. */
-  saveFiles: async (deckId: string, entries: Array<{ path: string; content: string }>): Promise<string> => {
+  saveFiles: async (deckId: string, entries: Array<{ path: string; content: string; allowEmptyOverwrite?: boolean }>): Promise<string> => {
     if (!entries.length) return api.poll(deckId);
     const store = await deckStoreOf(deckId);
     if (store === "desktop") {
@@ -566,7 +616,7 @@ export const api = {
       const res = await fetch(`/api/decks/${deckId}/files`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: e.path, content: e.content }),
+        body: JSON.stringify({ path: e.path, content: e.content, allowEmptyOverwrite: e.allowEmptyOverwrite === true }),
       });
       sig = (await j<{ signature: string }>(res)).signature;
     }

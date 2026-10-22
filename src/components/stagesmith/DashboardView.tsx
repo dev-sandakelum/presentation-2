@@ -29,6 +29,8 @@ import { SplashVeil } from "./LoadingScreen";
 import { useSync } from "@/hooks/useSync";
 import { useUiTheme, hydrateUiTheme } from "@/hooks/useUiTheme";
 import { useSaveQueue, readRecoverySnapshot } from "@/hooks/useSaveQueue";
+import { setLiveCompileOverrides } from "@/lib/stagesmith/client";
+import { isExternalSignature, mayWriteContent } from "@/lib/stagesmith/save-safety";
 import { download, type SsNav } from "./shared";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -81,6 +83,8 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   const [version, setVersion] = useState(initialBundle?.signature ?? "boot");
   const [selId, setSelId] = useState<string | null>(null);
   const [buffers, setBuffers] = useState<Record<string, string>>({});
+  const [fileLoadErrors, setFileLoadErrors] = useState<Record<string, string>>({});
+  const [compileRevision, setCompileRevision] = useState(0);
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
   const [codeMinimized, setCodeMinimized] = useState(false);
   /** dock the code editor as a right side panel (user request) */
@@ -236,51 +240,102 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
     load();
   }, [deckId]);
 
-  /* ---------- folder watching (plan §2: VS Code edits appear live) ---------- */
-  const ownSaveRef = useRef(false);
-  useEffect(() => {
-    const t = setInterval(async () => {
-      if (ownSaveRef.current) {
-        ownSaveRef.current = false;
-        return;
-      }
-      if (Object.values(dirty).some(Boolean)) return; // never clobber local edits
-      try {
-        const sig = await api.poll(deckId);
-        if (sig !== version) {
-          const b = await api.getDeck(deckId);
-          setBundle(b);
-          setDeck(b.deck);
-          setThemeCss(b.themeCss);
-          setVersion(sig);
-          setBuffers({});
-          setDirty({});
-          toast({ title: "Deck folder changed — reloaded" });
-        }
-      } catch {
-        /* server hiccup — keep polling */
-      }
-    }, 1500);
-    return () => clearInterval(t);
-  }, [deckId, version, dirty, toast]);
-
-  /* ---------- autosave (ONE serialized queue — see useSaveQueue) ---------- */
   const buffersRef = useRef(buffers);
   buffersRef.current = buffers;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
+  useEffect(() => {
+    setLiveCompileOverrides(deckId, buffers);
+    const timer = setTimeout(() => setCompileRevision((n) => n + 1), 180);
+    return () => clearTimeout(timer);
+  }, [deckId, buffers]);
 
+  /* ---------- folder polling: serialize polls and never clear editor buffers ---------- */
+  const versionRef = useRef(version);
+  versionRef.current = version;
+  const bundleRef = useRef(bundle);
+  bundleRef.current = bundle;
+  const pollBusyRef = useRef(false);
+  const confirmedEmptyRef = useRef(new Set<string>());
+  const reloadChangedFiles = useCallback(async (signature: string) => {
+    const b = await api.refreshDeck(deckId);
+    const previousRows = bundleRef.current?.files ?? [];
+    const previous = new Map(previousRows.map((f) => [f.path, `${f.size}:${f.mtime}`]));
+    const nextPaths = new Set(b.files.map((f) => f.path));
+    const changedSet = new Set(b.files.filter((f) => previous.get(f.path) !== `${f.size}:${f.mtime}`).map((f) => f.path));
+    const deleted = previousRows.filter((f) => !nextPaths.has(f.path)).map((f) => f.path);
+    deleted.forEach((p) => changedSet.add(p));
+    // Text mtime metadata can be coarse (especially on desktop); compare every
+    // already-loaded editor buffer with disk so same-size external edits count.
+    for (const [p, localText] of Object.entries(buffersRef.current)) {
+      if (!nextPaths.has(p) || !/\.(tsx?|jsx?|css|md|json)$/i.test(p)) continue;
+      try { if (await api.readFile(deckId, p) !== localText) changedSet.add(p); }
+      catch (e) { console.warn(`[folder-poll] couldn't compare ${p}`, e); }
+    }
+    const changed = [...changedSet];
+    const textChanged = changed.filter((p) => /\.(tsx?|jsx?|css|md|json)$/i.test(p));
+    const conflicts = textChanged.filter((p) => dirtyRef.current[p]);
+    const reloadConflicts = conflicts.length === 0 || window.confirm(
+      `Files changed outside Chassé: ${conflicts.join(", ")}\n\nOK: Reload those files (discard local edits).\nCancel: Keep your edits; they will remain unsaved.`,
+    );
+    const replacements: Record<string, string> = {};
+    for (const p of textChanged) {
+      if (conflicts.includes(p) && !reloadConflicts) continue;
+      if (!nextPaths.has(p)) continue;
+      try { replacements[p] = await api.readFile(deckId, p); }
+      catch (e) { console.error(`[folder-poll] couldn't read changed file ${p}`, e); throw e; }
+    }
+    setBundle(b);
+    setDeck(b.deck);
+    setThemeCss(b.themeCss);
+    versionRef.current = signature;
+    setVersion(signature);
+    setBuffers((current) => {
+      const next = { ...current, ...replacements };
+      if (reloadConflicts) for (const p of deleted) delete next[p];
+      return next;
+    });
+    if (reloadConflicts) setDirty((current) => {
+      const next = { ...current };
+      for (const p of conflicts) delete next[p];
+      return next;
+    });
+    toast({ title: "Deck folder changes applied", description: `${changed.length} file(s) refreshed` });
+  }, [deckId, toast]);
+  useEffect(() => {
+    let disposed = false;
+    const timer = setInterval(async () => {
+      if (pollBusyRef.current || !deck) return;
+      pollBusyRef.current = true;
+      try {
+        const sig = await api.poll(deckId);
+        if (disposed || !isExternalSignature(sig, versionRef.current)) return;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const stableSig = await api.poll(deckId);
+        if (disposed || stableSig !== sig || !isExternalSignature(stableSig, versionRef.current)) return;
+        await reloadChangedFiles(stableSig);
+      } catch (e) {
+        console.warn("[folder-poll] refresh failed", e);
+      } finally {
+        pollBusyRef.current = false;
+      }
+    }, 1500);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [deckId, deck, reloadChangedFiles]);
+
+  /* ---------- autosave (ONE serialized queue — see useSaveQueue) ---------- */
   const save = useSaveQueue(deckId, {
     collect: () =>
       Object.keys(dirtyRef.current)
-        .filter((p) => dirtyRef.current[p])
-        .map((p) => ({ path: p, content: buffersRef.current[p] ?? "" })),
+        .filter((p) => dirtyRef.current[p] && buffersRef.current[p] !== undefined)
+        .map((p) => ({ path: p, content: buffersRef.current[p], allowEmptyOverwrite: confirmedEmptyRef.current.has(p) })),
     onSaved: (saved, signature) => {
-      ownSaveRef.current = true;
+      versionRef.current = signature;
       setVersion(signature);
       setDirty((d) => {
         const nd = { ...d };
         for (const e of saved) {
+          confirmedEmptyRef.current.delete(e.path);
           // clear the flag ONLY when the buffer still matches what was
           // written — edits made during the save keep their flag and go out
           // with the queue's coalesced next run
@@ -293,6 +348,15 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
 
   const onBufferChange = useCallback(
     (path: string, content: string) => {
+      const prior = buffersRef.current[path];
+      if (prior === undefined) {
+        console.warn(`[save] ignored edit before ${path} finished loading`);
+        return;
+      }
+      if (!mayWriteContent(prior, content, confirmedEmptyRef.current.has(path))) {
+        if (!window.confirm(`Replace the non-empty file ${path} with an empty file?`)) return;
+        confirmedEmptyRef.current.add(path);
+      }
       // undo capture (debounced per file)
       const prevTimer = undoTimers.current[path];
       if (prevTimer) clearTimeout(prevTimer);
@@ -306,6 +370,12 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
     },
     [save],
   );
+
+  const onAssetsChanged = useCallback(async () => {
+    const signature = await api.poll(deckId);
+    versionRef.current = signature;
+    setVersion(signature);
+  }, [deckId]);
 
   // crash recovery — restore unsaved text buffers from the last session
   // (written on tab hide / close / save failure) once the deck is loaded
@@ -543,11 +613,14 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
       const existing = inflightRef.current.get(path);
       if (existing) return existing;
       const p = (async () => {
+        setFileLoadErrors((current) => { const next = { ...current }; delete next[path]; return next; });
         try {
           const content = await api.readFile(deckId, path);
           setBuffers((b) => (b[path] === undefined ? { ...b, [path]: content } : b));
-        } catch {
-          /* leave undefined — a later call can retry */
+        } catch (error) {
+          setFileLoadErrors((current) => ({ ...current, [path]: (error as Error).message || "Read failed" }));
+          console.error(`[file-load] failed to load ${path}`, error);
+          toast({ title: "Could not load file", description: `${path}: ${(error as Error).message}`, variant: "destructive" });
         } finally {
           inflightRef.current.delete(path);
         }
@@ -555,7 +628,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
       inflightRef.current.set(path, p);
       return p;
     },
-    [deckId],
+    [deckId, toast],
   );
 
   const title = deck?.title ?? deckId;
@@ -833,6 +906,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
           deck={deck}
           themeCss={themeCss}
           version={version}
+          compileVersion={`${version}:${compileRevision}`}
           selId={selId}
           onSelect={(id) => setSelId(id)}
           onReorder={reorder}
@@ -857,6 +931,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
               sel={sel}
               themeCss={themeCss}
               version={version}
+              compileVersion={`${version}:${compileRevision}`}
               onOverride={setSlideOverride}
               onDeckMode={setDeckMode}
             />
@@ -879,8 +954,10 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
             tab={tab}
             onTab={setTab}
             buffers={buffers}
+            fileLoadErrors={fileLoadErrors}
             dirty={dirty}
             onBufferChange={onBufferChange}
+            onAssetsChanged={onAssetsChanged}
             ensureBuffer={ensureBuffer}
             onFlushSave={() => save.saveNow()}
             onCommonSource={setCommonSource}

@@ -1,4 +1,40 @@
-# Image loading audit — 2026-10-22
+# Reload, save, upload, and image audit — 2026-10-22
+
+## Fixes applied
+
+- Replaced the one-shot save watcher flag with serialized polling, a 400 ms stability check, and comparison against the latest acknowledged signature. Own saves and asset uploads now update the acknowledged version without a deck reload.
+- External changes now refresh changed text buffers only, preserve the editor buffer map and selected UI, and ask **Reload / Keep mine** when a changed file also has unsaved local edits. The old unconditional `setBuffers({})` / `setDirty({})` reload was removed.
+- Editors do not mount on an unloaded `""` fallback. Edits are ignored until the buffer exists; replacing non-empty content with empty content requires confirmation. Save collection excludes unloaded buffers, and server/desktop/browser write layers enforce the confirmation flag.
+- Desktop and server writes retain up to ten pre-save versions under `.history/`; browser-store saves retain up to ten IndexedDB snapshots. History folders are excluded from deck signatures.
+- Preview compilation now uses live editor buffers with a content-derived compile key. Disk autosave remains separate, and compile failures retain the runtime's existing last-good render behavior.
+- Asset upload refreshes the asset signature and list without triggering a folder reload. Upload failures include HTTP status/reason in the thrown error and are logged with file count and byte size.
+- Added the shared store-aware `resolveImageUrl()` path for asset tiles, stage backgrounds/overlays (including thumbnails through StageFrame), and Present preloads. Runtime map cache signatures now derive from actual asset metadata/content signatures.
+- Added `scripts/test-save-safety.test.ts` and `npm run test:save-safety` for the self-reload signature and empty-overwrite guards.
+
+## Verification
+
+- `npm run test:save-safety`: PASS (2/2).
+- Targeted ESLint across changed TypeScript files: PASS.
+- `git diff --check`: PASS.
+- `npx tsc --noEmit`: changed files have no reported errors; blocked by three existing unrelated errors in `useDownloadFeedback.ts`, `useSync.ts`, and `lib/db.ts`.
+- Java compilation was not run because Maven is not installed in this environment.
+- Live desktop/web acceptance checks (0.5-second render timing, PNG/JPG upload, external-edit prompt, and restart persistence) still require running the app; the target deck and desktop runtime are unavailable in this workspace.
+
+## Reload/save acceptance status
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Save does not trigger a reload | PASS (regression) | Latest acknowledged signature is compared directly; regression test passes. |
+| Empty content is not written without confirmation | PASS (regression/code) | Loaded-buffer check, confirmation flag, and store/API guards; regression test passes. |
+| External edit prompts Reload / Keep mine | PASS (code) | Dirty changed files invoke an explicit choice before applying replacements. |
+| External refresh preserves buffers and refreshes changed text only | PASS (code) | No full buffer reset; only changed source files are read into replacements. |
+| Preview compiles unsaved memory | PASS (code) | `resolveModule` merges live overrides and keys cache by their content hash. |
+| Upload refresh avoids a deck reload | PASS (code) | Upload acknowledges `api.poll()` signature and refreshes Assets panel locally. |
+| Preview, thumbnails, and Present share image resolution | PASS (code) | Shared resolver plus StageFrame asset map, used by thumbnails and Present preloading. |
+| Rolling history backups | PASS (code) | Ten versions for desktop/server folders; ten IndexedDB snapshots for browser decks. |
+| End-to-end web and desktop acceptance | NOT VERIFIED | App runtime, exact target deck, and Maven are unavailable here. |
+
+## Earlier image report
 
 ## Finding (static diagnosis; target runtime capture unavailable)
 

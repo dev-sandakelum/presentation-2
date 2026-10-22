@@ -74,7 +74,7 @@ export async function hashFile(absPath: string): Promise<string> {
 async function walk(root: string, rel = "", acc: FileRow[] = []): Promise<FileRow[]> {
   const entries = await fs.readdir(path.join(root, rel), { withFileTypes: true });
   for (const e of entries) {
-    if (e.name === ".stagesmith" || e.name === ".tmp-*" || e.name.startsWith(".tmp-")) continue;
+    if (e.name === ".stagesmith" || e.name === ".history" || e.name === ".tmp-*" || e.name.startsWith(".tmp-")) continue;
     const relPath = rel ? `${rel}/${e.name}` : e.name;
     if (e.isDirectory()) await walk(root, relPath, acc);
     else if (e.isFile()) {

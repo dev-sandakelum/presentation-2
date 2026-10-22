@@ -53,12 +53,13 @@ export const PreviewPane = memo(function PreviewPane(props: {
   sel: SlideEntry | null;
   themeCss: string;
   version: string;
+  compileVersion?: string;
   onOverride: (slideId: string, layer: "bg" | "overlay", source: Source | undefined) => void;
   /** set the deck-wide default theme mode (readability fix: a light deck
    *  authored in dark mode has faint light ink — Problem 07) */
   onDeckMode?: (mode: ThemeMode) => void;
 }) {
-  const { deckId, deck, sel, themeCss, version, onDeckMode } = props;
+  const { deckId, deck, sel, themeCss, version, compileVersion, onDeckMode } = props;
   const [mode, setMode] = useState<PreviewMode>("final");
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState(0);
@@ -171,6 +172,7 @@ export const PreviewPane = memo(function PreviewPane(props: {
               mode={sel.theme ?? deck.settings.defaultMode}
               show={SHOW[mode]}
               version={version}
+              compileVersion={compileVersion}
               step={step}
               slideIndex={idx}
               slideTotal={deck.slides.length}

@@ -31,10 +31,10 @@ export type SavePhase = "idle" | "unsaved" | "saving" | "saved" | "failed";
 
 export interface SaveQueueOptions {
   /** snapshot of the CURRENTLY dirty buffers — called at the start of each run */
-  collect: () => Array<{ path: string; content: string }>;
+  collect: () => Array<{ path: string; content: string; allowEmptyOverwrite?: boolean }>;
   /** a run succeeded — clear dirty flags (paths whose buffer still matches
    *  the saved content), adopt the new deck signature */
-  onSaved: (saved: Array<{ path: string; content: string }>, signature: string) => void;
+  onSaved: (saved: Array<{ path: string; content: string; allowEmptyOverwrite?: boolean }>, signature: string) => void;
 }
 
 export interface SaveQueueState {

@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs/promises";
 import {
   deckExists,
   deckPath,
@@ -7,6 +8,7 @@ import {
   validDeckId,
   validRelPath,
   writeFileAtomic,
+  deckRoot,
 } from "@/lib/stagesmith/store";
 import { rewriteThemeCss, unrewriteThemeCss } from "@/lib/stagesmith/themeurl";
 
@@ -49,7 +51,24 @@ export async function PUT(
     // undo theme.css url rewriting from GET (store the portable form; decode
     // so re-reading never double-encodes encoded asset names)
     const portable = path.basename(rel) === "theme.css" ? unrewriteThemeCss(content, deckId) : content;
-    await writeFileAtomic(deckPath(deckId, rel), portable);
+    const target = deckPath(deckId, rel);
+    if (content.length === 0 && body.allowEmptyOverwrite !== true) {
+      try {
+        if ((await fs.stat(target)).size > 0) return Response.json({ error: "Refusing to replace a non-empty file with empty content without confirmation" }, { status: 409 });
+      } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; }
+    }
+    try {
+      await fs.access(target);
+      const historyRoot = path.join(deckRoot(deckId), ".history");
+      const historyDir = path.join(historyRoot, `${Date.now()}-${crypto.randomUUID()}`);
+      await fs.mkdir(path.dirname(path.join(historyDir, rel)), { recursive: true });
+      await fs.copyFile(target, path.join(historyDir, rel));
+      const dirs = (await fs.readdir(historyRoot, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse();
+      for (const old of dirs.slice(10)) await fs.rm(path.join(historyRoot, old), { recursive: true, force: true });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
+    await writeFileAtomic(target, portable);
     return Response.json({ ok: true, savedAt: Date.now(), signature: await deckSignature(deckId) });
   } catch (e) {
     return Response.json({ error: (e as Error).message }, { status: 400 });

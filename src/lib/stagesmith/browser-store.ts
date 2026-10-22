@@ -309,7 +309,7 @@ function fnv1a(str: string): string {
 export function signatureOf(rec: BrowserDeckRecord): string {
   const parts: string[] = [];
   for (const p of Object.keys(rec.files).sort()) parts.push(`${p}:${fnv1a(rec.files[p])}`);
-  for (const p of Object.keys(rec.assets).sort()) parts.push(`${p}:${rec.assets[p].size}`);
+  for (const p of Object.keys(rec.assets).sort()) parts.push(`${p}:${rec.assets[p].size}:${(rec.assets[p] as File).lastModified ?? 0}`);
   return fnv1a(parts.join("|"));
 }
 
@@ -716,10 +716,16 @@ export async function saveFile(deckId: string, rel: string, content: string): Pr
 /** batch save — the editor's save queue writes all dirty buffers in ONE
  *  record mutation + ONE diff-based persist (previously each file saved
  *  re-put the whole deck — N files × full-deck write). */
-export async function saveFiles(deckId: string, entries: Array<{ path: string; content: string }>): Promise<string> {
+export async function saveFiles(deckId: string, entries: Array<{ path: string; content: string; allowEmptyOverwrite?: boolean }>): Promise<string> {
   const rec = await getRecord(deckId);
   if (!rec) throw new Error("Deck not found");
   if (!entries.length) return signatureOf(rec);
+  for (const e of entries) {
+    if (e.content === "" && !e.allowEmptyOverwrite && (rec.files[e.path] ?? "").length) {
+      throw new Error(`Refusing to replace non-empty ${e.path} with empty content without confirmation`);
+    }
+  }
+  await snapshotDeck(deckId, "before-save");
   for (const e of entries) {
     if (!validRelPath(e.path)) throw new Error(`Illegal path: ${e.path}`);
     rec.files[e.path] = e.content;
@@ -1099,7 +1105,7 @@ export async function getAssetMap(deckId: string, version: string | number): Pro
   const p = (async () => {
     const rec = await getRecord(deckId);
     if (!rec) return null;
-    const sig = String(version) || signatureOf(rec);
+    const sig = signatureOf(rec);
     const cached = assetMapCache.get(deckId);
     if (cached && cached.sig === sig) return cached.map;
     const keys = Object.keys(rec.assets);
@@ -1124,6 +1130,12 @@ export async function getAssetMap(deckId: string, version: string | number): Pro
   } finally {
     assetMapInflight.delete(deckId);
   }
+}
+
+export async function getAssetDataUrl(deckId: string, path: string): Promise<string | null> {
+  const rec = await getRecord(deckId);
+  const blob = rec?.assets[path];
+  return blob ? blobToDataUrl(blob) : null;
 }
 
 /* ------------------------------------------------------------------ */

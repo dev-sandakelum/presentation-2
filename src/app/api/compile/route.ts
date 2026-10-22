@@ -1,5 +1,5 @@
 import { compileFile, compileUrlFor, compileVirtual } from "@/lib/stagesmith/compile";
-import { deckExists, validDeckId } from "@/lib/stagesmith/store";
+import { deckExists, deckFiles, readFileInDeck, validDeckId, validRelPath } from "@/lib/stagesmith/store";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -73,9 +73,28 @@ export async function GET(req: Request) {
  */
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { files?: unknown; entry?: unknown };
-    const files = body.files as Record<string, string> | undefined;
+    const body = (await req.json()) as { files?: unknown; entry?: unknown; deckId?: unknown; overrides?: unknown };
+    let files = body.files as Record<string, string> | undefined;
     const entry = String(body.entry || "");
+    if (body.deckId !== undefined) {
+      const deckId = String(body.deckId);
+      if (!validDeckId(deckId) || !(await deckExists(deckId)) || !validRelPath(entry)) {
+        return Response.json({ ok: false, error: "Bad deck or entry path" }, { status: 400, headers: CORS });
+      }
+      const overrides = (body.overrides ?? {}) as Record<string, unknown>;
+      files = {};
+      const rows = await deckFiles(deckId);
+      for (const row of rows) {
+        if (!/\.(tsx?|jsx?|css|json)$/i.test(row.path) || row.size > 1_500_000) continue;
+        try { files[row.path] = await readFileInDeck(deckId, row.path); } catch { /* report a normal compile resolution error */ }
+      }
+      for (const [path, content] of Object.entries(overrides)) {
+        if (!validRelPath(path) || typeof content !== "string") {
+          return Response.json({ ok: false, error: `Invalid live override: ${path}` }, { status: 400, headers: CORS });
+        }
+        files[path] = content;
+      }
+    }
     if (!files || typeof files !== "object" || Array.isArray(files)) {
       return Response.json({ ok: false, error: "Bad request" }, { status: 400, headers: CORS });
     }

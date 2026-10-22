@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { RuntimeMessage, SlideEntry, Source, ThemeMode } from "@/lib/stagesmith/types";
-import { resolveModule, getAssetMap, assetRouteUrl, getModuleRequestState, type ModuleInfo } from "@/lib/stagesmith/client";
+import { resolveModule, getAssetMap, getModuleRequestState, resolveImageUrl, type ModuleInfo } from "@/lib/stagesmith/client";
 
 /**
  * The sandboxed Stage Runtime wrapper (plan §5.1).
@@ -47,6 +47,8 @@ export interface StageFrameProps {
   loadPriority?: "selected" | "normal" | "background";
   /** bump to force re-resolution (folder poll signature or explicit flush) */
   version: string | number;
+  /** live editor revision used for in-memory compilation; asset cache keeps using version */
+  compileVersion?: string | number;
   step?: number;
   slideIndex?: number;
   slideTotal?: number;
@@ -63,13 +65,6 @@ export type MetaInfo = ModuleInfo;
 /** resolve a deck layer to a loadable module (URL or inline code) */
 export async function resolveCode(deckId: string, path: string, version: string | number, priority: "selected" | "normal" | "background" = "normal", force = false): Promise<MetaInfo> {
   return resolveModule(deckId, path, version, priority, force);
-}
-
-/** image layer source URL — always percent-encoded per segment so names with
- *  spaces, brackets, # and unicode all load (used for bg/overlay images when
- *  the deck's assetMap has no data-URL entry). */
-export function imageSourceUrl(deckId: string, source: Extract<Source, { type: "image" }>): string {
-  return assetRouteUrl(deckId, source.path);
 }
 
 /** resolution is settled for exactly this set of sources at this version */
@@ -112,6 +107,7 @@ export function StageFrame(props: StageFrameProps) {
     deckId, slide, deckBg, deckOverlay, commonOverlay: commonOverlayProp, themeCss, mode,
     show = { bg: true, content: true, overlay: true },
     staticMode = false, thumbnail = false, loadPriority, version, step, slideIndex, slideTotal,
+    compileVersion,
     className, interactive = false, transition = null, onSteps, onRuntimeError,
   } = props;
 
@@ -136,13 +132,14 @@ export function StageFrame(props: StageFrameProps) {
     [slide, bgSource, overlaySource, commonOverlaySource],
   );
   const sig = sources.map((e) => `${e.kind}:${e.source ? JSON.stringify(e.source) : "none"}`).join("|");
-  const currentTag = tagOf(version, sig);
+  const moduleVersion = compileVersion ?? version;
+  const currentTag = tagOf(moduleVersion, sig);
   const [retryNonce, setRetryNonce] = useState(0);
   const [stallLevel, setStallLevel] = useState<0 | 1 | 2>(0);
   const [runtimeFailure, setRuntimeFailure] = useState<string | null>(null);
   const [runtimeReady, setRuntimeReady] = useState(false);
   const reportedThumbErrorRef = useRef<string | null>(null);
-  const { metas, tag: metasTag } = useResolvedSources(deckId, version, sources, retryNonce, loadPriority ?? (thumbnail ? "background" : "selected"));
+  const { metas, tag: metasTag } = useResolvedSources(deckId, moduleVersion, sources, retryNonce, loadPriority ?? (thumbnail ? "background" : "selected"));
   /** true when `metas` were resolved for exactly the current slide + sources */
   const settled = metasTag === currentTag;
 
@@ -171,21 +168,21 @@ export function StageFrame(props: StageFrameProps) {
       slow = setTimeout(() => setStallLevel(1), 30_000);
       stuck = setTimeout(() => setStallLevel(2), 60_000);
     };
-    const key = `${deckId}:${slidePath}:${version}`;
+    const key = `${deckId}:${slidePath}:${moduleVersion}`;
     const onModuleState = (event: Event) => {
       const detail = (event as CustomEvent<{ key: string; status: string }>).detail;
-      if (detail?.key !== key) return;
+      if (!detail?.key.startsWith(`${key}:`)) return;
       if (detail.status === "started" || detail.status === "finished") startWatch();
       if (detail.status === "cancelled") clearWatch();
     };
     window.addEventListener("stagesmith-module-state", onModuleState);
-    const existing = getModuleRequestState(deckId, slidePath, version);
+    const existing = getModuleRequestState(deckId, slidePath, moduleVersion);
     if (existing?.status === "started" || existing?.status === "finished") startWatch();
     return () => {
       clearWatch();
       window.removeEventListener("stagesmith-module-state", onModuleState);
     };
-  }, [deckId, slidePath, version, thumbnail, runtimeReady, runtimeFailure, settled, metas.slide?.error]);
+  }, [deckId, slidePath, moduleVersion, thumbnail, runtimeReady, runtimeFailure, settled, metas.slide?.error]);
 
   // browser decks ship assets as data URLs (the sandbox can't fetch /api/assets)
   const [assetMap, setAssetMap] = useState<Record<string, string> | null>(null);
@@ -194,9 +191,16 @@ export function StageFrame(props: StageFrameProps) {
     let cancelled = false;
     setAssetsLoaded(false);
     getAssetMap(deckId, version)
-      .then((m) => {
+      .then(async (m) => {
+        const resolved = { ...(m ?? {}) };
+        const images = [bgSource, overlaySource, commonOverlaySource].filter((s): s is Extract<Source, { type: "image" }> => s?.type === "image");
+        await Promise.all(images.map(async (source) => {
+          if (resolved[source.path]) return;
+          try { resolved[source.path] = await resolveImageUrl(deckId, source.path, resolved); }
+          catch (error) { console.error(`[image] resolve failed: ${source.path}`, error); }
+        }));
         if (!cancelled) {
-          setAssetMap(m);
+          setAssetMap(resolved);
           setAssetsLoaded(true);
         }
       })
@@ -206,7 +210,7 @@ export function StageFrame(props: StageFrameProps) {
     return () => {
       cancelled = true;
     };
-  }, [deckId, version]);
+  }, [deckId, version, bgSource, overlaySource, commonOverlaySource]);
 
   // last-good slide module keyed by slide id (plan §5.1): compile errors keep
   // the preview. Must be STATE: a ref updated in an effect would never re-render
@@ -267,8 +271,8 @@ export function StageFrame(props: StageFrameProps) {
   const configJson = useMemo(() => {
     const bgSrc = bgSource && bgSource.type === "image" ? bgSource : null;
     const ovSrc = overlaySource && overlaySource.type === "image" ? overlaySource : null;
-    const bgImage = bgSrc ? { url: assetMap?.[bgSrc.path] ?? imageSourceUrl(deckId, bgSrc), ...bgSrc } : null;
-    const overlayImage = ovSrc ? { url: assetMap?.[ovSrc.path] ?? imageSourceUrl(deckId, ovSrc), ...ovSrc } : null;
+    const bgImage = bgSrc ? { url: assetMap?.[bgSrc.path] ?? "", ...bgSrc } : null;
+    const overlayImage = ovSrc ? { url: assetMap?.[ovSrc.path] ?? "", ...ovSrc } : null;
     return JSON.stringify({
       type: "render",
       frameId,

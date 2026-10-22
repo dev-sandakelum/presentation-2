@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Grid2X2, Maximize2, Moon, QrCode, Sun, X, Loader2 } from "lucide-react";
-import { api, getAssetMap, resolveModule, assetRouteUrl } from "@/lib/stagesmith/client";
+import { api, getAssetMap, resolveModule, resolveImageUrl } from "@/lib/stagesmith/client";
 import type { DeckBundle } from "@/lib/stagesmith/client";
 import type { DeckJson, Source, ThemeMode } from "@/lib/stagesmith/types";
 import { StageFrame, type TransitionTiming } from "./StageFrame";
@@ -409,7 +409,7 @@ export function PresentView({
       if (cancelled) return;
       const jobs: Promise<unknown>[] = [];
       const wanted = new Set([index - 1, index, index + 1].filter((i) => i >= 0 && i < slides.length));
-      const warm = (source: Source | undefined) => {
+      const warm = async (source: Source | undefined) => {
         if (!source || source.type === "none") return;
         if (source.type === "code") {
           jobs.push(
@@ -418,18 +418,16 @@ export function PresentView({
               .catch(() => {}),
           );
         } else if (source.type === "image") {
-          const url = assetMap?.[source.path] ?? assetRouteUrl(deckId, source.path);
-          if (!/^(data|blob):/i.test(url)) {
-            jobs.push(
-              new Promise<void>((res) => {
-                const img = new Image();
-                const done = () => res();
-                img.onload = () => (img.decode ? img.decode().then(done, done) : done());
-                img.onerror = done;
-                img.src = url;
-              }),
-            );
-          }
+          try {
+            const url = await resolveImageUrl(deckId, source.path, assetMap);
+            jobs.push(new Promise<void>((res) => {
+              const img = new Image();
+              const done = () => res();
+              img.onload = () => (img.decode ? img.decode().then(done, done) : done());
+              img.onerror = done;
+              img.src = url;
+            }));
+          } catch (error) { console.warn(`[present-image] preload failed: ${source.path}`, error); }
         }
       };
       for (const i of wanted) {
@@ -439,8 +437,8 @@ export function PresentView({
             .then((m) => (m.url ? fetch(m.url, { cache: "force-cache" }) : null))
             .catch(() => {}),
         );
-        warm(s.bg !== undefined ? s.bg : deck.bg);
-        warm(s.overlay !== undefined ? s.overlay : deck.overlay);
+        jobs.push(warm(s.bg !== undefined ? s.bg : deck.bg));
+        jobs.push(warm(s.overlay !== undefined ? s.overlay : deck.overlay));
       }
       try {
         if (document.fonts?.ready) jobs.push(document.fonts.ready.catch(() => {}));

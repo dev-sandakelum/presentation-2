@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import type { EditorView } from "@codemirror/view";
 import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, PanelBottom, PanelRight, Save, Trash2, Upload, WandSparkles } from "lucide-react";
 import type { DeckJson, FileRow, SlideEntry, Source } from "@/lib/stagesmith/types";
-import { api } from "@/lib/stagesmith/client";
+import { api, resolveImageUrl } from "@/lib/stagesmith/client";
 import { FORMATABLE_EXT, formatTsx } from "@/lib/stagesmith/format";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import { copyText, fixPrompt, sourceLabel } from "./shared";
@@ -72,8 +72,10 @@ export const CodePane = memo(function CodePane(props: {
   tab: CodeTab;
   onTab: (t: CodeTab) => void;
   buffers: Record<string, string>;
+  fileLoadErrors: Record<string, string>;
   dirty: Record<string, boolean>;
   onBufferChange: (path: string, content: string) => void;
+  onAssetsChanged: () => Promise<void>;
   ensureBuffer: (path: string) => Promise<void>;
   onFlushSave: () => void;
   onCommonSource: (layer: "bg" | "overlay", source: Source) => void;
@@ -310,7 +312,7 @@ export const CodePane = memo(function CodePane(props: {
 
           <div className="ss-codepane-body ss-cm">
             {tab === "slide" && sel && (
-              <CmEditor
+              buffers[slidePath] === undefined ? <LoadingFile path={slidePath} error={props.fileLoadErrors[slidePath]} onRetry={() => void ensureBuffer(slidePath)} /> : <CmEditor
                 value={buffers[slidePath] ?? ""}
                 theme={cmTheme}
                 lang="tsx"
@@ -331,6 +333,7 @@ export const CodePane = memo(function CodePane(props: {
                 files={props.files}
                 sel={sel}
                 buffers={buffers}
+                fileLoadErrors={props.fileLoadErrors}
                 onBufferChange={onBufferChange}
                 ensureBuffer={ensureBuffer}
                 onCommonSource={props.onCommonSource}
@@ -349,6 +352,7 @@ export const CodePane = memo(function CodePane(props: {
                 files={props.files}
                 sel={sel}
                 buffers={buffers}
+                fileLoadErrors={props.fileLoadErrors}
                 onBufferChange={onBufferChange}
                 ensureBuffer={ensureBuffer}
                 onCommonSource={props.onCommonSource}
@@ -361,7 +365,7 @@ export const CodePane = memo(function CodePane(props: {
             )}
 
             {tab === "notes" && sel && (
-              <CmEditor
+              buffers[notesPath] === undefined ? <LoadingFile path={notesPath} error={props.fileLoadErrors[notesPath]} onRetry={() => void ensureBuffer(notesPath)} /> : <CmEditor
                 value={buffers[notesPath] ?? ""}
                 theme={cmTheme}
                 lang="plain"
@@ -370,10 +374,10 @@ export const CodePane = memo(function CodePane(props: {
             )}
             {tab === "notes" && !sel && <EmptyPane text="Select a slide to edit its notes" />}
 
-            {tab === "assets" && <AssetsTab deckId={deckId} version={props.version} />}
+            {tab === "assets" && <AssetsTab deckId={deckId} version={props.version} onAssetsChanged={props.onAssetsChanged} />}
 
             {tab === "theme" && (
-              <CmEditor
+              buffers["theme.css"] === undefined ? <LoadingFile path="theme.css" error={props.fileLoadErrors["theme.css"]} onRetry={() => void ensureBuffer("theme.css")} /> : <CmEditor
                 value={buffers["theme.css"] ?? ""}
                 theme={cmTheme}
                 lang="plain"
@@ -395,6 +399,10 @@ function EmptyPane({ text }: { text: string }) {
   );
 }
 
+function LoadingFile({ path, error, onRetry }: { path: string; error?: string; onRetry: () => void }) {
+  return <div style={{ height: "100%", display: "grid", placeItems: "center", gap: 8 }}><span className="ss-label">{error ? `${path}: ${error}` : `Loading ${path}…`}</span>{error && <button className="ss-btn" onClick={onRetry}>Retry</button>}</div>;
+}
+
 /* ------------------------------------------------------------------ */
 /* BG / Overlay source editing: common + per-slide override            */
 /* ------------------------------------------------------------------ */
@@ -406,6 +414,7 @@ function SourceEditor(props: {
   files: FileRow[];
   sel: SlideEntry | null;
   buffers: Record<string, string>;
+  fileLoadErrors: Record<string, string>;
   onBufferChange: (path: string, content: string) => void;
   ensureBuffer: (path: string) => Promise<void>;
   onCommonSource: (layer: "bg" | "overlay", source: Source) => void;
@@ -585,7 +594,7 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
       </div>
       <div className="ss-cm" style={{ flex: 1 }}>
         {effective?.type === "code" && codePath ? (
-          <CmEditor
+    props.buffers[codePath] === undefined ? <LoadingFile path={codePath} error={props.fileLoadErrors[codePath]} onRetry={() => void props.ensureBuffer(codePath)} /> : <CmEditor
             value={props.buffers[codePath] ?? ""}
             theme={props.cmTheme}
             lang="tsx"
@@ -826,7 +835,7 @@ function CodeFileList({
   );
 }
 
-function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
+function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; version: string; onAssetsChanged: () => Promise<void> }) {
   const { toast } = useToast();
   const [assets, setAssets] = useState<FileRow[] | null>(null);
   const [subTab, setSubTab] = useState<AssetsSubTab>("assets");
@@ -860,6 +869,8 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
     try {
       const uploaded = await api.uploadAssets(deckId, list);
       await refresh();
+      try { await onAssetsChanged(); }
+      catch (error) { console.error("[assets-upload] uploaded successfully, but live asset refresh failed", error); }
       toast({
         title: `${uploaded.length} asset${uploaded.length > 1 ? "s" : ""} copied into assets/`,
         description: uploaded.some((u) => u.display !== u.path.replace("assets/", ""))
@@ -867,6 +878,7 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
           : undefined,
       });
     } catch (e) {
+      console.error(`[assets-upload] failed (${list.length} file(s), ${list.reduce((n, f) => n + f.size, 0)} bytes)`, e);
       toast({ title: "Upload failed", description: (e as Error).message, variant: "destructive" });
     }
   };
@@ -901,7 +913,7 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
       for (const a of rows) {
         if (/\.(png|jpe?g|svg|webp|gif|avif)$/i.test(a.path)) {
           try {
-            out[a.path] = await api.assetUrl(deckId, a.path);
+            out[a.path] = await resolveImageUrl(deckId, a.path);
           } catch (error) {
             console.error(`[assets] URL resolution failed for ${a.path}`, error);
             setBroken((b) => ({ ...b, [a.path]: true }));
@@ -986,11 +998,11 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
                             <button className="ss-btn" style={{ height: 22, padding: "0 7px", fontSize: 10 }} onClick={() => {
                               setBroken((b) => { const next = { ...b }; delete next[a.path]; return next; });
                               setPreviewUrls((urls) => { const next = { ...urls }; delete next[a.path]; return next; });
-                              void api.assetUrl(deckId, a.path).then((url) => setPreviewUrls((urls) => ({ ...urls, [a.path]: url }))).catch((error) => console.error(`[assets] retry URL resolution failed for ${a.path}`, error));
+                              void resolveImageUrl(deckId, a.path).then((url) => setPreviewUrls((urls) => ({ ...urls, [a.path]: url }))).catch((error) => console.error(`[assets] retry URL resolution failed for ${a.path}`, error));
                             }}>Retry</button>
                           </div>
                         ) : (
-                          <img
+                          src ? <img
                             src={src}
                             alt={displayName}
                             loading="lazy"
@@ -998,7 +1010,7 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
                               console.warn(`[assets] preview failed to load: ${a.path} (src=${src})`);
                               setBroken((b) => ({ ...b, [a.path]: true }));
                             }}
-                          />
+                          /> : <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", color: "var(--ss-mut)" }}>Resolving {displayName}…</div>
                         )
                       ) : (
                         <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", font: "500 10px var(--ss-mono)", color: "var(--ss-mut)" }}>

@@ -45,6 +45,7 @@ export const Filmstrip = memo(function Filmstrip(props: {
   deck: DeckJson;
   themeCss: string;
   version: string;
+  compileVersion?: string;
   selId: string | null;
   onSelect: (id: string) => void;
   onReorder: (order: string[]) => void;
@@ -75,7 +76,7 @@ export const Filmstrip = memo(function Filmstrip(props: {
       const worker = async () => {
         while (!cancelled && cursor < order.length) {
           const s = order[cursor++];
-          const meta = await resolveCode(deckId, `slides/${s.id}.tsx`, props.version, "background");
+          const meta = await resolveCode(deckId, `slides/${s.id}.tsx`, props.compileVersion ?? props.version, "background");
           if (meta.error) out[s.id] = meta.error;
           if (!cancelled) setErrors((prev) => (meta.error ? { ...prev, [s.id]: meta.error! } : prev));
         }
@@ -124,6 +125,7 @@ export const Filmstrip = memo(function Filmstrip(props: {
                 entry={s}
                 themeCss={props.themeCss}
                 version={props.version}
+                compileVersion={props.compileVersion}
                 selected={s.id === selId}
                 loadPriority={Math.abs(i - Math.max(deck.slides.findIndex((entry) => entry.id === selId), 0)) <= 1 ? "normal" : "background"}
                 error={mergedError(s.id)}
@@ -188,6 +190,7 @@ const SortableThumb = memo(function SortableThumb(props: {
   entry: DeckJson["slides"][number];
   themeCss: string;
   version: string;
+  compileVersion?: string;
   selected: boolean;
   loadPriority: "normal" | "background";
   error?: string;
@@ -243,6 +246,7 @@ const SortableThumb = memo(function SortableThumb(props: {
                   deckOverlay={deck.overlay}
                   themeCss={props.themeCss}
                   version={props.version}
+                  compileVersion={props.compileVersion}
                   loadPriority={props.loadPriority}
                   onError={(message) => props.onThumbError(entry.id, message)}
                 />

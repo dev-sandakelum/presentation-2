@@ -652,13 +652,17 @@ export async function saveFile(deckId: string, rel: string, content: string): Pr
   return saveFiles(deckId, [{ path: rel, content }]);
 }
 
-export async function saveFiles(deckId: string, entries: Array<{ path: string; content: string }>): Promise<string> {
+export async function saveFiles(deckId: string, entries: Array<{ path: string; content: string; allowEmptyOverwrite?: boolean }>): Promise<string> {
   const rec = await getRecord(deckId);
   if (!rec) throw new Error("Deck not found");
   if (!entries.length) return rec.sig;
   const baseline = { ...rec.files };
   for (const e of entries) {
     if (!validRelPath(e.path)) throw new Error(`Illegal path: ${e.path}`);
+    if (e.content === "" && !e.allowEmptyOverwrite) {
+      const previous = rec.files[e.path] ?? await fsReadText(deckId, e.path).catch(() => "");
+      if (previous.length) throw new Error(`Refusing to replace non-empty ${e.path} with empty content without confirmation`);
+    }
     rec.files[e.path] = e.content;
   }
   rec.modified = new Date().toISOString();
@@ -986,7 +990,7 @@ export async function getAssetMap(deckId: string, version: string | number): Pro
   const p = (async () => {
     const rec = await getRecord(deckId);
     if (!rec) return null;
-    const sig = String(version) || signatureOf(rec);
+    const sig = signatureOf(rec);
     const cached = assetMapCache.get(deckId);
     if (cached && cached.sig === sig) return cached.map;
     const keys = Object.keys(rec.assets);
