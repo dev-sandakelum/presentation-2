@@ -141,13 +141,35 @@ The available evidence does not identify one uniquely stuck runtime phase. The s
 
 ## Task 15 recheck — desktop image transport
 
-### Confirmed code defects
+### 2026-10-22 recheck against the selected same-origin design
+
+The previous loopback diagnosis above is superseded by the same-origin design
+requested for Task 15. The desktop bridge now advertises `assetUrls`, and the
+Java application registers JCEF resource interception for
+`/__chasse_files__/...`; the old loopback file endpoint has been removed.
+The shared web resolver now returns encoded virtual URLs for desktop decks,
+and the runtime base path uses that same prefix. Theme CSS retains portable
+relative asset paths so the runtime base resolves them in desktop, web and
+export contexts. Uploads use bounded bridge chunks and temporary-file rename.
+
+Checks on 2026-10-22: targeted ESLint passed; Java source compiled against the
+cached packaged JCEF API; vendor bundle rebuild passed. Full TypeScript checking
+still reports three unrelated existing errors (`useDownloadFeedback.ts`,
+`useSync.ts`, and `lib/db.ts`). The bridge smoke test could not run because Bun
+is missing; Node cannot resolve its extensionless TypeScript import. There is
+no packaged desktop launch or sample deck available in this session, so actual
+image rendering, stop/start independence, restart behavior, the 26-slide
+format/name matrix, cross-origin rejection and the compatibility fallback
+remain NOT VERIFIED. The implementation should not be treated as acceptance
+until those packaged-app checks are run.
+
+### Previous loopback-era diagnosis (superseded)
 
 - `StageFrame` runs the slide renderer in `<iframe sandbox="allow-scripts">`, which gives that frame an opaque origin. Its image URLs point at the desktop loopback HTTP server. The server rejected every non-empty Origin other than the configured app origin, so a CORS/PNA request carrying `Origin: null` was refused even though its URL had the valid per-session token.
 - The runtime asset resolver in `public/vendor/stagesmith.js` falls back to `assetBase` when a path is not in `assetMap`. StageFrame always supplied the web API asset route as `assetBase`, which cannot read files from the selected desktop deck directory. Desktop map generation also skipped per-file URL failures silently, making this fallback likely for affected entries.
 - `runtime.html`'s background decoder treated image errors as successful completion. A failed background therefore proceeded to mount as an empty background, without surfacing its failed URL.
 
-### Corrections made
+### Previous loopback-era corrections (superseded)
 
 - The loopback server now validates the bearer token before answering preflight requests, allows the sandbox's opaque `Origin: null` when the valid session URL is used, and sends `Cross-Origin-Resource-Policy: cross-origin` on file responses. Other non-trusted origins remain refused.
 - Added a desktop asset-base resolver using the same tokenized loopback URL scheme. StageFrame supplies that base so unresolved `asset(name)` paths still resolve against the selected desktop deck folder. The web/server route remains the base in web mode.

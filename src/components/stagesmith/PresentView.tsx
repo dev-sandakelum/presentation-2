@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Grid2X2, Maximize2, Moon, QrCode, Sun, X, Loader2 } from "lucide-react";
-import { api, getAssetMap, resolveModule, resolveImageUrl } from "@/lib/stagesmith/client";
+import { api, getAssetMap, resolveModule, resolveAssetUrl } from "@/lib/stagesmith/client";
 import type { DeckBundle } from "@/lib/stagesmith/client";
 import type { DeckJson, Source, ThemeMode } from "@/lib/stagesmith/types";
 import { StageFrame, type TransitionTiming } from "./StageFrame";
@@ -419,7 +419,7 @@ export function PresentView({
           );
         } else if (source.type === "image") {
           try {
-            const url = await resolveImageUrl(deckId, source.path, assetMap);
+            const url = await resolveAssetUrl(deckId, source.path, assetMap);
             jobs.push(new Promise<void>((res) => {
               const img = new Image();
               const done = () => res();

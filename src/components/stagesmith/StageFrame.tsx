@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { RuntimeMessage, SlideEntry, Source, ThemeMode } from "@/lib/stagesmith/types";
-import { resolveModule, getAssetMap, getAssetBaseUrl, getModuleRequestState, resolveImageUrl, type ModuleInfo } from "@/lib/stagesmith/client";
+import { resolveModule, getAssetMap, getAssetBaseUrl, getModuleRequestState, resolveAssetUrl, type ModuleInfo } from "@/lib/stagesmith/client";
 
 /**
  * The sandboxed Stage Runtime wrapper (plan §5.1).
@@ -186,7 +186,7 @@ export function StageFrame(props: StageFrameProps) {
 
   // browser decks ship assets as data URLs (the sandbox can't fetch /api/assets)
   const [assetMap, setAssetMap] = useState<Record<string, string> | null>(null);
-  const [assetBase, setAssetBase] = useState(`/api/assets/${encodeURIComponent(deckId)}`);
+  const [assetBase, setAssetBase] = useState("");
   const [assetsLoaded, setAssetsLoaded] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -197,7 +197,7 @@ export function StageFrame(props: StageFrameProps) {
         const images = [bgSource, overlaySource, commonOverlaySource].filter((s): s is Extract<Source, { type: "image" }> => s?.type === "image");
         await Promise.all(images.map(async (source) => {
           if (resolved[source.path]) return;
-          try { resolved[source.path] = await resolveImageUrl(deckId, source.path, resolved); }
+          try { resolved[source.path] = await resolveAssetUrl(deckId, source.path, resolved); }
           catch (error) { console.error(`[image] resolve failed: ${source.path}`, error); }
         }));
         if (!cancelled) {

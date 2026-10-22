@@ -1,4 +1,4 @@
-/** rewrite ./… url() refs in theme.css to same-origin asset URLs (server decks).
+/** Keep portable ./… url() refs in theme.css; runtime resolves them against its asset base.
  *  Every path segment is percent-encoded AND the URL stays quoted, so asset
  *  names with spaces, brackets, # or unicode all work inside CSS. */
 export function rewriteThemeCss(css: string, deckId: string): string {
@@ -9,16 +9,16 @@ export function rewriteThemeCss(css: string, deckId: string): string {
       .filter(Boolean)
       .map(encodeURIComponent)
       .join("/");
-    return `url('/api/assets/${deckId}/assets/${rel}')`;
+    return `url('./assets/${rel}')`;
   });
 }
 
 /** inverse of rewriteThemeCss — used when SAVING theme.css: turn edited
- *  route URLs back into portable ./assets/… refs (decoded, so a re-read
+ *  route or virtual URLs back into portable ./assets/… refs (decoded, so a re-read
  *  never double-encodes). */
 export function unrewriteThemeCss(css: string, deckId: string): string {
   const re = new RegExp(
-    `url\\(\\s*(['"]?)/api/assets/${deckId}/assets/([^'")]+)\\1\\s*\\)`,
+    `url\\(\\s*(['"]?)(?:/api/assets/${deckId}/assets/|/__chasse_files__/${encodeURIComponent(deckId)}/assets/)([^'")]+)\\1\\s*\\)`,
     "g",
   );
   return css.replace(re, (_m, quote: string, rel: string) => {

@@ -130,8 +130,7 @@ export async function getAssetMap(deckId: string, version: string | number): Pro
   return null;
 }
 
-/** Base path for runtime asset() lookups. Desktop decks need the tokenized
- *  loopback origin; server decks use the API route. */
+/** Base path for runtime asset() lookups. Desktop uses JCEF interception. */
 export async function getAssetBaseUrl(deckId: string): Promise<string> {
   const store = await deckStoreOf(deckId);
   if (store === "desktop") return desktop.getAssetBaseUrl(deckId);
@@ -139,7 +138,7 @@ export async function getAssetBaseUrl(deckId: string): Promise<string> {
 }
 
 /** Shared store-aware resolver used by the stage, thumbnails, and Present. */
-export async function resolveImageUrl(deckId: string, path: string, runtimeMap?: Record<string, string> | null): Promise<string> {
+export async function resolveAssetUrl(deckId: string, path: string, runtimeMap?: Record<string, string> | null): Promise<string> {
   const mapped = runtimeMap?.[path];
   if (mapped) return mapped;
   const store = await deckStoreOf(deckId);
@@ -154,6 +153,21 @@ export async function resolveImageUrl(deckId: string, path: string, runtimeMap?:
     throw new Error(`Asset not found: ${path}`);
   }
   return assetRouteUrl(deckId, path);
+}
+
+/** Short, user-readable explanation after an img request fails. */
+export async function assetLoadFailureReason(url: string): Promise<string> {
+  try {
+    const response = await fetch(url, { method: "HEAD", cache: "no-store" });
+    const code = response.headers.get("X-Chasse-Error-Code");
+    if (code === "NOT_FOUND" || response.status === 404) return "File not found";
+    if (code === "FORBIDDEN" || response.status === 403) return "Access denied";
+    if (code === "BAD_REQUEST" || response.status === 416) return "Invalid asset path or range";
+    if (code === "TOO_LARGE") return "Image is too large; update the desktop app";
+    return `Image request failed (HTTP ${response.status})`;
+  } catch {
+    return "The browser blocked the image request";
+  }
 }
 
 export interface ModuleInfo {
@@ -460,8 +474,7 @@ export const api = {
 
   /* ---------------- create / delete ---------------- */
 
-  /** duplicate a deck from ANY other store into the desktop store (assets
-   *  are fetched and re-uploaded through the loopback server) */
+  /** duplicate a deck from ANY other store into the desktop store */
   duplicateIntoDesktop: async (sourceId: string, title: string): Promise<{ deck: DeckJson; deckId: string }> => {
     const b = await api.getDeck(sourceId);
     const assetRows = await api.listAssets(sourceId);
@@ -753,8 +766,8 @@ export const api = {
 
   /** preview URL for a deck asset — store-aware (Problem 06): browser decks
    *  have no /api/assets route, so their IndexedDB blobs (or device-folder
-   *  files) are served as object URLs; desktop decks get the loopback file
-   *  URL from fs.fileUrl; server decks keep the /api/assets route (always
+   *  files) are served as object URLs; desktop decks get virtual asset URLs;
+   *  server decks keep the /api/assets route (always
    *  percent-encoded — spaces, # and unicode all work). */
   assetUrl: async (deckId: string, path: string): Promise<string> => {
     const store = await deckStoreOf(deckId);
@@ -894,7 +907,7 @@ export const api = {
     if (store === "desktop") {
       const rec = await desktop.getRecord(deckId);
       if (!rec) throw new Error("Deck not found");
-      // pull the binary assets through the loopback server for the zip
+      // pull binary assets through their store-aware URL for the zip
       const assets: Record<string, Blob> = {};
       for (const p of Object.keys(rec.assets)) {
         try {

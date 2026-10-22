@@ -139,6 +139,20 @@ export async function desktopFsCapability(): Promise<boolean> {
   return Boolean(hello?.capabilities.includes("fs"));
 }
 
+export async function desktopAssetUrlsCapability(): Promise<boolean> {
+  const hello = await desktopHello();
+  return Boolean(hello?.capabilities.includes("assetUrls"));
+}
+
+/** Virtual desktop asset URL support. */
+export function virtualAssetUrl(deck: string, path: string): string {
+  return `/__chasse_files__/${encodeURIComponent(deck)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+export function compatibilityAssetBaseUrl(deck: string): string {
+  return `/__chasse_files__/${encodeURIComponent(deck)}`;
+}
+
 /* ------------------------------------------------------------------ */
 /* raw command transport                                               */
 /* ------------------------------------------------------------------ */
@@ -272,42 +286,75 @@ export function fsDelete(deck: string, path: string): Promise<{ ok: boolean }> {
 }
 
 /**
- * fs.fileUrl {deck, path} → {url} — the loopback-only URL
- * (http://127.0.0.1:<port>/<token>/…). Safe for `<img src>`, CSS `url()` and
- * fetch() from the app origin; uploads PUT to the same URL.
+ * Same-origin virtual asset URL. Older desktop builds fall back to a small
+ * bridge read and object URL, with an explicit size limit.
  */
-export async function fsFileUrl(deck: string, path: string): Promise<string> {
-  const r = await cmd<{ url?: string }>("fs.fileUrl", { deck, path });
-  if (typeof r?.url !== "string" || !r.url.startsWith("http://127.0.0.1:")) {
-    throw new DesktopFsError("IO_ERROR", "fileUrl returned an unexpected URL");
+export async function fsAssetUrl(deck: string, path: string): Promise<string> {
+  if (await desktopAssetUrlsCapability()) {
+    return virtualAssetUrl(deck, path);
   }
-  return r.url;
+  const key = `${deck}::${path}`;
+  const cached = legacyAssetUrls.get(key);
+  if (cached) return cached;
+  let result: { base64?: string };
+  try { result = await cmd<{ base64?: string }>("fs.readAssetBase64", { deck, path }); }
+  catch (e) {
+    const code = (e as DesktopFsError)?.code;
+    if (code === "TOO_LARGE") throw new DesktopFsError("TOO_LARGE", "Update the desktop app to preview images larger than 8 MiB.");
+    if (code === "UNKNOWN_CMD") {
+      // Compatibility for older desktop builds: the bridge can mint its
+      // legacy file URL. This is used only for the small-image blob fallback.
+      const legacy = await cmd<{ url?: string }>("fs.fileUrl", { deck, path });
+      if (!legacy.url) throw new DesktopFsError("IO_ERROR", `Could not read ${path}`);
+      const response = await fetch(legacy.url);
+      if (!response.ok) throw new DesktopFsError(response.status === 404 ? "NOT_FOUND" : "IO_ERROR", `Could not load ${path} (${response.status})`);
+      const blob = await response.blob();
+      if (blob.size > 8 * 1024 * 1024) throw new DesktopFsError("TOO_LARGE", "Update the desktop app to preview images larger than 8 MiB.");
+      const blobUrl = URL.createObjectURL(blob);
+      legacyAssetUrls.set(key, blobUrl);
+      return blobUrl;
+    }
+    throw e;
+  }
+  if (!result?.base64 || typeof URL.createObjectURL !== "function") throw new DesktopFsError("IO_ERROR", `Could not read ${path}`);
+  const binary = atob(result.base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const type = mimeType(path);
+  const blobUrl = URL.createObjectURL(new Blob([bytes], { type }));
+  legacyAssetUrls.set(key, blobUrl);
+  return blobUrl;
 }
 
-/** Upload bytes to a deck path through the loopback server (PUT). */
+const legacyAssetUrls = new Map<string, string>();
+function mimeType(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase();
+  return ({ png:"image/png", jpg:"image/jpeg", jpeg:"image/jpeg", webp:"image/webp", gif:"image/gif", svg:"image/svg+xml", avif:"image/avif" } as Record<string,string>)[ext ?? ""] ?? "application/octet-stream";
+}
+
+/** Stream writes to Java in bounded base64 chunks; no local HTTP server. */
 export async function fsUploadFile(
   deck: string,
   path: string,
   data: Blob | ArrayBuffer | string,
   type?: string,
 ): Promise<{ ok: boolean; size: number }> {
-  const url = await fsFileUrl(deck, path);
-  const res = await fetch(url, {
-    method: "PUT",
-    headers: type ? { "Content-Type": type } : undefined,
-    body: data,
-  });
-  if (!res.ok) {
-    let code = "IO_ERROR";
-    let message = `Upload failed (${res.status})`;
-    try {
-      const body = (await res.json()) as { code?: string; message?: string };
-      if (body?.code) code = body.code;
-      if (body?.message) message = body.message;
-    } catch {
-      /* keep the default */
+  const blob = data instanceof Blob ? data : new Blob([data], type ? { type } : undefined);
+  const { uploadId } = await cmd<{ uploadId: string }>("fs.beginAssetUpload", { deck, path });
+  try {
+    const chunkSize = 256 * 1024;
+    for (let start = 0; start < blob.size; start += chunkSize) {
+      const bytes = new Uint8Array(await blob.slice(start, start + chunkSize).arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      await cmd("fs.writeAssetChunk", { uploadId, base64: btoa(binary) });
     }
-    throw new DesktopFsError(code, message);
+    const result = await cmd<{ ok: boolean; size: number }>("fs.finishAssetUpload", { uploadId });
+    const old = legacyAssetUrls.get(`${deck}::${path}`); if (old) URL.revokeObjectURL(old);
+    legacyAssetUrls.delete(`${deck}::${path}`);
+    return result;
+  } catch (error) {
+    await cmd("fs.abortAssetUpload", { uploadId }).catch(() => {});
+    throw error;
   }
-  return res.json().catch(() => ({ ok: true, size: 0 }));
 }

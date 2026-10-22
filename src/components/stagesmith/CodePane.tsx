@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import type { EditorView } from "@codemirror/view";
 import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, PanelBottom, PanelRight, Save, Trash2, Upload, WandSparkles } from "lucide-react";
 import type { DeckJson, FileRow, SlideEntry, Source } from "@/lib/stagesmith/types";
-import { api, resolveImageUrl } from "@/lib/stagesmith/client";
+import { api, assetLoadFailureReason, resolveAssetUrl } from "@/lib/stagesmith/client";
 import { FORMATABLE_EXT, formatTsx } from "@/lib/stagesmith/format";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import { copyText, fixPrompt, sourceLabel } from "./shared";
@@ -842,6 +842,7 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
   /** store-aware preview URLs (Problem 06): browser decks serve IndexedDB
    *  blobs as object URLs — the /api/assets route 404s for them. */
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
+  const [previewLoaded, setPreviewLoaded] = useState<Record<string, string>>({});
   /** paths whose preview genuinely failed to load → error placeholder */
   const [broken, setBroken] = useState<Record<string, string>>({});
 
@@ -913,7 +914,7 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
       for (const a of rows) {
         if (/\.(png|jpe?g|svg|webp|gif|avif)$/i.test(a.path)) {
           try {
-            out[a.path] = await resolveImageUrl(deckId, a.path);
+            out[a.path] = await resolveAssetUrl(deckId, a.path);
           } catch (error) {
             console.error(`[assets] URL resolution failed for ${a.path}`, error);
             setBroken((b) => ({ ...b, [a.path]: (error as Error)?.message || "Could not resolve image URL" }));
@@ -998,23 +999,27 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
                             <button className="ss-btn" style={{ height: 22, padding: "0 7px", fontSize: 10 }} onClick={() => {
                               setBroken((b) => { const next = { ...b }; delete next[a.path]; return next; });
                               setPreviewUrls((urls) => { const next = { ...urls }; delete next[a.path]; return next; });
-                              void resolveImageUrl(deckId, a.path).then((url) => setPreviewUrls((urls) => ({ ...urls, [a.path]: url }))).catch((error) => {
+                              void resolveAssetUrl(deckId, a.path).then((url) => setPreviewUrls((urls) => ({ ...urls, [a.path]: url }))).catch((error) => {
                                 console.error(`[assets] retry URL resolution failed for ${a.path}`, error);
                                 setBroken((b) => ({ ...b, [a.path]: (error as Error)?.message || "Could not resolve image URL" }));
                               });
                             }}>Retry</button>
                           </div>
                         ) : (
-                          src ? <img
-                            src={src}
-                            alt={displayName}
-                            loading="lazy"
-                            onError={() => {
-                              const reason = `Image request failed (${src})`;
-                              console.warn(`[assets] preview failed to load: ${a.path} (src=${src})`);
-                              setBroken((b) => ({ ...b, [a.path]: reason }));
-                            }}
-                          /> : <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", color: "var(--ss-mut)" }}>Resolving {displayName}…</div>
+                          src ? <div style={{ position: "relative", aspectRatio: "4/3", overflow: "hidden", background: "var(--ss-card)" }}>
+                            {previewLoaded[a.path] !== src && <div aria-hidden="true" style={{ position: "absolute", inset: 0, background: "linear-gradient(100deg, transparent 20%, rgba(140,140,160,.16) 40%, transparent 60%)", backgroundSize: "200% 100%", animation: "ss-shimmer 1.4s ease-in-out infinite" }} />}
+                            <img
+                              src={src}
+                              alt={displayName}
+                              loading="lazy"
+                              style={{ opacity: previewLoaded[a.path] === src ? 1 : 0, transition: "opacity .12s ease" }}
+                              onLoad={() => setPreviewLoaded((loaded) => ({ ...loaded, [a.path]: src }))}
+                              onError={() => {
+                                console.warn(`[assets] preview failed to load: ${a.path} (src=${src})`);
+                                void assetLoadFailureReason(src).then((reason) => setBroken((b) => ({ ...b, [a.path]: reason })));
+                              }}
+                            />
+                          </div> : <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", color: "var(--ss-mut)" }}>Resolving {displayName}…</div>
                         )
                       ) : (
                         <div style={{ aspectRatio: "16/10", display: "grid", placeItems: "center", font: "500 10px var(--ss-mono)", color: "var(--ss-mut)" }}>

@@ -13,8 +13,8 @@
  *
  * Writes are minimal (only the file that changed, atomic on the Java side),
  * the deck list is served from the Java-side scan cache, and assets are
- * streamed from the desktop's loopback-only file server via fs.fileUrl —
- * never base64, never re-uploaded through the router.
+ * intercepted by JCEF at same-origin virtual asset paths; uploads use
+ * bounded bridge chunks and never depend on the phone server.
  *
  * No fs capability (normal browser, older desktop release) → every entry
  * point here reports "not available" and the app uses the browser store.
@@ -26,12 +26,14 @@ import { sanitizeAssetName, slugify } from "./browser-store";
 import {
   DesktopFsError,
   desktopFsCapability,
+  desktopAssetUrlsCapability,
+  compatibilityAssetBaseUrl,
   fsChooseRoot,
   fsCreateDeck,
   fsDelete,
   fsDeleteDeck,
   fsDuplicateDeck,
-  fsFileUrl,
+  fsAssetUrl,
   fsGetRoot,
   fsListDecks,
   fsListFiles,
@@ -163,7 +165,7 @@ export interface DesktopDeckRecord {
   title: string;
   /** text files of the project (deck.json, theme.css, slides/, …) */
   files: Record<string, string>;
-  /** binary files by path — metadata only, served via fs.fileUrl */
+  /** binary files by path — metadata only, served by the desktop asset handler */
   assets: Record<string, { size: number; modified: number }>;
   modified: string;
   /** disk-walk signature (path:size:mtime) — the SAME basis api.poll uses,
@@ -180,7 +182,7 @@ const pendingTextReads = new Map<string, Promise<string>>();
 let deckIndex: DesktopDeckInfo[] | null = null;
 let deckIndexAt = 0;
 const summaryCache = new Map<string, DeckSummary>();
-/** deck+path → loopback URL (stable for the session — the token lives in it) */
+/** deck+path URL cache (virtual same-origin paths or legacy small-image blobs) */
 const urlCache = new Map<string, string>();
 /** original upload display names (sanitized names stay disk/URL-safe) */
 const displayNames = new Map<string, Map<string, string>>();
@@ -439,21 +441,19 @@ async function persistDiff(deckId: string, rec: DesktopDeckRecord, baseline: Rec
 }
 
 /* ------------------------------------------------------------------ */
-/* theme.css url() rewrite → loopback file URLs                        */
+/* theme.css url() rewrite → same-origin virtual asset URLs             */
 /* ------------------------------------------------------------------ */
 
 async function assetFileUrl(deckId: string, path: string): Promise<string> {
   const key = `${deckId}::${path}`;
   const hit = urlCache.get(key);
   if (hit) return hit;
-  const url = await fsFileUrl(deckId, path);
+  const url = await fsAssetUrl(deckId, path);
   urlCache.set(key, url);
   return url;
 }
 
-/** rewrite url(./assets/…) refs in theme.css to the desktop's loopback URLs
- *  (each segment percent-encoded by the Java side — spaces and non-English
- *  characters work). Mirrors rewriteThemeCss for server decks. */
+/** rewrite relative theme CSS asset refs through the same desktop resolver. */
 export async function rewriteThemeCssDesktop(css: string, deckId: string): Promise<string> {
   const re = /url\(\s*['"]?(\.\/|\.\.\/)([^'")]+)['"]?\s*\)/g;
   const matches = [...css.matchAll(re)];
@@ -976,14 +976,13 @@ export async function deleteCodeFile(deckId: string, path: string): Promise<void
 }
 
 /* ------------------------------------------------------------------ */
-/* asset URLs (loopback http — never base64)                           */
+/* desktop asset URLs                                                   */
 /* ------------------------------------------------------------------ */
 
 const assetMapCache = new Map<string, { sig: string; map: Record<string, string> }>();
 const assetMapInflight = new Map<string, Promise<Record<string, string> | null>>();
 
-/** deck assets as path → loopback URL for the runtime config. Cached per
- *  signature — the URLs are session-stable, so slides/frames share them. */
+/** deck assets as path → resolved URL for the runtime config. Cached per signature. */
 export async function getAssetMap(deckId: string, version: string | number): Promise<Record<string, string> | null> {
   const hit = assetMapInflight.get(deckId);
   if (hit) return hit;
@@ -1013,22 +1012,17 @@ export async function getAssetMap(deckId: string, version: string | number): Pro
   }
 }
 
-/** preview URL for the editor (img src) — the loopback file URL itself. */
+/** preview URL for the editor — virtual path or compatibility blob URL. */
 export async function getAssetUrl(deckId: string, path: string): Promise<string | null> {
   if (!(await hasDeck(deckId))) return null;
-  try {
-    return await assetFileUrl(deckId, path);
-  } catch {
-    return null;
-  }
+  return assetFileUrl(deckId, path);
 }
 
-/** Stable session URL prefix for runtime `asset()` fallbacks. Unlike the
- *  Next asset route, this addresses files in the selected desktop deck. */
+/** Runtime base for `asset()` fallback paths within this desktop deck. */
 export async function getAssetBaseUrl(deckId: string): Promise<string> {
   if (!(await hasDeck(deckId))) throw new Error(`Deck not found: ${deckId}`);
-  const probe = await fsFileUrl(deckId, "__asset_base__");
-  return probe.slice(0, probe.lastIndexOf("/"));
+  if (!(await desktopAssetUrlsCapability())) return "";
+  return compatibilityAssetBaseUrl(deckId);
 }
 
 /** upload arbitrary bytes at an explicit deck path (used by import/duplicate) */

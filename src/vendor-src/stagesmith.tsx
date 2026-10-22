@@ -191,15 +191,21 @@ export function Img({
   React.ImgHTMLAttributes<HTMLImageElement>,
   "src" | "alt" | "style"
 >) {
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const src = asset(name);
   if (error) {
-    return <span role="img" aria-label={`${alt || name}: image failed to load`} title={`${name}: image failed to load`} style={{ display: "inline-grid", placeItems: "center", gap: 6, minWidth: 120, minHeight: 72, padding: 10, border: "1px solid #b94b55", background: "rgba(120,24,32,.18)", color: "#ffb6bd", font: "12px/1.4 sans-serif", ...style }}>
-      <span>{name}</span><span>Image failed to load</span>
-      <button type="button" onClick={(event) => { event.stopPropagation(); setError(false); }} style={{ cursor: "pointer" }}>Retry</button>
+    return <span role="img" aria-label={`${alt || name}: ${error}`} title={`${name}: ${error}`} style={{ display: "inline-grid", placeItems: "center", gap: 6, minWidth: 120, minHeight: 72, padding: 10, border: "1px solid #b94b55", background: "rgba(120,24,32,.18)", color: "#ffb6bd", font: "12px/1.4 sans-serif", ...style }}>
+      <span>{name}</span><span>{error}</span>
+      <button type="button" onClick={(event) => { event.stopPropagation(); setError(null); }} style={{ cursor: "pointer" }}>Retry</button>
     </span>;
   }
-  return <img src={src} alt={alt} style={style} {...rest} onError={(event) => { setError(true); rest.onError?.(event); }} />;
+  return <img src={src} alt={alt} style={style} {...rest} onError={(event) => {
+    rest.onError?.(event);
+    void fetch(src, { method: "HEAD", cache: "no-store" }).then((response) => {
+      const code = response.headers.get("X-Chasse-Error-Code");
+      setError(code === "NOT_FOUND" || response.status === 404 ? "File not found" : code === "FORBIDDEN" || response.status === 403 ? "Access denied" : `Image request failed (HTTP ${response.status})`);
+    }).catch(() => setError("The browser blocked the image request"));
+  }} />;
 }
 
 /* ------------------------------------------------------------------ */

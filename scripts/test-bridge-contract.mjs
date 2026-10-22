@@ -6,7 +6,8 @@
  * desktop-store.ts + desktop-fs.ts + the save-queue's retry ladder) against a
  * mock of the Java side that implements the same contract as
  * chasse-desktop's FsService + DesktopBridge (command shapes, {code,message}
- * errors, loopback file server, atomic writes, deck.json-last creation).
+ * errors, same-origin asset capability, chunk uploads, atomic writes,
+ * deck.json-last creation).
  *
  * If chasse-desktop/FsServiceTest.java (the Java-side unit tests) and this
  * file both pass, the two sides agree on the wire contract: the exact thing
@@ -76,6 +77,7 @@ function err(code, message) {
 function makeMockJava(decksRoot) {
   const root = resolve(decksRoot);
   const token = randomBytes(24).toString("hex");
+  const uploads = new Map();
   let urlCounter = 0;
   const server = createServer((req, res) => {
     // loopback server mock: only GET/PUT of deck files via /<token>/<deck>/<path>
@@ -162,7 +164,7 @@ function makeMockJava(decksRoot) {
     try {
       switch (cmd) {
         case "hello":
-          return { app: "chasse-desktop", version: "1.3.0", capabilities: ["sync", "fs", "downloads"] };
+          return { app: "chasse-desktop", version: "1.4.0", capabilities: ["sync", "fs", "downloads", "assetUrls"] };
         case "fs.getRoot": {
           const configured = existsSync(root);
           return {
@@ -274,6 +276,36 @@ function makeMockJava(decksRoot) {
         }
         case "fs.fileUrl":
           return { url: fileUrl(req.deck, req.path) };
+        case "fs.beginAssetUpload": {
+          checkRelPath(req.path);
+          const uploadId = randomBytes(12).toString("hex");
+          uploads.set(uploadId, { deck: req.deck, path: req.path, chunks: [], size: 0 });
+          return { uploadId };
+        }
+        case "fs.writeAssetChunk": {
+          const upload = uploads.get(req.uploadId);
+          if (!upload) throw err("NOT_FOUND", "upload not found");
+          const chunk = Buffer.from(req.base64, "base64");
+          upload.chunks.push(chunk); upload.size += chunk.length;
+          return { size: upload.size };
+        }
+        case "fs.finishAssetUpload": {
+          const upload = uploads.get(req.uploadId);
+          if (!upload) throw err("NOT_FOUND", "upload not found");
+          const target = join(root, upload.deck, upload.path);
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, Buffer.concat(upload.chunks)); uploads.delete(req.uploadId);
+          return { ok: true, size: upload.size };
+        }
+        case "fs.abortAssetUpload": uploads.delete(req.uploadId); return { ok: true };
+        case "fs.readAssetBase64": {
+          checkRelPath(req.path);
+          const f = join(root, req.deck, req.path);
+          if (!existsSync(f)) throw err("NOT_FOUND", "file not found");
+          const bytes = readFileSync(f);
+          if (bytes.length > 8 * 1024 * 1024) throw err("TOO_LARGE", "too large");
+          return { base64: bytes.toString("base64") };
+        }
         default:
           throw err("UNKNOWN_CMD", `unknown command: ${cmd}`);
       }
@@ -282,7 +314,7 @@ function makeMockJava(decksRoot) {
     }
   }
 
-  return { start, dispatch, fileUrl, close: () => server.close(), root, token };
+  return { start, dispatch, fileUrl, close: () => {}, root, token };
 }
 
 /* ------------------------------------------------------------------ */
@@ -336,11 +368,10 @@ rmSync(TMP, { recursive: true, force: true });
 mkdirSync(join(TMP, "decks"), { recursive: true });
 
 const java = makeMockJava(join(TMP, "decks"));
-const port = await java.start();
 const bridge = installWindowMock(java);
 
 // import the REAL web-side modules (TS via Bun, or the transpiled esbuild loader)
-const { desktopFsCapability, fsGetRoot, fsReadText, fsWriteText, fsCreateDeck, fsListDecks, fsDeleteDeck, fsDuplicateDeck, fsListFiles, fsDelete, fsFileUrl, fsUploadFile, DesktopFsError } =
+const { desktopFsCapability, fsGetRoot, fsReadText, fsWriteText, fsCreateDeck, fsListDecks, fsDeleteDeck, fsDuplicateDeck, fsListFiles, fsDelete, fsAssetUrl, fsUploadFile, DesktopFsError } =
   await import(pathToFileURL(join(ROOT, "src/lib/stagesmith/desktop-fs.ts")).href);
 
 const store = await import(pathToFileURL(join(ROOT, "src/lib/stagesmith/desktop-store.ts")).href);
@@ -416,25 +447,18 @@ try {
   eq(threw && threw.code, "BAD_REQUEST", "traversal path → BAD_REQUEST");
   ok(!existsSync(join(TMP, "escape.tsx")), "nothing escaped the decks root");
 
-  await step("loopback file server: URL + upload round-trip");
-  const url = await fsFileUrl("bridge-demo", "assets/pic.png");
-  ok(url.startsWith("http://127.0.0.1:"), "fs.fileUrl is loopback-only");
-  // the app uploads through store.putAssetBytes (which also keeps the record
-  // metadata in sync) — exercise that path, not the raw transport
+  await step("same-origin asset URL + chunked upload");
+  const url = await fsAssetUrl("bridge-demo", "assets/pic.png");
+  eq(url, "/__chasse_files__/bridge-demo/assets/pic.png", "assetUrls uses the virtual same-origin path");
   await store.putAssetBytes("bridge-demo", "assets/pic.png", Buffer.from([137, 80, 78, 71]));
-  ok(existsSync(join(TMP, "decks/bridge-demo/assets/pic.png")), "upload via loopback PUT reached the deck folder");
-  const res = await fetch(url);
-  ok(res.ok, "uploaded file serves back over the loopback URL");
-  ok((await res.arrayBuffer()).byteLength === 4, "bytes round-trip exactly");
-  // token check: a wrong token must 404 (indistinguishable from missing)
-  const bad = await fetch(url.replace(java.token, "0".repeat(48)));
-  ok(bad.status === 404, "wrong loopback token → 404");
+  ok(existsSync(join(TMP, "decks/bridge-demo/assets/pic.png")), "chunk upload reached the deck folder");
+  eq([...readFileSync(join(TMP, "decks/bridge-demo/assets/pic.png"))], [137, 80, 78, 71], "uploaded bytes round-trip exactly");
 
   await step("assets become part of the record + asset URLs");
   const rec = await store.getRecord("bridge-demo");
   ok(rec && rec.assets["assets/pic.png"] !== undefined, "binary asset tracked as metadata");
   const assetUrl = await store.getAssetUrl("bridge-demo", "assets/pic.png");
-  ok(assetUrl === url, "getAssetUrl returns the cached loopback URL");
+  ok(assetUrl === url, "getAssetUrl returns the virtual same-origin URL");
 
   await step("duplicate + delete lifecycle");
   const dup = await fsDuplicateDeck("bridge-demo", "bridge-demo-copy", "Copy");
@@ -444,13 +468,13 @@ try {
   await fsDeleteDeck("bridge-demo-copy");
   ok(!existsSync(join(TMP, "decks/bridge-demo-copy")), "deleteDeck removed the folder");
 
-  await step("theme.css stays portable (loopback/data URLs never reach disk)");
+  await step("theme.css stays portable (virtual/data URLs never reach disk)");
   await store.saveFiles("bridge-demo", [{ path: "theme.css", content: ':root { background: url("./assets/pic.png"); }' }]);
   const onDisk = readFileSync(join(TMP, "decks/bridge-demo/theme.css"), "utf8");
   ok(onDisk.includes('url("./assets/pic.png")'), "portable url(./assets/…) written as-is");
-  ok(!onDisk.includes("127.0.0.1"), "no loopback URL leaked into theme.css");
+  ok(!onDisk.includes("/__chasse_files__"), "no virtual URL leaked into theme.css");
   const rewritten = await store.rewriteThemeCssDesktop(onDisk, "bridge-demo");
-  ok(rewritten.startsWith("http://127.0.0.1:") === false && rewritten !== onDisk, "rewriteThemeCssDesktop maps it for display");
+  ok(rewritten.startsWith("/__chasse_files__/") && rewritten !== onDisk, "rewriteThemeCssDesktop maps it for display");
 
   await step("save-queue retry ladder (pure logic)");
   // mirror of useSaveQueue's backoff: 1s → 3s → 10s, then "failed"

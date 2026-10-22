@@ -147,7 +147,7 @@ shape, no `ok` wrapper):
 
 | Command | Params → result |
 | --- | --- |
-| `hello` | → `{app:"chasse-desktop", version, capabilities:["sync","fs","downloads"]}` |
+| `hello` | → `{app:"chasse-desktop", version, capabilities:["sync","fs","downloads","assetUrls"]}` |
 | `fs.getRoot` | → `{configured, path, valid}` |
 | `fs.chooseRoot` | `{title?, startPath?, hint?}` → `{cancelled:true}` \| `{configured, path, valid}` (cancel is a clean answer, not an error) |
 | `fs.listDecks` | → `[{id, title, folder, slides, modified}]` |
@@ -158,7 +158,8 @@ shape, no `ok` wrapper):
 | `fs.duplicateDeck` | `{deck, copyId, title?}` → `{ok, id}` |
 | `fs.listFiles` | `{deck, dir}` → `[{name, size, modified, directory?}]` |
 | `fs.delete` | `{deck, path}` → `{ok}` |
-| `fs.fileUrl` | `{deck, path}` → `{url: "http://127.0.0.1:<port>/<token>/…"}` — assets GET and uploads PUT to this loopback URL |
+| `fs.readAssetBase64` | `{deck,path}` → `{base64}` — compatibility images up to 8 MiB |
+| `fs.beginAssetUpload` / `fs.writeAssetChunk` / `fs.finishAssetUpload` | bounded 256 KiB chunks streamed to temp file, then atomic rename |
 
 **Error codes** (both sides): `FOLDER_NOT_SET`, `FOLDER_MISSING`,
 `NO_OS_PERMISSION`, `NOT_FOUND`, `TOO_LARGE`, `IO_ERROR`, `ALREADY_EXISTS`,
@@ -199,7 +200,7 @@ flowchart TD
   B -- yes --> H["{cmd:'hello'}"]
   H -- '"fs" not in capabilities' --> OLD["browser store +<br/>Library update notice<br/>(older desktop build)"]
   H -- '"fs" present' --> R["fs.getRoot"]
-  R -- "configured && valid" --> DESK["DESKTOP MODE everywhere:<br/>desktop wins dispatch, new decks,<br/>assets via loopback URLs"]
+  R -- "configured && valid" --> DESK["DESKTOP MODE everywhere:<br/>desktop wins dispatch, new decks,<br/>assets via same-origin JCEF interception"]
   R -- "not configured / invalid" --> PICK["Browser store + library banner:<br/>'Choose folder' (fs.chooseRoot)"]
 ```
 
@@ -256,12 +257,12 @@ refuse with `unavailable`, and `LibraryView` shows a compact
 | --- | --- | --- |
 | server | `/api/assets/<deckId>/<path…>` (every segment percent-encoded — spaces, `#`, unicode work) | `assetRouteUrl`, `src/app/api/assets/...` |
 | browser | data: URLs (runtime) / object URLs (editor previews) from IndexedDB blobs; device decks fall back to reading the file from the folder | `browser-store.getAssetMap/getAssetUrl` |
-| desktop | loopback `http://127.0.0.1:<port>/<token>/…` from `fs.fileUrl` (session-stable, cached per deck+path) | `desktop-store.assetFileUrl` |
+| desktop | `/__chasse_files__/<encoded-deck>/<encoded-path>` intercepted by JCEF when `assetUrls` is present; small blob fallback for older builds | `resolveAssetUrl`, `desktop-store.assetFileUrl` |
 
 `theme.css` keeps the portable `url(./assets/…)` form on disk and in
 IndexedDB. The rewrite to loadable URLs happens **on LOAD only**
 (`themeurl.rewriteThemeCss` → `/api/assets/...` for server decks;
-`rewriteThemeCssDesktop` → loopback URLs; browser bundles get data-URLs via
+`rewriteThemeCssDesktop` → virtual same-origin URLs; browser bundles get data-URLs via
 the asset map), and the inverse (`unrewriteThemeCss`) runs when saving, so a
 re-read never double-encodes.
 
