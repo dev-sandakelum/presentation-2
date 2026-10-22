@@ -1,3 +1,33 @@
+# Image loading audit — 2026-10-22
+
+## Finding (static diagnosis; target runtime capture unavailable)
+
+The desktop loopback file server is configured on `127.0.0.1` with a per-process token, percent-encodes each URL segment, and serves files with MIME type, length, range, cache validators, and CORS headers (`chasse-desktop/src/main/java/com/chasse/desktop/LoopbackFileServer.java`, `urlFor()` and `serveFile()`). No Java handler defect was found by inspection.
+
+The deterministic consumer-side bug is in `src/components/stagesmith/CodePane.tsx` (`AssetsTab` URL-map effect): when `api.assetUrl()` rejected for a desktop asset, the catch block substituted `assetRouteUrl()`, a Next.js `/api/assets/<deckId>/...` route. Desktop assets live in the selected deck folder and are served by the tokenized loopback server; that route serves server-backed decks and cannot resolve the desktop folder. The tile therefore requested the wrong URL and showed no useful failure. Runtime slide assets normally use the desktop `assetMap`; however, desktop map construction silently skips URL failures (`desktop-store.ts:getAssetMap()`), while StageFrame's fallback for image backgrounds is also the server route (`StageFrame.tsx:imageSourceUrl()`). This can affect explicit image BG/overlay sources when loopback URL generation fails.
+
+The user's named 26-slide deck is not present in this workspace (`decks/` has no target deck), and no live desktop/CEF session or DevTools capture is available. Therefore the requested path → URL → HTTP status/type/length → `onload`/`onerror`/`naturalWidth` trace cannot be truthfully reported as measured. The static diagnosis identifies an incorrect fallback, not proof that the target run's initial `fs.fileUrl` call rejected. This uncertainty remains visible below.
+
+## Image-path changes
+
+- Removed the Assets panel's invalid server-route fallback after `api.assetUrl()` fails. Resolution errors are logged with the asset path; the tile now enters its named failure state and offers Retry, which resolves through the store-aware API again.
+- The image `onError` handler continues to log the actual URL and path and displays a named failure instead of the browser's broken-image icon.
+
+## Image acceptance status
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Root cause identified with source location | PASS (static) | `CodePane.tsx` used server route as desktop fallback; see finding above. |
+| Disk path → browser URL → HTTP metadata → naturalWidth captured for `bg.png` | NOT VERIFIED | Target deck and desktop CEF runtime unavailable. |
+| Java loopback host/token/path/content serving | PASS (inspection only) | `LoopbackFileServer.java` binds `127.0.0.1`, URL includes token, segments are encoded, and file response sets type, length, range and validators. |
+| Asset panel reports resolution and image failures with filename and Retry | PASS (code) | Updated `CodePane.tsx`; visual check not run. |
+| One resolver works for all desktop/web consumers | PARTIAL | Assets panel uses `api.assetUrl`; StageFrame and Present retain their existing map then server-route fallback paths. |
+| Assets, BG/Final/Overlay, slide images, thumbnails and Present | NOT VERIFIED | Target deck/runtime unavailable; explicit BG/overlay fallback remains a known risk if the desktop map lacks an entry. |
+| PNG/JPG/SVG/WEBP, transparent, special-character and large images | NOT VERIFIED | Not run. |
+| Missing/zero-byte/never-responding files and Retry | PARTIAL | Named tile image failure and retry are present; timeout/readiness behavior not verified or implemented comprehensively. |
+| Upload/replacement/deletion invalidate previews and caches | NOT VERIFIED | Not exercised. |
+| Open/close 20 times; object URL memory remains flat | NOT VERIFIED | Not run. |
+
 # Deck loading audit
 
 ## Finding (code inspection; deck reproduction unavailable)

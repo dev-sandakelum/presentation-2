@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import type { EditorView } from "@codemirror/view";
 import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, PanelBottom, PanelRight, Save, Trash2, Upload, WandSparkles } from "lucide-react";
 import type { DeckJson, FileRow, SlideEntry, Source } from "@/lib/stagesmith/types";
-import { api, assetRouteUrl } from "@/lib/stagesmith/client";
+import { api } from "@/lib/stagesmith/client";
 import { FORMATABLE_EXT, formatTsx } from "@/lib/stagesmith/format";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import { copyText, fixPrompt, sourceLabel } from "./shared";
@@ -902,8 +902,9 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
         if (/\.(png|jpe?g|svg|webp|gif|avif)$/i.test(a.path)) {
           try {
             out[a.path] = await api.assetUrl(deckId, a.path);
-          } catch {
-            out[a.path] = assetRouteUrl(deckId, a.path);
+          } catch (error) {
+            console.error(`[assets] URL resolution failed for ${a.path}`, error);
+            setBroken((b) => ({ ...b, [a.path]: true }));
           }
         }
       }
@@ -962,7 +963,7 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
                 {rows.map((a) => {
                   const isImage = /\.(png|jpe?g|svg|webp|gif|avif)$/i.test(a.path);
                   const displayName = a.display ?? a.path.replace("assets/", "");
-                  const src = previewUrls[a.path] ?? assetRouteUrl(deckId, a.path);
+                  const src = previewUrls[a.path];
                   return (
                     <div key={a.path} className="ss-asset">
                       {isImage ? (
@@ -981,7 +982,12 @@ function AssetsTab({ deckId, version }: { deckId: string; version: string }) {
                             }}
                           >
                             <AlertTriangle size={18} />
-                            <span style={{ font: "500 9px var(--ss-mono)", color: "var(--ss-mut)" }}>couldn&apos;t load</span>
+                            <span style={{ font: "500 9px var(--ss-mono)", color: "var(--ss-mut)" }}>{displayName}: image request failed</span>
+                            <button className="ss-btn" style={{ height: 22, padding: "0 7px", fontSize: 10 }} onClick={() => {
+                              setBroken((b) => { const next = { ...b }; delete next[a.path]; return next; });
+                              setPreviewUrls((urls) => { const next = { ...urls }; delete next[a.path]; return next; });
+                              void api.assetUrl(deckId, a.path).then((url) => setPreviewUrls((urls) => ({ ...urls, [a.path]: url }))).catch((error) => console.error(`[assets] retry URL resolution failed for ${a.path}`, error));
+                            }}>Retry</button>
                           </div>
                         ) : (
                           <img
