@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test:bridge": "bun scripts/test-bridge-contract.mjs",
     "test:save-safety": "node --experimental-strip-types --test scripts/save-safety.test.ts",
+    "test:file-list": "node --experimental-strip-types --test scripts/file-list.test.ts",
     "test:e2e-desktop": "node scripts/e2e-desktop-mock.mjs",
     "db:push": "prisma db push --accept-data-loss",
     "db:generate": "prisma generate",

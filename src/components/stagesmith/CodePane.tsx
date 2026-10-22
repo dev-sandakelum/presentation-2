@@ -6,6 +6,7 @@ import type { EditorView } from "@codemirror/view";
 import { AlertTriangle, Braces, ChevronsDown, ChevronsUp, Copy, FilePlus2, PanelBottom, PanelRight, Save, Trash2, Upload, WandSparkles } from "lucide-react";
 import type { DeckJson, FileRow, SlideEntry, Source } from "@/lib/stagesmith/types";
 import { api, assetLoadFailureReason, isTransientLoadError, resolveAssetUrl } from "@/lib/stagesmith/client";
+import { codeFileOptions } from "@/lib/stagesmith/file-tree";
 import { FORMATABLE_EXT, formatTsx } from "@/lib/stagesmith/format";
 import { useUiTheme } from "@/hooks/useUiTheme";
 import { copyText, fixPrompt, sourceLabel } from "./shared";
@@ -68,6 +69,9 @@ export const CodePane = memo(function CodePane(props: {
   deckId: string;
   deck: DeckJson;
   files: FileRow[];
+  /** optimistic file-list delta (create/upload/delete) — merged into the
+   *  bundle's file rows by the dashboard so the dropdown updates instantly */
+  onFilesChanged?: (delta: { added?: string[]; removed?: string[] }) => void;
   sel: SlideEntry | null;
   tab: CodeTab;
   onTab: (t: CodeTab) => void;
@@ -348,6 +352,7 @@ export const CodePane = memo(function CodePane(props: {
                 deckId={deckId}
                 deck={deck}
                 files={props.files}
+                onFilesChanged={props.onFilesChanged}
                 sel={sel}
                 buffers={buffers}
                 fileLoadErrors={props.fileLoadErrors}
@@ -367,6 +372,7 @@ export const CodePane = memo(function CodePane(props: {
                 deckId={deckId}
                 deck={deck}
                 files={props.files}
+                onFilesChanged={props.onFilesChanged}
                 sel={sel}
                 buffers={buffers}
                 fileLoadErrors={props.fileLoadErrors}
@@ -391,7 +397,7 @@ export const CodePane = memo(function CodePane(props: {
             )}
             {tab === "notes" && !sel && <EmptyPane text="Select a slide to edit its notes" />}
 
-            {tab === "assets" && <AssetsTab deckId={deckId} version={props.version} onAssetsChanged={props.onAssetsChanged} />}
+            {tab === "assets" && <AssetsTab deckId={deckId} version={props.version} onAssetsChanged={props.onAssetsChanged} onFilesChanged={props.onFilesChanged} />}
 
             {tab === "theme" && (
               buffers["theme.css"] === undefined ? <LoadingFile path="theme.css" error={props.fileLoadErrors["theme.css"]} onRetry={() => void ensureBuffer("theme.css")} /> : <CmEditor
@@ -429,6 +435,7 @@ function SourceEditor(props: {
   deckId: string;
   deck: DeckJson;
   files: FileRow[];
+  onFilesChanged?: (delta: { added?: string[]; removed?: string[] }) => void;
   sel: SlideEntry | null;
   buffers: Record<string, string>;
   fileLoadErrors: Record<string, string>;
@@ -453,12 +460,11 @@ function SourceEditor(props: {
   const common = layer === "bg" ? deck.bg : deck.overlay;
   const override = sel ? (layer === "bg" ? sel.bg : sel.overlay) : undefined;
   const effective = scope === "override" ? override : common;
-  const dirFiles = files
-    .filter((f) => f.path.startsWith(`${layer}/`) && /\.(tsx|ts)$/.test(f.path))
-    .map((f) => f.path);
-  const images = files.filter((f) => f.path.startsWith("assets/") && /\.(png|jpe?g|svg|webp|gif|avif)$/i.test(f.path)).map((f) => f.path);
-
   const codePath = effective && effective.type === "code" ? effective.path : null;
+  // the dropdown options — one derivation for the whole app: every file of
+  // the layer, with the OPEN file always present (never a blank trigger)
+  const dirFiles = codeFileOptions(files, layer, codePath);
+  const images = files.filter((f) => f.path.startsWith("assets/") && /\.(png|jpe?g|svg|webp|gif|avif)$/i.test(f.path)).map((f) => f.path);
 
   useEffect(() => {
     if (codePath) props.ensureBuffer(codePath);
@@ -521,6 +527,11 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
     setNewNameError(null);
     try {
       await api.saveFile(deckId, path, template);
+      // optimistic add — the file rows must show the new file the moment it
+      // is written; the folder poll can never pick it up (the patchDeck that
+      // follows adopts the new signature, so our own write never looks
+      // "external") and the editor + dropdown must not disagree
+      props.onFilesChanged?.({ added: [path] });
       setSource({ type: "code", path });
       setNewNameOpen(false);
       toast({ title: `Created ${path}` });
@@ -575,9 +586,14 @@ export default function ${name.replace(/[^\w]/g, "") || "Overlay"}() {
               onValueChange={(v) => setSource({ type: "code", path: v })}
             >
               <SelectTrigger className="ss-input" style={{ height: 28, width: 210, fontSize: 12 }}>
-                <SelectValue />
+                <SelectValue placeholder="No files yet" />
               </SelectTrigger>
               <SelectContent style={{ background: "var(--ss-panel2)", borderColor: "var(--ss-line-strong)", color: "var(--ss-ink)" }}>
+                {dirFiles.length === 0 && (
+                  <div className="ss-label" style={{ padding: "8px 12px", whiteSpace: "normal" }}>
+                    No {layer} files yet — use “New file”
+                  </div>
+                )}
                 {dirFiles.map((p) => (
                   <SelectItem key={p} value={p}>{p}</SelectItem>
                 ))}
@@ -718,11 +734,13 @@ function CodeFileList({
   dir,
   version,
   onOpenFile,
+  onFilesChanged,
 }: {
   deckId: string;
   dir: "overlay" | "bg";
   version: string;
   onOpenFile?: (path: string) => void;
+  onFilesChanged?: (delta: { added?: string[]; removed?: string[] }) => void;
 }) {
   const { toast } = useToast();
   const [files, setFiles] = useState<FileRow[] | null>(null);
@@ -748,8 +766,10 @@ function CodeFileList({
       return;
     }
     try {
-      await api.uploadCodeFile(deckId, dir, list);
+      const uploaded = await api.uploadCodeFile(deckId, dir, list);
       await refresh();
+      // keep the BG/Overlay dropdown in sync with the new files too
+      onFilesChanged?.({ added: uploaded.map((u) => u.path) });
       toast({ title: `${list.length} file${list.length > 1 ? "s" : ""} uploaded into ${dir}/` });
     } catch (e) {
       toast({ title: "Upload failed", description: (e as Error).message, variant: "destructive" });
@@ -835,6 +855,7 @@ function CodeFileList({
                   onClick={async () => {
                     try {
                       await api.deleteCodeFile(deckId, f.path);
+                      onFilesChanged?.({ removed: [f.path] });
                       refresh();
                     } catch (e) {
                       toast({ title: "Delete failed", description: (e as Error).message, variant: "destructive" });
@@ -852,7 +873,7 @@ function CodeFileList({
   );
 }
 
-function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; version: string; onAssetsChanged: () => Promise<void> }) {
+function AssetsTab({ deckId, version, onAssetsChanged, onFilesChanged }: { deckId: string; version: string; onAssetsChanged: () => Promise<void>; onFilesChanged?: (delta: { added?: string[]; removed?: string[] }) => void }) {
   const { toast } = useToast();
   const [assets, setAssets] = useState<FileRow[] | null>(null);
   const [subTab, setSubTab] = useState<AssetsSubTab>("assets");
@@ -1105,11 +1126,11 @@ function AssetsTab({ deckId, version, onAssetsChanged }: { deckId: string; versi
         )}
 
         {subTab === "overlay" && (
-          <CodeFileList deckId={deckId} dir="overlay" version={version} />
+          <CodeFileList deckId={deckId} dir="overlay" version={version} onFilesChanged={onFilesChanged} />
         )}
 
         {subTab === "bg" && (
-          <CodeFileList deckId={deckId} dir="bg" version={version} />
+          <CodeFileList deckId={deckId} dir="bg" version={version} onFilesChanged={onFilesChanged} />
         )}
       </div>
 

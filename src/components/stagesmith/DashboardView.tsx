@@ -75,6 +75,11 @@ function readCodeSideW(): number {
   }
 }
 
+/** path of a source when it points at a file (code / html / image) */
+function codePathOf(src: Source | undefined | null): string | undefined {
+  return src && src.type !== "none" && "path" in src ? src.path : undefined;
+}
+
 export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; nav: SsNav; initialBundle: DeckBundle | null }) {
   const { toast } = useToast();
   const [bundle, setBundle] = useState<DeckBundle | null>(initialBundle ?? null);
@@ -330,6 +335,24 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
     return () => { disposed = true; clearInterval(timer); };
   }, [deckId, deck, reloadChangedFiles]);
 
+  /** merge an in-app file write (create/upload/delete) into the bundle's
+   *  file rows — optimistic, additive/removal only, so a later refresh from
+   *  disk (which already contains the change) never overwrites it with an
+   *  older view. This is what makes "New file" appear in the dropdown
+   *  instantly: the folder poll cannot do it, because applyDeck adopts the
+   *  post-write signature and our own writes never look "external". */
+  const applyFilesDelta = useCallback((delta: { added?: string[]; removed?: string[] }) => {
+    setBundle((b) => {
+      if (!b) return b;
+      const map = new Map(b.files.map((f) => [f.path, f]));
+      for (const p of delta.added ?? []) {
+        if (!map.has(p)) map.set(p, { path: p, mtime: Date.now(), size: 0 });
+      }
+      for (const p of delta.removed ?? []) map.delete(p);
+      return { ...b, files: [...map.values()].sort((x, y) => (x.path < y.path ? -1 : 1)) };
+    });
+  }, []);
+
   /* ---------- autosave (ONE serialized queue — see useSaveQueue) ---------- */
   const save = useSaveQueue(deckId, {
     collect: () =>
@@ -509,19 +532,40 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
         const existingIds = new Set(slides.map((s) => s.id));
         const d = await api.duplicateSlide(deckId, slideId);
         applyDeck(d);
+        // the copy may add bg/overlay code files — show them in the dropdown
+        // immediately (applyDeck's signature adoption suppresses the poll)
+        const added = d.slides
+          .filter((s) => !existingIds.has(s.id))
+          .flatMap((s) => [codePathOf(s.bg), codePathOf(s.overlay)])
+          .filter((p): p is string => Boolean(p && (p.startsWith("bg/") || p.startsWith("overlay/"))));
+        if (added.length) applyFilesDelta({ added });
         setSelId(d.slides.find((s) => !existingIds.has(s.id))?.id ?? slideId);
       } catch (e) {
         toast({ title: "Duplicate failed", description: (e as Error).message, variant: "destructive" });
       }
     },
-    [deckId, applyDeck, toast, slides],
+    [deckId, applyDeck, applyFilesDelta, toast, slides],
   );
 
   const remove = useCallback(
     async (slideId: string) => {
       try {
+        const entry = slides.find((s) => s.id === slideId) ?? null;
         const d = await api.deleteSlide(deckId, slideId);
         applyDeck(d);
+        // the store removes slide + notes files and override code files that
+        // no remaining slide uses — drop exactly those from the file rows
+        const stillUsed = new Set(
+          d.slides.flatMap((s) => [codePathOf(s.bg), codePathOf(s.overlay)].filter((p): p is string => p !== undefined)),
+        );
+        const removed = [
+          `slides/${slideId}.tsx`,
+          `notes/${slideId}.md`,
+          ...[codePathOf(entry?.bg), codePathOf(entry?.overlay)].filter(
+            (p): p is string => Boolean(p && (p.startsWith("bg/") || p.startsWith("overlay/")) && !stillUsed.has(p)),
+          ),
+        ];
+        applyFilesDelta({ removed });
         if (selId === slideId) setSelId(d.slides[0]?.id ?? null);
         refreshSnapshots();
         toast({ title: "Slide deleted", description: "A snapshot was taken before deletion" });
@@ -529,7 +573,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
         toast({ title: "Delete failed", description: (e as Error).message, variant: "destructive" });
       }
     },
-    [deckId, applyDeck, selId, toast, refreshSnapshots],
+    [deckId, applyDeck, applyFilesDelta, selId, slides, toast, refreshSnapshots],
   );
 
   const rename = useCallback(
@@ -1016,6 +1060,7 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
             deckId={deckId}
             deck={deck}
             files={bundle?.files ?? []}
+            onFilesChanged={applyFilesDelta}
             sel={sel}
             tab={tab}
             onTab={setTab}
