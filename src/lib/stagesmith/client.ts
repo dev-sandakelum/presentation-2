@@ -151,6 +151,58 @@ const deckVersionSeen = new Map<string, string | number>();
  *  present-mode preloader and StageFrame's own resolution race for the same
  *  modules; without this both would compile/fetch the file twice. */
 const inflightModules = new Map<string, Promise<ModuleInfo>>();
+type ModulePriority = "selected" | "normal" | "background";
+const MODULE_CONCURRENCY = 4;
+const moduleQueue: Array<{ key: string; priority: ModulePriority; queuedAt: number; run: () => void; cancel: () => void }> = [];
+let activeModuleJobs = 0;
+const moduleRequestStates = new Map<string, { status: "queued" | "started" | "finished" | "cancelled"; queuedAt: number; startedAt?: number }>();
+
+export function getModuleRequestState(deckId: string, path: string, version: string | number) {
+  return moduleRequestStates.get(`${deckId}:${path}:${version}`) ?? null;
+}
+
+function notifyModuleState(key: string, state: { status: "queued" | "started" | "finished" | "cancelled"; queuedAt: number; startedAt?: number }) {
+  moduleRequestStates.set(key, state);
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("stagesmith-module-state", { detail: { key, ...state } }));
+}
+
+function scheduleModule(key: string, priority: ModulePriority, deckId: string, path: string, work: () => Promise<ModuleInfo>): Promise<ModuleInfo> {
+  return new Promise((resolve) => {
+    const queuedAt = Date.now();
+    notifyModuleState(key, { status: "queued", queuedAt });
+    console.info("[slide-load] queued", { deckId, path, priority, concurrencyLimit: MODULE_CONCURRENCY });
+    const job = {
+      key,
+      priority,
+      queuedAt,
+      cancel: () => {
+        notifyModuleState(key, { status: "cancelled", queuedAt });
+        console.info("[slide-load] cancelled", { deckId, path, reason: "manual retry replaced queued load" });
+        resolve({ url: null, code: null, ver: "cancelled", steps: 1, error: "Load cancelled for retry" });
+      },
+      run: () => {
+        activeModuleJobs++;
+        const startedAt = Date.now();
+        notifyModuleState(key, { status: "started", queuedAt, startedAt });
+        console.info("[slide-load] started", { deckId, path, queueWaitMs: startedAt - queuedAt, concurrencyLimit: MODULE_CONCURRENCY });
+        Promise.resolve().then(work).then(resolve, (error) => resolve({ url: null, code: null, ver: "err", steps: 1, error: String(error) })).finally(() => {
+          const finishedAt = Date.now();
+          notifyModuleState(key, { status: "finished", queuedAt, startedAt });
+          activeModuleJobs--;
+          console.info("[slide-load] finished", { deckId, path, queueWaitMs: startedAt - queuedAt, loadMs: finishedAt - startedAt, concurrencyLimit: MODULE_CONCURRENCY });
+          drainModuleQueue();
+        });
+      },
+    };
+    moduleQueue.push(job);
+    moduleQueue.sort((a, b) => ({ selected: 0, normal: 1, background: 2 }[a.priority] - { selected: 0, normal: 1, background: 2 }[b.priority]) || a.queuedAt - b.queuedAt);
+    drainModuleQueue();
+  });
+}
+
+function drainModuleQueue(): void {
+  while (activeModuleJobs < MODULE_CONCURRENCY && moduleQueue.length) moduleQueue.shift()!.run();
+}
 
 /**
  * Resolve a deck layer (slide/bg/overlay) to a loadable module.
@@ -159,7 +211,7 @@ const inflightModules = new Map<string, Promise<ModuleInfo>>();
  * the returned bundle is self-contained and is imported by the runtime
  * from a blob URL.
  */
-export function resolveModule(deckId: string, path: string, version: string | number): Promise<ModuleInfo> {
+export function resolveModule(deckId: string, path: string, version: string | number, priority: ModulePriority = "normal", force = false): Promise<ModuleInfo> {
   // when the version advances for this deck, drop all stale cache entries for
   // it — ensures a reopened (or live-edited) deck always recompiles its modules
   const lastVersion = deckVersionSeen.get(deckId);
@@ -172,13 +224,19 @@ export function resolveModule(deckId: string, path: string, version: string | nu
 
   const key = `${deckId}:${path}:${version}`;
   const hit = moduleCache.get(key);
-  if (hit) return Promise.resolve(hit);
+  if (hit && !force) return Promise.resolve(hit);
   const pending = inflightModules.get(key);
-  if (pending) return pending;
+  if (pending && !force) return pending;
+  if (force) {
+    moduleCache.delete(key);
+    inflightModules.delete(key);
+    const queuedIndex = moduleQueue.findIndex((job) => job.key === key);
+    if (queuedIndex >= 0) moduleQueue.splice(queuedIndex, 1)[0].cancel();
+  }
   const compilePhase = `stagesmith:compile:${deckId}:${path}:${version}`;
-  if (typeof performance !== "undefined") performance.mark(`${compilePhase}:start`);
-  console.info(`[deck-load] START compile-module`, { deckId, path, version });
-  const p = (async () => {
+  let p!: Promise<ModuleInfo>;
+  p = scheduleModule(key, priority, deckId, path, async () => {
+    if (typeof performance !== "undefined") performance.mark(`${compilePhase}:start`);
     try {
       let info: ModuleInfo;
       const store = await deckStoreOf(deckId);
@@ -221,18 +279,19 @@ export function resolveModule(deckId: string, path: string, version: string | nu
           ? { url: data.url ?? null, code: null, ver: data.hash ?? "", steps: data.steps || 1, error: null }
           : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
       }
-      moduleCache.set(key, info);
+      // Successful modules are cacheable. A real failure remains retryable;
+      // a later save, file registration or manual Retry must be able to fix it.
+      if (!info.error) moduleCache.set(key, info);
       return info;
     } catch (e) {
       return { url: null, code: null, ver: "err", steps: 1, error: (e as Error).message };
     }
-  })().finally(() => {
+  }).finally(() => {
     if (typeof performance !== "undefined") {
       performance.mark(`${compilePhase}:end`);
       try { performance.measure(compilePhase, `${compilePhase}:start`, `${compilePhase}:end`); } catch { /* mark may be cleared during navigation */ }
     }
-    console.info(`[deck-load] END compile-module`, { deckId, path, version });
-    inflightModules.delete(key);
+    if (inflightModules.get(key) === p) inflightModules.delete(key);
   });
   inflightModules.set(key, p);
   return p;

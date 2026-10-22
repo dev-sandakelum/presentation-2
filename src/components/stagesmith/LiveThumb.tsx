@@ -29,8 +29,10 @@ export const LiveThumb = memo(function LiveThumb(props: {
   /** deck signature — bump re-resolves modules */
   version: string | number;
   className?: string;
+  onError?: (message: string) => void;
+  loadPriority?: "selected" | "normal" | "background";
 }) {
-  const { deckId, slideId, slideTheme, deckDefaultMode, deckBg, deckOverlay, themeCss, version, className } = props;
+  const { deckId, slideId, slideTheme, deckDefaultMode, deckBg, deckOverlay, themeCss, version, className, onError, loadPriority } = props;
   if (!slideId || !themeCss) {
     return <span className="ss-shimmer" aria-hidden />;
   }
@@ -44,7 +46,10 @@ export const LiveThumb = memo(function LiveThumb(props: {
       themeCss={themeCss}
       mode={slideTheme ?? deckDefaultMode}
       staticMode
+      thumbnail
+      loadPriority={loadPriority}
       version={version}
+      onRuntimeError={(err) => onError?.(err.message)}
     />
   );
 });

@@ -261,7 +261,11 @@ export function useAssetPreloader(
           for (let attempt = 0; attempt < TASK_ATTEMPTS; attempt++) {
             if (run.cancelled) return;
             try {
-              await withTimeout(task.run(), task.label, task.label === "fonts" ? FONT_TIMEOUT_MS : TASK_TIMEOUT_MS);
+              const taskPromise = task.run();
+              // A slide module may be queued behind compilation or desktop
+              // disk/bridge work. Elapsed time alone is not a slide failure.
+              if (task.label.startsWith("slides/")) await taskPromise;
+              else await withTimeout(taskPromise, task.label, task.label === "fonts" ? FONT_TIMEOUT_MS : TASK_TIMEOUT_MS);
               lastErr = null;
               break;
             } catch (e) {

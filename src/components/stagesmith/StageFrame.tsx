@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { RuntimeMessage, SlideEntry, Source, ThemeMode } from "@/lib/stagesmith/types";
-import { resolveModule, getAssetMap, assetRouteUrl, type ModuleInfo } from "@/lib/stagesmith/client";
+import { resolveModule, getAssetMap, assetRouteUrl, getModuleRequestState, type ModuleInfo } from "@/lib/stagesmith/client";
 
 /**
  * The sandboxed Stage Runtime wrapper (plan §5.1).
@@ -42,6 +42,9 @@ export interface StageFrameProps {
   mode: ThemeMode;
   show?: { bg: boolean; content: boolean; overlay: boolean };
   staticMode?: boolean;
+  /** thumbnail frames report failures to their corner badge, never a full error card */
+  thumbnail?: boolean;
+  loadPriority?: "selected" | "normal" | "background";
   /** bump to force re-resolution (folder poll signature or explicit flush) */
   version: string | number;
   step?: number;
@@ -58,8 +61,8 @@ export interface StageFrameProps {
 export type MetaInfo = ModuleInfo;
 
 /** resolve a deck layer to a loadable module (URL or inline code) */
-export async function resolveCode(deckId: string, path: string, version: string | number): Promise<MetaInfo> {
-  return resolveModule(deckId, path, version);
+export async function resolveCode(deckId: string, path: string, version: string | number, priority: "selected" | "normal" | "background" = "normal", force = false): Promise<MetaInfo> {
+  return resolveModule(deckId, path, version, priority, force);
 }
 
 /** image layer source URL — always percent-encoded per segment so names with
@@ -74,34 +77,23 @@ function tagOf(version: string | number, sig: string) {
   return `${version}|${sig}`;
 }
 
-async function resolveWithDeadline(deckId: string, path: string, version: string | number): Promise<MetaInfo> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      resolveCode(deckId, path, version),
-      new Promise<MetaInfo>((resolve) => {
-        timer = setTimeout(() => resolve({ url: null, code: null, ver: "timeout", steps: 1, error: `${path} timed out while loading` }), 12_000);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 export function useResolvedSources(
   deckId: string,
   version: string | number,
   entries: Array<{ kind: "slide" | "bg" | "overlay" | "commonOverlay"; source: Source | null | undefined }>,
+  retryNonce = 0,
+  priority: "selected" | "normal" | "background" = "normal",
 ) {
   const [state, setState] = useState<{ metas: Record<string, MetaInfo>; tag: string | null }>({ metas: {}, tag: null });
   const sig = entries.map((e) => `${e.kind}:${e.source ? JSON.stringify(e.source) : "none"}`).join("|");
   useEffect(() => {
     let cancelled = false;
+    setState((prev) => ({ ...prev, tag: null }));
     (async () => {
       const out: Record<string, MetaInfo> = {};
       for (const e of entries) {
         if (e.source && e.source.type === "code") {
-          out[e.kind] = await resolveWithDeadline(deckId, e.source.path, version);
+          out[e.kind] = await resolveCode(deckId, e.source.path, version, priority, retryNonce > 0);
         } else {
           out[e.kind] = { url: null, code: null, ver: "", steps: 1, error: null };
         }
@@ -111,7 +103,7 @@ export function useResolvedSources(
     return () => {
       cancelled = true;
     };
-  }, [deckId, version, sig]);
+  }, [deckId, version, sig, retryNonce]);
   return state;
 }
 
@@ -119,7 +111,7 @@ export function StageFrame(props: StageFrameProps) {
   const {
     deckId, slide, deckBg, deckOverlay, commonOverlay: commonOverlayProp, themeCss, mode,
     show = { bg: true, content: true, overlay: true },
-    staticMode = false, version, step, slideIndex, slideTotal,
+    staticMode = false, thumbnail = false, loadPriority, version, step, slideIndex, slideTotal,
     className, interactive = false, transition = null, onSteps, onRuntimeError,
   } = props;
 
@@ -145,9 +137,55 @@ export function StageFrame(props: StageFrameProps) {
   );
   const sig = sources.map((e) => `${e.kind}:${e.source ? JSON.stringify(e.source) : "none"}`).join("|");
   const currentTag = tagOf(version, sig);
-  const { metas, tag: metasTag } = useResolvedSources(deckId, version, sources);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const [stallLevel, setStallLevel] = useState<0 | 1 | 2>(0);
+  const [runtimeFailure, setRuntimeFailure] = useState<string | null>(null);
+  const [runtimeReady, setRuntimeReady] = useState(false);
+  const reportedThumbErrorRef = useRef<string | null>(null);
+  const { metas, tag: metasTag } = useResolvedSources(deckId, version, sources, retryNonce, loadPriority ?? (thumbnail ? "background" : "selected"));
   /** true when `metas` were resolved for exactly the current slide + sources */
   const settled = metasTag === currentTag;
+
+  useEffect(() => {
+    setRuntimeFailure(null);
+    setRuntimeReady(false);
+  }, [currentTag, retryNonce]);
+
+  const slidePath = slide ? `slides/${slide.id}.tsx` : "";
+  useEffect(() => {
+    if (thumbnail || !slidePath || runtimeReady || runtimeFailure || (settled && metas.slide?.error)) {
+      setStallLevel(0);
+      return;
+    }
+    setStallLevel(0);
+    let slow: ReturnType<typeof setTimeout> | undefined;
+    let stuck: ReturnType<typeof setTimeout> | undefined;
+    const clearWatch = () => {
+      if (slow) clearTimeout(slow);
+      if (stuck) clearTimeout(stuck);
+      slow = undefined;
+      stuck = undefined;
+    };
+    const startWatch = () => {
+      clearWatch();
+      slow = setTimeout(() => setStallLevel(1), 30_000);
+      stuck = setTimeout(() => setStallLevel(2), 60_000);
+    };
+    const key = `${deckId}:${slidePath}:${version}`;
+    const onModuleState = (event: Event) => {
+      const detail = (event as CustomEvent<{ key: string; status: string }>).detail;
+      if (detail?.key !== key) return;
+      if (detail.status === "started" || detail.status === "finished") startWatch();
+      if (detail.status === "cancelled") clearWatch();
+    };
+    window.addEventListener("stagesmith-module-state", onModuleState);
+    const existing = getModuleRequestState(deckId, slidePath, version);
+    if (existing?.status === "started" || existing?.status === "finished") startWatch();
+    return () => {
+      clearWatch();
+      window.removeEventListener("stagesmith-module-state", onModuleState);
+    };
+  }, [deckId, slidePath, version, thumbnail, runtimeReady, runtimeFailure, settled, metas.slide?.error]);
 
   // browser decks ship assets as data URLs (the sandbox can't fetch /api/assets)
   const [assetMap, setAssetMap] = useState<Record<string, string> | null>(null);
@@ -180,6 +218,16 @@ export function StageFrame(props: StageFrameProps) {
   const [lastGood, setLastGood] = useState<{ slideId: string; meta: MetaInfo } | null>(null);
   const slideMeta = metas.slide;
   useEffect(() => {
+    if (!thumbnail || !settled || !slideMeta?.error) {
+      if (settled) reportedThumbErrorRef.current = null;
+      return;
+    }
+    const key = `${currentTag}:${slideMeta.error}`;
+    if (reportedThumbErrorRef.current === key) return;
+    reportedThumbErrorRef.current = key;
+    onRuntimeError?.({ phase: "compile", message: slideMeta.error });
+  }, [thumbnail, settled, slideMeta?.error, onRuntimeError, currentTag]);
+  useEffect(() => {
     if (settled && slideId && (slideMeta?.url || slideMeta?.code)) {
       setLastGood({ slideId, meta: slideMeta });
     }
@@ -192,6 +240,9 @@ export function StageFrame(props: StageFrameProps) {
   // errors on the SAME slide.
   const resolvedSlideMod = settled && (slideMeta?.url || slideMeta?.code) ? slideMeta : null;
   const slideMod = resolvedSlideMod ?? (lastGood && slideId && lastGood.slideId === slideId ? lastGood.meta : null);
+  const slideCompileFailure = slideMeta?.error && !resolvedSlideMod && !(lastGood && slideId && lastGood.slideId === slideId)
+    ? slideMeta.error
+    : null;
 
   // simple memo deps (lint requires plain expressions)
   const bgKey = JSON.stringify(bgSource);
@@ -224,6 +275,8 @@ export function StageFrame(props: StageFrameProps) {
       css: themeCss,
       mode,
       static: staticMode,
+      thumbnail,
+      managedErrors: true,
       scale,
       assetBase: `/api/assets/${deckId}`,
       assetMap: assetMap && Object.keys(assetMap).length ? assetMap : undefined,
@@ -233,7 +286,7 @@ export function StageFrame(props: StageFrameProps) {
       // the target slide itself failed to resolve (its own module absent) →
       // the runtime shows the error card, even though a last-good module of
       // another slide may still be mounted underneath
-      slideError: slideId && !resolvedSlideMod && settled && slideMeta?.error ? slideMeta.error : null,
+      slideError: null,
       bg: bgMod?.url || null,
       bgCode: bgMod?.code || null,
       bgVer: bgMod?.ver || null,
@@ -250,7 +303,7 @@ export function StageFrame(props: StageFrameProps) {
       slideTotal,
     });
   }, [
-    frameId, themeCss, mode, staticMode, scale, deckId,
+    frameId, themeCss, mode, staticMode, thumbnail, scale, deckId,
     slideId, slideMod, slideMeta?.error, bgMod, overlayMod, commonOverlayMod,
     bgKey, overlayKey, showKey, slideIndex, slideTotal, assetMap,
   ]);
@@ -381,6 +434,13 @@ export function StageFrame(props: StageFrameProps) {
       } else if (m.type === "error" && onRuntimeError) {
         onRuntimeError({ phase: m.phase, message: m.message });
       }
+      if (m.type === "rendered") setRuntimeReady(true);
+      if (m.type === "error") setRuntimeFailure(m.message || "Slide failed while rendering");
+      if ((m as any).type === "boot-error") {
+        const message = (m as any).message || "Slide runtime failed to start";
+        setRuntimeFailure(message);
+        onRuntimeError?.({ phase: "boot", message });
+      }
       // "transition" phase events are observability only — nothing to do
     };
     window.addEventListener("message", onMessage);
@@ -403,6 +463,23 @@ export function StageFrame(props: StageFrameProps) {
         onLoad={onIframeLoad}
         style={{ width: "100%", height: "100%", border: 0, display: "block", background: "transparent" }}
       />
+      {!thumbnail && settled && (slideCompileFailure || runtimeFailure) && (
+        <div role="alert" style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", zIndex: 6, background: "rgba(12,12,14,.92)", color: "#f5dada", padding: 36, textAlign: "center" }}>
+          <div style={{ maxWidth: 720 }}>
+            <strong style={{ display: "block", color: "#ff8a8a", marginBottom: 14, letterSpacing: ".1em" }}>SLIDE ERROR · slides/{slideId}.tsx</strong>
+            <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", font: "13px/1.6 ui-monospace, monospace", margin: "0 0 18px" }}>{slideCompileFailure || runtimeFailure}</pre>
+            <button className="ss-btn" onClick={() => { setRuntimeFailure(null); setRetryNonce((n) => n + 1); }}>Retry</button>
+          </div>
+        </div>
+      )}
+      {!thumbnail && !settled && stallLevel > 0 && (
+        <div role="status" style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(12,12,14,.88)", color: "#eee", zIndex: 5, padding: 24, textAlign: "center" }}>
+          <div>
+            <div style={{ marginBottom: 12 }}>{stallLevel === 1 ? "Still loading this slide… it is taking longer than usual." : "This slide seems stuck."}</div>
+            <button className="ss-btn" onClick={() => { setRetryNonce((n) => n + 1); setStallLevel(0); }}>Retry</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

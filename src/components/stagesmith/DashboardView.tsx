@@ -420,14 +420,15 @@ export function DashboardView({ deckId, nav, initialBundle }: { deckId: string; 
   const duplicate = useCallback(
     async (slideId: string) => {
       try {
+        const existingIds = new Set(slides.map((s) => s.id));
         const d = await api.duplicateSlide(deckId, slideId);
         applyDeck(d);
-        setSelId(d.slides.find((s) => s.id.startsWith(slideId) && s.id !== slideId)?.id ?? slideId);
+        setSelId(d.slides.find((s) => !existingIds.has(s.id))?.id ?? slideId);
       } catch (e) {
         toast({ title: "Duplicate failed", description: (e as Error).message, variant: "destructive" });
       }
     },
-    [deckId, applyDeck, toast],
+    [deckId, applyDeck, toast, slides],
   );
 
   const remove = useCallback(

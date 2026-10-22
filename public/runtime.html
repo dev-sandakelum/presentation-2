@@ -31,6 +31,7 @@
   /* background crossfade slots — stacked siblings, later ones paint on top */
   .ss-bg-slot{position:absolute;inset:0}
   .ss-static *{animation:none !important;transition:none !important}
+  .ss-thumbnail #errcard{display:none !important}
   #errcard{
     position:absolute;left:40px;top:40px;right:40px;z-index:50;
     background:#14100e;color:#fca5a5;border:1px solid #7f1d1d;border-radius:12px;
@@ -146,8 +147,10 @@ function showPhase(phase, extra) {
 }
 
 function showError(phase, message, stack) {
-  errCard.hidden = false;
-  errMsg.textContent = (message || "Unknown error") + (stack ? "\n\n" + String(stack).slice(0, 1400) : "");
+  if (!cfg || (!cfg.thumbnail && !cfg.managedErrors)) {
+    errCard.hidden = false;
+    errMsg.textContent = (message || "Unknown error") + (stack ? "\n\n" + String(stack).slice(0, 1400) : "");
+  }
   post({ type: "error", phase, message: String(message), stack: stack ? String(stack) : undefined });
 }
 
@@ -581,6 +584,7 @@ function applyChrome(next) {
   document.documentElement.dataset.theme = next.mode;
   rootEl.dataset.theme = next.mode;
   rootEl.classList.toggle("ss-static", !!next.static);
+  document.body.classList.toggle("ss-thumbnail", !!next.thumbnail);
   stagesmith.initRuntime({
     staticMode: !!next.static,
     mode: next.mode,

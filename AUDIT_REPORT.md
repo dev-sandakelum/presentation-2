@@ -12,6 +12,11 @@ The available evidence does not identify one uniquely stuck runtime phase. The s
 - Added deadlines for asset-preloader tasks (10 seconds; fonts 3 seconds), image loading, and StageFrame module resolution. Module resolution timeout is surfaced as a slide error card by the existing runtime path.
 - Added `[deck-load] START/END` log lines and `performance.mark/measure` entries for desktop file index, manifest read, first slide/theme read, background text hydration, and module compilation. Pending bridge calls can be inspected through exported diagnostic snapshots.
 - Reduced the Present preloader's no-progress soft warning from 60 to 30 seconds.
+- Removed the 12-second StageFrame module-resolution deadline that could produce `slides/end-copy.tsx timed out while loading` while the work was simply queued or slow. Slide module tasks in Present preloading are also no longer failed by the fixed task deadline.
+- Added a four-job module-resolution queue. Selected preview requests have priority over normal and background thumbnail requests. `[slide-load]` logs record queued, started and finished events, queue wait, duration and the concurrency limit.
+- Added soft preview notices after 30 seconds and 60 seconds without module/render progress. The watchdog starts only after the selected slide module actually starts; queued time does not count. Retry forces a fresh module resolve.
+- Failed module results are no longer cached. Runtime and compile errors in the preview show a slide-specific card with the file and reason plus Retry. Thumbnail runtimes suppress the full error card; only that slide's corner warning badge is updated.
+- Desktop duplication now ensures the source slide and code overrides have been read before copying, then awaits persisted writes before returning the new deck state. The editor selects the newly added id by comparing the pre/post slide lists, so repeated copies do not select an older copy.
 
 ## Evidence and limitations
 
@@ -30,8 +35,11 @@ The available evidence does not identify one uniquely stuck runtime phase. The s
 | All thumbnails finish shortly after | NOT VERIFIED | Filmstrip work is bounded; no target deck run. |
 | No bridge step waits forever | PASS (code path) | Both bridge transports reject after 10 seconds. |
 | No blank thumbnail without loading state | NOT VERIFIED | Runtime UI instrumentation and visual reproduction unavailable. |
-| Stalled load is reported within about 30 seconds | PARTIAL | Present preloader now uses a 30-second soft threshold; it was not run in desktop mode. |
-| Failed item shows name/reason and Retry/Continue | PARTIAL | Existing Present preloader supports this; editor module timeout reaches existing runtime error card, but editor-level Retry/Continue is not implemented. |
+| Stalled load is reported within about 30 seconds | PARTIAL | Preview uses 30/60-second soft notices based on active module/render work; not verified on the target desktop deck. Present uses a 30-second no-progress notice. |
+| Failed item shows name/reason and Retry | PARTIAL | Preview has per-slide error details and Retry. Thumbnail badge behavior is implemented; visual target-deck verification remains. |
+| Slow/queued slide never becomes a timeout error | PASS (code path) | Removed the StageFrame 12-second deadline and slide-task fixed timeout. |
+| Selected slide outranks background thumbnail work | PASS (code path) | Selected requests have highest priority in the shared four-job compile queue. |
+| Duplicate source is fully written before it is opened | PASS (code path) | Desktop duplicate preloads source files and awaits `mutateDeck` persistence before return. |
 | Desktop and web mode runs | NOT VERIFIED | No target deck/runtime session. |
 | Missing file, hung image, throwing slide, hung bridge fault injection | NOT VERIFIED | Not run. |
 | Open/close 20 times with heap/listener/object URL check | NOT VERIFIED | Not run. |
@@ -46,6 +54,16 @@ The available evidence does not identify one uniquely stuck runtime phase. The s
 | Thumbnail compilation | Not captured | Not captured; two concurrent workers |
 | Editor interactive | Not captured | Not captured |
 | All thumbnails | Not captured | Not captured |
+
+## Task 14 checks
+
+- Targeted ESLint on the modified TypeScript files: PASS.
+- `git diff --check`: PASS.
+- `npx tsc --noEmit`: the modified files have no reported type errors; the command remains blocked by three unrelated existing errors in `useDownloadFeedback.ts`, `useSync.ts`, and `lib/db.ts`.
+- `npm run test:bridge`: NOT RUN; Bun is not installed in this environment.
+- `npm run test:e2e-desktop`: NOT RUN; Playwright Chromium executable is missing from the configured cache.
+- The 21-slide deck is not in this workspace, so throttled desktop timing, multi-duplicate, slow-compile-over-60-seconds, real hang, syntax-error isolation and far-slide selection checks remain unverified.
+- No actual queue/load timings for `slides/end-copy.tsx` are available; runtime logs now capture those timings on the next desktop reproduction.
 
 ## Local checks
 

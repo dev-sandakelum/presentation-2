@@ -757,6 +757,17 @@ export async function deleteSlide(deckId: string, slideId: string): Promise<Deck
 }
 
 export async function duplicateSlide(deckId: string, slideId: string): Promise<DeckJson> {
+  // A desktop record may still be hydrating background slide sources. Fetch
+  // the source (and code overrides) before mutating so a quick duplicate can
+  // never write an empty TSX file or omit a copied layer.
+  const before = await getRecord(deckId);
+  if (!before) throw new Error("Deck not found");
+  const source = parseDeck(before).slides.find((s) => s.id === slideId);
+  if (!source) throw new Error("Slide not found");
+  await readFile(deckId, `slides/${slideId}.tsx`);
+  for (const layer of [source.bg, source.overlay]) {
+    if (layer?.type === "code") await readFile(deckId, layer.path);
+  }
   return mutateDeck(deckId, (rec, deck) => {
     const idx = deck.slides.findIndex((s) => s.id === slideId);
     if (idx < 0) throw new Error("Slide not found");

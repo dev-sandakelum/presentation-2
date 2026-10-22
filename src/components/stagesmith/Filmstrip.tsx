@@ -15,7 +15,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Copy, GripVertical, Moon, Plus, Sun, Trash2 } from "lucide-react";
+import { Copy, GripVertical, Moon, Plus, Sun, Trash2, TriangleAlert } from "lucide-react";
 import type { DeckJson, ThemeMode } from "@/lib/stagesmith/types";
 import { LiveThumb } from "./LiveThumb";
 import { useInView } from "./LibraryView";
@@ -40,13 +40,6 @@ function errorLineCol(msg: string): { line: number; col: number } {
   return { line: m ? parseInt(m[1], 10) : 1, col: m ? parseInt(m[2], 10) : 0 };
 }
 
-/** how many distinct errors a message carries (located lines win) */
-function errorCount(msg: string): number {
-  const lines = msg.split("\n").map((l) => l.trim()).filter(Boolean);
-  const located = lines.filter((l) => /:\d+:\d+/.test(l)).length;
-  return Math.max(1, located || lines.length);
-}
-
 export const Filmstrip = memo(function Filmstrip(props: {
   deckId: string;
   deck: DeckJson;
@@ -66,6 +59,10 @@ export const Filmstrip = memo(function Filmstrip(props: {
   const { deck, deckId, selId } = props;
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  useEffect(() => {
+    setErrors({});
+  }, [props.version, deck.slides.map((s) => s.id).join(",")]);
+
   // Compile diagnostics at low priority, with bounded parallelism. The
   // selected slide preview must not queue behind every filmstrip request.
   useEffect(() => {
@@ -78,13 +75,13 @@ export const Filmstrip = memo(function Filmstrip(props: {
       const worker = async () => {
         while (!cancelled && cursor < order.length) {
           const s = order[cursor++];
-          const meta = await resolveCode(deckId, `slides/${s.id}.tsx`, props.version);
+          const meta = await resolveCode(deckId, `slides/${s.id}.tsx`, props.version, "background");
           if (meta.error) out[s.id] = meta.error;
           if (!cancelled) setErrors((prev) => (meta.error ? { ...prev, [s.id]: meta.error! } : prev));
         }
       };
       await Promise.all(Array.from({ length: Math.min(2, deck.slides.length) }, () => worker()));
-      if (!cancelled) setErrors(out);
+      if (!cancelled) setErrors((prev) => ({ ...prev, ...out }));
     })();
     return () => {
       cancelled = true;
@@ -128,6 +125,7 @@ export const Filmstrip = memo(function Filmstrip(props: {
                 themeCss={props.themeCss}
                 version={props.version}
                 selected={s.id === selId}
+                loadPriority={Math.abs(i - Math.max(deck.slides.findIndex((entry) => entry.id === selId), 0)) <= 1 ? "normal" : "background"}
                 error={mergedError(s.id)}
                 onSelect={props.onSelect}
                 onDuplicate={props.onDuplicate}
@@ -135,6 +133,7 @@ export const Filmstrip = memo(function Filmstrip(props: {
                 onRename={props.onRename}
                 onSetTheme={props.onSetTheme}
                 onJumpToError={props.onJumpToError}
+                onThumbError={(id, message) => setErrors((prev) => prev[id] === message ? prev : ({ ...prev, [id]: message }))}
               />
             ))}
           </SortableContext>
@@ -190,6 +189,7 @@ const SortableThumb = memo(function SortableThumb(props: {
   themeCss: string;
   version: string;
   selected: boolean;
+  loadPriority: "normal" | "background";
   error?: string;
   onSelect: (id: string) => void;
   onDuplicate: (id: string) => void;
@@ -197,6 +197,7 @@ const SortableThumb = memo(function SortableThumb(props: {
   onRename: (id: string, label: string) => void;
   onSetTheme: (id: string, theme: ThemeMode | null) => void;
   onJumpToError: (id: string, line: number, col: number) => void;
+  onThumbError: (id: string, message: string) => void;
 }) {
   const { entry, deckId, deck, index, selected, error } = props;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
@@ -206,7 +207,6 @@ const SortableThumb = memo(function SortableThumb(props: {
 
   // fix-list item 5: the dot means a *background* override — nothing else
   const hasBgOverride = Boolean(entry.bg && entry.bg.type !== "none");
-  const count = error ? errorCount(error) : 0;
   const onSelect = useCallback(() => props.onSelect(entry.id), [entry.id, props.onSelect]);
   const onDuplicate = useCallback(() => props.onDuplicate(entry.id), [entry.id, props.onDuplicate]);
   const onDelete = useCallback(() => props.onDelete(entry.id), [entry.id, props.onDelete]);
@@ -243,6 +243,8 @@ const SortableThumb = memo(function SortableThumb(props: {
                   deckOverlay={deck.overlay}
                   themeCss={props.themeCss}
                   version={props.version}
+                  loadPriority={props.loadPriority}
+                  onError={(message) => props.onThumbError(entry.id, message)}
                 />
               ) : (
                 <span className="ss-shimmer" aria-hidden />
@@ -253,9 +255,10 @@ const SortableThumb = memo(function SortableThumb(props: {
                   className="ss-thumb-err"
                   style={{ right: hasBgOverride ? 30 : 6 }}
                   title={`${error}\n— click to open the first error line`}
+                  aria-label={`Slide error: ${error}`}
                   onClick={onJumpToError}
                 >
-                  {count}
+                  <TriangleAlert size={12} />
                 </button>
               )}
               {hasBgOverride && <span className="ss-thumb-dot" style={{ right: 6 }} title="Background override" />}
