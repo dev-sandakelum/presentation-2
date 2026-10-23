@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import {
   deckExists,
   deckFiles,
-  deckSignature,
+  signatureOfFiles,
   readDeck,
   validDeckId,
   deckPath,
@@ -20,16 +20,21 @@ import type { DeckBundle } from "./types";
 
 export async function getDeckBundle(deckId: string): Promise<DeckBundle | null> {
   if (!validDeckId(deckId) || !(await deckExists(deckId))) return null;
-  const deck = await readDeck(deckId);
-  const files = await deckFiles(deckId);
-  const signature = await deckSignature(deckId);
-  let themeCss = "";
-  try {
-    themeCss = rewriteThemeCss(await fs.readFile(deckPath(deckId, "theme.css"), "utf8"), deckId);
-  } catch {
-    themeCss = "";
-  }
-  return { deck, files, signature, themeCss, store: "server" };
+  // deck.json, the full folder walk and theme.css are independent reads —
+  // they all go at once, and the signature reuses the ONE walk (the old
+  // code walked the whole folder a second time inside deckSignature).
+  const [deck, files, themeRaw] = await Promise.all([
+    readDeck(deckId),
+    deckFiles(deckId),
+    fs.readFile(deckPath(deckId, "theme.css"), "utf8").catch(() => ""),
+  ]);
+  return {
+    deck,
+    files,
+    signature: signatureOfFiles(files),
+    themeCss: rewriteThemeCss(themeRaw, deckId),
+    store: "server",
+  };
 }
 
 export async function listDecksSafe(): Promise<Awaited<ReturnType<typeof listDecks>>> {

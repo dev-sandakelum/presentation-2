@@ -29,7 +29,20 @@ import type { DeckJson, FileRow, Source } from "@/lib/stagesmith/types";
  *     itself the moment progress resumes
  *   · SHARED WORK — identical backgrounds (same bgKey) load once, modules
  *     reuse the app-wide compile cache, already-decoded data-URL images are
- *     skipped, and images decode via img.decode()
+ *     skipped
+ *
+ * Parallel-loading contract:
+ *   · every task owns a SEPARATE AbortController (never one shared signal);
+ *     a task timeout or the run ending aborts exactly that task's fetch
+ *   · images decode OFF the main thread: fetch the bytes (which warms the
+ *     shared HTTP cache the sandboxed iframe will hit) then createImageBitmap
+ *     (Chromium decodes on its image threads; the bitmap is closed right
+ *     away — it only exists to force the decode). img.decode() stays as the
+ *     fallback for SVGs and any bitmap-unsupported format
+ *   · critical-window fetches go out with `priority: "high"` so the browser
+ *     schedules them ahead of the background remainder
+ *   · progress counters advance per SETTLED task, so the status line stays
+ *     accurate however tasks complete
  */
 
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|avif|svg|bmp|ico)$/i;
@@ -44,13 +57,16 @@ const CRITICAL_WINDOW = 3;
 const TASK_TIMEOUT_MS = 10_000;
 const FONT_TIMEOUT_MS = 3_000;
 
-async function withTimeout<T>(promise: Promise<T>, label: string, ms = TASK_TIMEOUT_MS): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, label: string, ms = TASK_TIMEOUT_MS, onTimeout?: () => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms);
+        timer = setTimeout(() => {
+          onTimeout?.(); // abort the underlying work, not just the wait
+          reject(new Error(`${label} timed out after ${ms} ms`));
+        }, ms);
       }),
     ]);
   } finally {
@@ -123,7 +139,7 @@ interface Task {
   label: string;
   status: TaskStatus;
   error?: string;
-  run: () => Promise<void>;
+  run: (signal: AbortSignal) => Promise<void>;
 }
 
 /* data-URL images already decoded this session (browser-deck assets are big
@@ -135,33 +151,76 @@ function rememberDecoded(url: string): void {
   decodedDataUrls.add(url);
 }
 
-/** decode an image via img.decode(); rejects with the failing URL */
-async function decodeImage(url: string): Promise<void> {
-  if (/^(data|blob):/i.test(url)) {
-    if (decodedDataUrls.has(url)) return; // already decoded this session
-    await withTimeout(new Promise<void>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        if (typeof img.decode === "function") img.decode().then(() => resolve(), () => resolve());
-        else resolve();
-      };
-      img.onerror = () => reject(new Error("the image didn't load"));
-      img.src = url;
-    }), "Image load");
-    rememberDecoded(url);
-    return;
-  }
-  await withTimeout(new Promise<void>((resolve, reject) => {
+/** createImageBitmap cannot decode SVG in Chromium — those take the img path */
+const VECTOR_RE = /\.svgz?($|\?)/i;
+
+function canUseBitmap(url: string): boolean {
+  return typeof createImageBitmap === "function" && !VECTOR_RE.test(url);
+}
+
+/** decode via <img> + img.decode() — the universal fallback path */
+function decodeViaImg(url: string, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const img = new Image();
+    const onAbort = () => {
+      img.src = "";
+      reject(new Error("cancelled"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     img.onload = () => {
+      signal?.removeEventListener("abort", onAbort);
       if (typeof img.decode === "function") {
         // decode() failing after onload is cosmetic — treat as loaded
         img.decode().then(() => resolve(), () => resolve());
       } else resolve();
     };
-    img.onerror = () => reject(new Error("the image didn't load"));
+    img.onerror = () => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error("the image didn't load"));
+    };
     img.src = url;
-  }), "Image load");
+  });
+}
+
+/**
+ * Decode an image fully OFF the main thread where possible:
+ *  1. `fetch` the bytes — this also warms the SHARED HTTP cache, so the
+ *     sandboxed iframe's later <img> load is a fast cache hit (URL-keyed,
+ *     same canonical URL); critical tasks fetch with `priority: "high"`.
+ *  2. `createImageBitmap(blob)` decodes on Chromium's image threads; the
+ *     bitmap is closed immediately (it exists only to force the decode).
+ *  3. SVG (and any bitmap-unsupported case) falls back to img.decode().
+ * Rejects with the failing URL's reason.
+ */
+async function decodeImage(url: string, priority: "high" | "auto" = "auto", signal?: AbortSignal): Promise<void> {
+  if (/^data:/i.test(url) && decodedDataUrls.has(url)) return; // already decoded this session
+  if (canUseBitmap(url)) {
+    try {
+      const res = await fetch(url, {
+        cache: "force-cache",
+        priority,
+        signal,
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const bitmap = await createImageBitmap(blob);
+        bitmap.close(); // decoded and released — bounded memory
+        rememberDecoded(url);
+        return;
+      }
+      if (res.status === 404 || res.status === 403) throw new Error("the image didn't load");
+      // any other status → try the img path (it re-requests and reports honestly)
+    } catch (e) {
+      if (signal?.aborted) throw new Error("cancelled");
+      if ((e as Error)?.message === "the image didn't load") throw e;
+      // a TypeError is a genuine network failure (the old img.onerror case)
+      if (e instanceof TypeError) throw new Error("the image didn't load");
+      // anything else (e.g. createImageBitmap rejecting an exotic format)
+      // falls through to the universal <img> path
+    }
+  }
+  await withTimeout(decodeViaImg(url, signal), "Image load");
+  rememberDecoded(url);
 }
 
 /** resolve + warm a deck module; rejects on resolve/fetch failure */
@@ -173,7 +232,6 @@ async function warmModule(deckId: string, path: string, version: string | number
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   }
 }
-
 export function useAssetPreloader(
   deck: DeckJson | null,
   deckId: string,
@@ -196,6 +254,9 @@ export function useAssetPreloader(
 
   /** the live task list of the current run (mutable; state is derived) */
   const tasksRef = useRef<Task[]>([]);
+  /** per-task abort handles of the CURRENT run — the cleanup/unmount path
+   *  fires each one individually (separate signal per task, never shared) */
+  const runCancelListeners = useRef<Set<() => void>>(new Set());
   const runRef = useRef<{
     cancelled: boolean;
     acknowledged: boolean;
@@ -245,7 +306,11 @@ export function useAssetPreloader(
     });
   }, []);
 
-  /** run a pool over the given tasks, updating statuses + progress */
+  /** run a pool over the given tasks, updating statuses + progress.
+   *
+   *  Every task gets its OWN AbortController — a timeout aborts exactly that
+   *  task's fetch (freeing its memory), and the run ending (unmount / retry)
+   *  aborts each pending controller individually. Never one shared signal. */
   const runPool = useCallback(
     async (subset: Task[]): Promise<void> => {
       const run = runRef.current;
@@ -260,12 +325,23 @@ export function useAssetPreloader(
           let lastErr: unknown = null;
           for (let attempt = 0; attempt < TASK_ATTEMPTS; attempt++) {
             if (run.cancelled) return;
+            const perTask = new AbortController(); // separate signal per task
+            const onRunCancel = () => perTask.abort();
+            runCancelListeners.current.add(onRunCancel);
             try {
-              const taskPromise = task.run();
+              const taskPromise = task.run(perTask.signal);
               // A slide module may be queued behind compilation or desktop
               // disk/bridge work. Elapsed time alone is not a slide failure.
-              if (task.label.startsWith("slides/")) await taskPromise;
-              else await withTimeout(taskPromise, task.label, task.label === "fonts" ? FONT_TIMEOUT_MS : TASK_TIMEOUT_MS);
+              if (task.label.startsWith("slides/")) {
+                await taskPromise;
+              } else {
+                await withTimeout(
+                  taskPromise,
+                  task.label,
+                  task.label === "fonts" ? FONT_TIMEOUT_MS : TASK_TIMEOUT_MS,
+                  () => perTask.abort(), // a timeout cancels THIS task's work
+                );
+              }
               lastErr = null;
               break;
             } catch (e) {
@@ -274,6 +350,8 @@ export function useAssetPreloader(
                 await new Promise((r) => setTimeout(r, TASK_RETRY_DELAYS[attempt] ?? 1200));
                 if (run.cancelled) return;
               }
+            } finally {
+              runCancelListeners.current.delete(onRunCancel);
             }
           }
           task.status = lastErr ? "failed" : "ok";
@@ -347,7 +425,7 @@ export function useAssetPreloader(
             critical,
             label: source.path,
             status: "pending",
-            run: async () => decodeImage(await urlOf(source.path)),
+            run: async (signal) => decodeImage(await urlOf(source.path), critical ? "high" : "auto", signal),
           });
         }
       };
@@ -401,7 +479,7 @@ export function useAssetPreloader(
           critical: false,
           label: f.path,
           status: "pending",
-          run: async () => decodeImage(await urlOf(f.path)),
+          run: async (signal) => decodeImage(await urlOf(f.path), "auto", signal),
         });
       }
 
@@ -436,6 +514,11 @@ export function useAssetPreloader(
       cancelled = true;
       clearInterval(ticker);
       if (runRef.current) runRef.current.cancelled = true;
+      // abort every in-flight task's OWN controller (the user left the deck)
+      for (const abort of runCancelListeners.current) {
+        try { abort(); } catch { /* already aborted */ }
+      }
+      runCancelListeners.current.clear();
     };
   }, [deckId, retryToken, hasDeck, publish, runPool]);
 

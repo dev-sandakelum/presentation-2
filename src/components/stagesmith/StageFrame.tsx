@@ -85,14 +85,20 @@ export function useResolvedSources(
     let cancelled = false;
     setState((prev) => ({ ...prev, tag: null }));
     (async () => {
+      // All four layers (slide, bg, overlay, commonOverlay) resolve IN
+      // PARALLEL — the old sequential chain made every thumbnail, preview
+      // and present frame wait for up to four compiles one after another.
+      // resolveModule dedupes concurrent requests for the same module, so
+      // parallel asks are safe and shared across frames.
       const out: Record<string, MetaInfo> = {};
-      for (const e of entries) {
-        if (e.source && e.source.type === "code") {
-          out[e.kind] = await resolveCode(deckId, e.source.path, version, priority, retryNonce > 0);
-        } else {
-          out[e.kind] = { url: null, code: null, ver: "", steps: 1, error: null };
-        }
-      }
+      const resolved = await Promise.all(
+        entries.map((e) =>
+          e.source && e.source.type === "code"
+            ? resolveCode(deckId, e.source.path, version, priority, retryNonce > 0)
+            : Promise.resolve<MetaInfo>({ url: null, code: null, ver: "", steps: 1, error: null }),
+        ),
+      );
+      for (let i = 0; i < entries.length; i++) out[entries[i].kind] = resolved[i];
       if (!cancelled) setState({ metas: out, tag: tagOf(version, sig) });
     })();
     return () => {

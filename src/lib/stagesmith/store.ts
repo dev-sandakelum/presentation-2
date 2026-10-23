@@ -3,6 +3,7 @@ import path from "path";
 import crypto from "crypto";
 import { deckRootOf, hideDeck, isHidden, listLinks, refreshLinks, unhideDeck, unlinkDeck } from "./registry";
 import { rewriteThemeCss } from "./themeurl";
+import { mapPool, mapPoolAll } from "./parallel";
 import type { DeckCover, DeckJson, DeckSummary, FileRow, SlideEntry, Source } from "./types";
 
 /**
@@ -70,32 +71,56 @@ export async function hashFile(absPath: string): Promise<string> {
   return crypto.createHash("sha256").update(buf).digest("hex").slice(0, 16);
 }
 
-/** walk a deck folder, collecting all files (excluding .stagesmith cache) */
+/** walk a deck folder, collecting all files (excluding .stagesmith cache).
+ *
+ *  Parallel: subdirectories are walked and files stat'ed through a bounded
+ *  pool (node's async fs interleaves happily; the bound keeps fd usage and
+ *  antivirus-scan pressure predictable). The output is sorted by path, so
+ *  the signature is deterministic regardless of directory iteration order. */
+const WALK_CONCURRENCY = 8;
 async function walk(root: string, rel = "", acc: FileRow[] = []): Promise<FileRow[]> {
   const entries = await fs.readdir(path.join(root, rel), { withFileTypes: true });
+  const subdirs: string[] = [];
+  const filesHere: string[] = [];
   for (const e of entries) {
     if (e.name === ".stagesmith" || e.name === ".history" || e.name === ".tmp-*" || e.name.startsWith(".tmp-")) continue;
     const relPath = rel ? `${rel}/${e.name}` : e.name;
-    if (e.isDirectory()) await walk(root, relPath, acc);
-    else if (e.isFile()) {
-      const st = await fs.stat(path.join(root, relPath));
-      acc.push({ path: relPath, mtime: st.mtimeMs, size: st.size });
-    }
+    if (e.isDirectory()) subdirs.push(relPath);
+    else if (e.isFile()) filesHere.push(relPath);
   }
+  // stats for this level + recursion into subdirectories, all in parallel
+  await Promise.all([
+    (async () => {
+      const statted = await mapPool(
+        filesHere,
+        async (relPath) => {
+          const st = await fs.stat(path.join(root, relPath));
+          return { path: relPath, mtime: st.mtimeMs, size: st.size };
+        },
+        { concurrency: WALK_CONCURRENCY },
+      );
+      for (const row of statted) if (!(row instanceof Error)) acc.push(row);
+    })(),
+    ...subdirs.map((relPath) => walk(root, relPath, acc)),
+  ]);
   return acc;
 }
 
 export async function deckFiles(deckId: string): Promise<FileRow[]> {
   const root = deckRoot(deckId);
   try {
-    return await walk(root);
+    const files = await walk(root);
+    files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    return files;
   } catch {
     return [];
   }
 }
 
-export async function deckSignature(deckId: string): Promise<string> {
-  const files = await deckFiles(deckId);
+/** signature computed from an ALREADY-COLLECTED file list — callers that
+ *  just walked the folder (getDeckBundle, listDecks) must not walk it a
+ *  second time just to hash it. */
+export function signatureOfFiles(files: FileRow[]): string {
   const h = crypto.createHash("sha256");
   for (const f of files) {
     h.update(f.path);
@@ -103,6 +128,10 @@ export async function deckSignature(deckId: string): Promise<string> {
     h.update(String(Math.floor(f.mtime)));
   }
   return h.digest("hex").slice(0, 16);
+}
+
+export async function deckSignature(deckId: string): Promise<string> {
+  return signatureOfFiles(await deckFiles(deckId));
 }
 
 /* ---------------- read / list ---------------- */
@@ -154,47 +183,47 @@ export async function listDecks(): Promise<DeckSummary[]> {
   } catch {
     entries = [];
   }
-  const out: DeckSummary[] = [];
   const seen = new Set<string>();
+  const ids: string[] = [];
   for (const e of entries) {
     if (!e.isDirectory() || !validDeckId(e.name)) continue;
     if (isHidden(e.name)) continue; // removed from the library — files kept on disk
     seen.add(e.name);
-    try {
-      const deck = await readDeck(e.name);
-      out.push({
-        id: deck.id,
-        title: deck.title,
-        slideCount: deck.slides.length,
-        modified: deck.modified,
-        signature: await deckSignature(e.name),
-        external: false,
-        store: "server",
-        cover: await coverOf(deck, e.name),
-      });
-    } catch {
-      /* not a deck folder — skip */
-    }
+    ids.push(e.name);
   }
   // external projects registered in .registry.json
+  const external: string[] = [];
   for (const id of Object.keys(listLinks())) {
     if (seen.has(id)) continue;
     seen.add(id);
-    try {
+    external.push(id);
+    ids.push(id);
+  }
+  // Every deck's readDeck + walk + signature + cover runs in a bounded pool —
+  // the old one-deck-at-a-time loop made the library view (and the SSR first
+  // paint) pay the full sum of disk latencies instead of the max.
+  const slots = await mapPool(
+    ids,
+    async (id) => {
       const deck = await readDeck(id);
-      out.push({
+      const files = await deckFiles(id); // one walk feeds BOTH the file rows and the signature
+      const externalFlag = external.includes(id);
+      return {
         id: deck.id,
         title: deck.title,
         slideCount: deck.slides.length,
         modified: deck.modified,
-        signature: await deckSignature(id),
-        external: true,
-        store: "server",
+        signature: signatureOfFiles(files),
+        external: externalFlag,
+        store: "server" as const,
         cover: await coverOf(deck, id),
-      });
-    } catch {
-      /* moved or deleted on disk — skip */
-    }
+      } satisfies DeckSummary;
+    },
+    { concurrency: 8, label: "server-list-decks" },
+  );
+  const out: DeckSummary[] = [];
+  for (const slot of slots) {
+    if (!(slot instanceof Error)) out.push(slot); // not a deck / moved on disk — skip
   }
   out.sort((a, b) => (a.modified < b.modified ? 1 : -1));
   return out;
@@ -376,15 +405,17 @@ export async function snapshotDeck(deckId: string, tag: string): Promise<string>
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const name = `${stamp}--${tag.replace(/[^a-z0-9-]/gi, "-").slice(0, 40)}`;
   const files = await deckFiles(deckId);
+  // Bounded parallel reads (independent files; unreadable ones are skipped
+  // exactly like the old sequential loop)
+  const bodies = await mapPool(
+    files,
+    async (f) => (await fs.readFile(path.join(deckRoot(deckId), f.path))).toString("base64"),
+    { concurrency: 8, label: `snapshot-read:${deckId}` },
+  );
   const manifest: Record<string, string> = {};
-  for (const f of files) {
-    try {
-      const abs = path.join(deckRoot(deckId), f.path);
-      const body = await fs.readFile(abs);
-      manifest[f.path] = body.toString("base64");
-    } catch {
-      /* skip unreadable */
-    }
+  for (let i = 0; i < files.length; i++) {
+    const body = bodies[i];
+    if (!(body instanceof Error)) manifest[files[i].path] = body;
   }
   await writeFileAtomic(path.join(dir, `${name}.json`), JSON.stringify({ deckId, files: manifest }, null, 1));
   // keep last 10
@@ -411,10 +442,13 @@ export async function restoreSnapshot(deckId: string, name: string): Promise<voi
   const dir = deckPath(deckId, ".stagesmith/snapshots");
   const raw = await fs.readFile(path.join(dir, `${name}.json`), "utf8");
   const data = JSON.parse(raw) as { files: Record<string, string> };
-  for (const [rel, b64] of Object.entries(data.files)) {
-    if (!validRelPath(rel)) continue;
-    await writeFileAtomic(deckPath(deckId, rel), Buffer.from(b64, "base64").toString("utf8"));
-  }
+  // bounded parallel atomic writes — the files are independent
+  const entries = Object.entries(data.files).filter(([rel]) => validRelPath(rel));
+  await mapPoolAll(
+    entries,
+    ([rel, b64]) => writeFileAtomic(deckPath(deckId, rel), Buffer.from(b64, "base64").toString("utf8")),
+    { concurrency: 8, label: `snapshot-restore:${deckId}` },
+  );
 }
 
 /* ---------------- create deck ---------------- */

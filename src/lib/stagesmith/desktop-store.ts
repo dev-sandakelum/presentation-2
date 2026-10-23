@@ -22,7 +22,9 @@
 
 import type { DeckBundle, DeckCover, DeckJson, DeckSummary, FileRow, SlideEntry, Source, ThemeMode } from "./types";
 import { starterDeckFiles, templateByKey } from "./templates";
+import { mergeFileRows, type TreeRow } from "./file-tree";
 import { sanitizeAssetName, slugify } from "./browser-store";
+import { mapPool, mapPoolAll } from "./parallel";
 import {
   DesktopFsError,
   desktopFsCapability,
@@ -169,6 +171,10 @@ export interface DesktopDeckRecord {
   /** binary files by path — metadata only, served by the desktop asset handler */
   assets: Record<string, { size: number; modified: number }>;
   modified: string;
+  /** every non-hidden file the folder WALK saw — the tree is complete while
+   *  text contents still hydrate in the background, so file lists built from
+   *  this record (bundle rows, dropdowns) are never a partial view */
+  tree: Record<string, TreeRow>;
   /** disk-walk signature (path:size:mtime) — the SAME basis api.poll uses,
    *  so saves and polls agree and the dashboard never false-reloads */
   sig: string;
@@ -365,6 +371,10 @@ export async function getRecord(deckId: string): Promise<DesktopDeckRecord | nul
     loadPhase("deck-manifest-read", "end", { bytes: deckJsonRaw.length });
   }
   const deck = deckJsonRaw ? (JSON.parse(deckJsonRaw) as DeckJson) : null;
+  // the full walk tree — file lists must reflect every file on disk even
+  // while their contents are still hydrating in the background
+  const tree: Record<string, TreeRow> = {};
+  for (const r of rows) tree[r.path] = { size: r.size, modified: r.modified };
   const initialPaths = new Set(["theme.css"]);
   if (deck?.slides?.[0]?.id) initialPaths.add(`slides/${deck.slides[0].id}.tsx`);
   loadPhase("first-slide-and-theme-read", "start", { paths: [...initialPaths] });
@@ -384,6 +394,7 @@ export async function getRecord(deckId: string): Promise<DesktopDeckRecord | nul
     files,
     assets,
     modified: new Date().toISOString(),
+    tree,
     sig: signatureFromRows(rows),
   };
   try {
@@ -426,11 +437,16 @@ export async function getRecord(deckId: string): Promise<DesktopDeckRecord | nul
  * files via fs.delete. Never rewrites the whole deck.
  */
 async function persistDiff(deckId: string, rec: DesktopDeckRecord, baseline: Record<string, string>): Promise<void> {
-  for (const p of Object.keys(rec.files)) {
-    if (baseline[p] !== rec.files[p]) {
-      await fsWriteText(deckId, p, rec.files[p]);
-    }
-  }
+  // Changed/new files write through a bounded parallel pool — the Java bridge
+  // serves concurrent fs.writeText commands on its worker pool, and every
+  // write is an independent atomic temp+rename, so order is irrelevant. One
+  // failure propagates (the save reports it); removes stay sequential (rare).
+  const changed = Object.keys(rec.files).filter((p) => baseline[p] !== rec.files[p]);
+  await mapPoolAll(
+    changed,
+    (p) => fsWriteText(deckId, p, rec.files[p]),
+    { concurrency: 4, label: `desktop-persist:${deckId}` },
+  );
   for (const p of Object.keys(baseline)) {
     if (rec.files[p] === undefined) {
       await fsDelete(deckId, p).catch(() => {
@@ -480,13 +496,20 @@ export async function rewriteThemeCssDesktop(css: string, deckId: string): Promi
 /* ------------------------------------------------------------------ */
 
 function fileRowsOf(rec: DesktopDeckRecord): FileRow[] {
-  const rows: FileRow[] = Object.keys(rec.files)
-    .sort()
-    .map((p) => ({ path: p, mtime: Date.parse(rec.modified) || Date.now(), size: rec.files[p].length }));
-  for (const p of Object.keys(rec.assets).sort()) {
-    rows.push({ path: p, mtime: rec.assets[p].modified, size: rec.assets[p].size });
-  }
-  return rows;
+  // hydrated files + walk-tree rows + assets — see file-tree.ts. Without the
+  // tree merge, a freshly walked record lists only the eagerly-read boot
+  // files (deck.json, theme.css, first slide) and the BG/Overlay dropdown
+  // renders empty while the editor shows the open file's code.
+  return mergeFileRows(rec.files, rec.tree, rec.assets, rec.modified);
+}
+
+/** walk-tree rows for exactly the files a record knows about (files + assets) */
+function treeOfRecord(rec: Pick<DesktopDeckRecord, "files" | "assets">): Record<string, TreeRow> {
+  const mt = Date.now();
+  const tree: Record<string, TreeRow> = {};
+  for (const p of Object.keys(rec.files)) tree[p] = { size: rec.files[p].length, modified: mt };
+  for (const p of Object.keys(rec.assets)) tree[p] = { size: rec.assets[p].size, modified: rec.assets[p].modified };
+  return tree;
 }
 
 function coverOf(deck: DeckJson, themeCss: string): DeckCover {
@@ -503,45 +526,53 @@ function coverOf(deck: DeckJson, themeCss: string): DeckCover {
 export async function listDecks(): Promise<DeckSummary[]> {
   if (!(await isDesktopFsActive())) return [];
   const index = await ensureDeckIndex(true);
+  const valid = index.filter((info) => validDeckId(info.id));
+  // Parallel, bounded: every deck's deck.json + theme.css pair reads through
+  // the bridge concurrently (the Java side serves fs commands on a bounded
+  // worker pool, so concurrent asks are safe); cached summaries short-circuit.
+  const slots = await mapPool(
+    valid,
+    async (info) => {
+      const cached = summaryCache.get(info.id);
+      if (cached && cached.modified === info.modified) return cached;
+      try {
+        const [deckRaw, themeCssRaw] = await Promise.all([
+          fsReadText(info.id, "deck.json"),
+          fsReadText(info.id, "theme.css").catch(() => ""),
+        ]);
+        const deck = JSON.parse(deckRaw) as DeckJson;
+        const themeCss = await rewriteThemeCssDesktop(themeCssRaw, info.id);
+        const summary: DeckSummary = {
+          id: info.id,
+          title: deck.title || info.title,
+          slideCount: deck.slides?.length ?? info.slides,
+          modified: deck.modified || info.modified,
+          signature: fnv1a(`${info.id}|${deck.modified}|${deck.slides?.length ?? 0}`),
+          store: "desktop",
+          folderName: info.folder,
+          cover: coverOf(deck, themeCss),
+        };
+        summaryCache.set(info.id, summary);
+        return summary;
+      } catch {
+        // unreadable deck.json — list it minimally from the Java-side scan
+        const summary: DeckSummary = {
+          id: info.id,
+          title: info.title,
+          slideCount: info.slides,
+          modified: info.modified,
+          signature: fnv1a(`${info.id}|${info.modified}`),
+          store: "desktop",
+          folderName: info.folder,
+        };
+        return summary;
+      }
+    },
+    { concurrency: 4, label: "desktop-list-decks" },
+  );
   const out: DeckSummary[] = [];
-  for (const info of index) {
-    if (!validDeckId(info.id)) continue;
-    const cached = summaryCache.get(info.id);
-    if (cached && cached.modified === info.modified) {
-      out.push(cached);
-      continue;
-    }
-    try {
-      const [deckRaw, themeCssRaw] = await Promise.all([
-        fsReadText(info.id, "deck.json"),
-        fsReadText(info.id, "theme.css").catch(() => ""),
-      ]);
-      const deck = JSON.parse(deckRaw) as DeckJson;
-      const themeCss = await rewriteThemeCssDesktop(themeCssRaw, info.id);
-      const summary: DeckSummary = {
-        id: info.id,
-        title: deck.title || info.title,
-        slideCount: deck.slides?.length ?? info.slides,
-        modified: deck.modified || info.modified,
-        signature: fnv1a(`${info.id}|${deck.modified}|${deck.slides?.length ?? 0}`),
-        store: "desktop",
-        folderName: info.folder,
-        cover: coverOf(deck, themeCss),
-      };
-      summaryCache.set(info.id, summary);
-      out.push(summary);
-    } catch {
-      // unreadable deck.json — list it minimally from the Java-side scan
-      out.push({
-        id: info.id,
-        title: info.title,
-        slideCount: info.slides,
-        modified: info.modified,
-        signature: fnv1a(`${info.id}|${info.modified}`),
-        store: "desktop",
-        folderName: info.folder,
-      });
-    }
+  for (const slot of slots) {
+    if (!(slot instanceof Error) && slot) out.push(slot);
   }
   // drop cached summaries of decks that vanished
   const ids = new Set(index.map((d) => d.id));
@@ -587,6 +618,7 @@ export async function createDeck(
     files,
     assets: {},
     modified: deck.modified ?? new Date().toISOString(),
+    tree: Object.fromEntries(Object.entries(files).map(([p, c]) => [p, { size: c.length, modified: Date.now() }])),
     sig: "",
   });
   const stored = records.get(deckId)!;
@@ -708,6 +740,7 @@ export async function deleteFile(deckId: string, rel: string): Promise<void> {
   }
   delete rec.files[rel];
   delete rec.assets[rel];
+  delete rec.tree[rel];
   rec.modified = new Date().toISOString();
   await fsDelete(deckId, rel);
   invalidateDeckIndex();
@@ -772,7 +805,10 @@ export async function deleteSlide(deckId: string, slideId: string): Promise<Deck
     if (idx < 0) throw new Error("Slide not found");
     const entry = deck.slides[idx];
     deck.slides.splice(idx, 1);
-    for (const f of [`slides/${slideId}.tsx`, `notes/${slideId}.md`]) delete rec.files[f];
+    for (const f of [`slides/${slideId}.tsx`, `notes/${slideId}.md`]) {
+      delete rec.files[f];
+      delete rec.tree[f];
+    }
     for (const src of [entry.bg, entry.overlay]) {
       if (src && (src.type === "code" || src.type === "html" || src.type === "image")) {
         const p = src.path;
@@ -782,6 +818,7 @@ export async function deleteSlide(deckId: string, slideId: string): Promise<Deck
         if (!usedElsewhere && (p.startsWith("bg/") || p.startsWith("overlay/"))) {
           delete rec.files[p];
           delete rec.assets[p];
+          delete rec.tree[p];
         }
       }
     }
@@ -910,6 +947,9 @@ export async function restoreSnapshot(deckId: string, name: string): Promise<voi
   rec.files = { ...(data.files ?? {}) };
   rec.modified = new Date().toISOString();
   await persistDiff(deckId, rec, baseline);
+  // the tree must match what is on disk now (persistDiff removed the
+  // baseline-only files) — otherwise deleted files resurrect in file lists
+  rec.tree = treeOfRecord(rec);
 }
 
 /* ------------------------------------------------------------------ */
@@ -959,11 +999,11 @@ export async function uploadAssets(
 export async function listCodeFiles(deckId: string, dir: "overlay" | "bg"): Promise<FileRow[]> {
   const rec = await getRecord(deckId);
   if (!rec) return [];
-  const mt = Date.parse(rec.modified) || Date.now();
-  return Object.keys(rec.files)
-    .filter((p) => p.startsWith(`${dir}/`) && /\.(tsx|ts|jsx|js)$/.test(p))
-    .sort()
-    .map((p) => ({ path: p, mtime: mt, size: rec.files[p].length }));
+  // merged rows (hydrated + walk tree): a freshly opened deck whose text
+  // contents are still hydrating must still list every file of the layer
+  return fileRowsOf(rec)
+    .filter((f) => f.path.startsWith(`${dir}/`) && /\.(tsx|ts|jsx|js)$/.test(f.path))
+    .sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
 export async function uploadCodeFile(
@@ -998,6 +1038,7 @@ export async function deleteCodeFile(deckId: string, path: string): Promise<void
   if (!rec) throw new Error("Deck not found");
   if (!path.startsWith("bg/") && !path.startsWith("overlay/")) throw new Error("Only bg/ and overlay/ files");
   delete rec.files[path];
+  delete rec.tree[path];
   rec.modified = new Date().toISOString();
   await fsDelete(deckId, path);
   invalidateDeckIndex();

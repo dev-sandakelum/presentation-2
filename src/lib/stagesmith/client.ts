@@ -5,6 +5,8 @@ import * as local from "./browser-store";
 import * as desktop from "./desktop-store";
 import * as transfer from "./transfer";
 import { maybeRequestWriteAccess } from "./permission";
+import { fetchJsonViaWorker } from "./fetch-worker";
+import { mapPool, firstPoolError } from "./parallel";
 
 export type { DeckBundle };
 
@@ -37,6 +39,32 @@ async function j<T>(res: Response): Promise<T> {
     throw new Error("Malformed response from server");
   }
   return body as T;
+}
+
+/**
+ * The compile POST runs in the JSON worker: fetch bookkeeping AND JSON.parse
+ * of (potentially hundreds of KB of) compiled module code stay off the main
+ * thread so the loading screen keeps animating while Present mode prepares.
+ * Throw semantics mirror {@link j} exactly — transport failures throw so the
+ * transient-retry ladder still sees them.
+ */
+async function compilePost<T>(payload: unknown): Promise<T> {
+  const res = await fetchJsonViaWorker<T>("/api/compile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (res.status === 0) {
+    throw new Error(res.error || "request failed");
+  }
+  if (!res.ok) {
+    const body = res.body as { error?: string; message?: string } | null;
+    throw new Error(`HTTP ${res.status}: ${body?.error || body?.message || "request failed"}`);
+  }
+  if (res.body === null || typeof res.body !== "object") {
+    throw new Error("Malformed response from server");
+  }
+  return res.body;
 }
 
 /* ------------------------------------------------------------------ */
@@ -319,34 +347,19 @@ export function resolveModule(deckId: string, path: string, version: string | nu
           // compiling against an incomplete startup snapshot.
           rec.files[path] = await desktop.readFile(deckId, path);
         }
-        const res = await fetch("/api/compile", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ files: { ...rec.files, ...overrides }, entry: path }),
+        const data = await compilePost<{ ok: boolean; js?: string; steps?: number; ver?: string; error?: string }>({
+          files: { ...rec.files, ...overrides },
+          entry: path,
         });
-        const data = (await j<{ ok: boolean; js?: string; steps?: number; ver?: string; error?: string }>(res)) as {
-          ok: boolean;
-          js?: string;
-          steps?: number;
-          ver?: string;
-          error?: string;
-        };
         info = data.ok
           ? { url: null, code: data.js ?? "", ver: data.ver ?? String(data.js?.length ?? 0), steps: data.steps || 1, error: null }
           : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
       } else {
-        const res = await fetch("/api/compile", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ deckId, entry: path, overrides }),
+        const data = await compilePost<{ ok: boolean; js?: string; steps?: number; error?: string; ver?: string }>({
+          deckId,
+          entry: path,
+          overrides,
         });
-        const data = (await j<{ ok: boolean; js?: string; steps?: number; error?: string; ver?: string }>(res)) as {
-          ok: boolean;
-          js?: string;
-          steps?: number;
-          error?: string;
-          ver?: string;
-        };
         info = data.ok
           ? { url: null, code: data.js ?? "", ver: data.ver ?? "", steps: data.steps || 1, error: null }
           : { url: null, code: null, ver: "err", steps: 1, error: data.error || "Compile failed" };
@@ -658,14 +671,25 @@ export const api = {
       return local.saveFiles(deckId, entries);
     }
     let sig = "";
-    for (const e of entries) {
-      const res = await fetch(`/api/decks/${deckId}/files`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: e.path, content: e.content, allowEmptyOverwrite: e.allowEmptyOverwrite === true }),
-      });
-      sig = (await j<{ signature: string }>(res)).signature;
-    }
+    // Parallel bounded PUTs — the writes touch DIFFERENT files, so order is
+    // irrelevant; one failure fails the save (first error wins). The returned
+    // signature is re-read AFTER all writes settle, because concurrent PUTs
+    // each report the deck signature as they saw it mid-flight.
+    const slots = await mapPool(
+      entries,
+      async (e) => {
+        const res = await fetch(`/api/decks/${deckId}/files`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: e.path, content: e.content, allowEmptyOverwrite: e.allowEmptyOverwrite === true }),
+        });
+        return (await j<{ signature: string }>(res)).signature;
+      },
+      { concurrency: 4, label: "save-files" },
+    );
+    const firstError = firstPoolError(slots);
+    if (firstError) throw firstError;
+    sig = await api.poll(deckId);
     return sig;
   },
 

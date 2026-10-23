@@ -160,3 +160,49 @@ is chosen. Java 1.3.0 sets a persistent `CefSettings.cache_path`
 Why: first-run and fallback decks live in the webview's IndexedDB — they must
 survive restarts too, and the browser store must be a real fallback, not a
 trap.
+
+## 14. Parallel loading: one bounded pool primitive, workers for parse-heavy work
+
+Decision: every loading path that used to await in a loop now runs through
+`src/lib/stagesmith/parallel.ts` — a bounded promise pool with input-ordered
+results, per-task `AbortController`s (a pool signal fans out to individual
+controllers; a timeout aborts exactly one task's fetch), failure isolation
+(one bad item is an `Error` slot, never a neighbours-killer) and
+settle-counted progress so the status line stays accurate however tasks
+finish. Heavy parse work moved off the main thread into two small workers:
+`json-fetch.worker.ts` (fetch + JSON.parse of compile responses — a compiled
+slide can be hundreds of KB) and `dataurl.worker.ts` (FileReaderSync blob →
+data-URL conversion for browser decks).
+
+Why: the main thread must stay free for the loading screen's animation and
+status updates while Present mode prepares 26 slides; thumbnails are separate
+opaque-origin iframes already, so the parent-side cost is parsing and base64
+churn — both now off-thread. Measured on the 16-deck corpus (bun
+`scripts/store-bench.ts`): `getDeckBundle` 22 → 4 ms (one walk instead of
+two, parallel reads), `listDecks` 217 → 41 ms (bounded per-deck pool),
+folder walk 11 → 2 ms (parallel stats).
+
+Two traps found and fixed while wiring the worker: bundlers emit workers as
+`blob:` URLs in production, and a blob worker cannot resolve RELATIVE fetch
+URLs — `fetchJsonViaWorker` absolutizes against `document.baseURI` before
+posting. And the worker reply must carry the transport error through the
+client's `onmessage`, or every network failure degrades to an empty
+"request failed".
+
+## 15. Image preloading decodes off the main thread, HTTP-cache-first
+
+Decision: the Present preloader fetches each image (canonical URL,
+`force-cache`, `priority: "high"` for the critical window) and decodes via
+`createImageBitmap`, closing the bitmap immediately; SVGs and
+bitmap-unsupported formats fall back to `img.decode()`. Desktop asset URLs
+stay canonical — no priority query parameter — because the iframe's `<img>`
+hits the SHARED HTTP cache by exact URL key, and a parametrized variant
+would miss the warmed entry.
+
+Why: the sandboxed stage runtime is a separate document with its own memory
+cache; the only cache the parent can warm for it is the shared HTTP one, so
+byte-warming (fetch) + off-thread decode (bitmap) is the whole win available.
+The Java side independently orders its asset pool (reads outrank prepares,
+`?ss_p=hi` hint available) — wiring that hint into desktop URLs was rejected
+because the cache-key mismatch would defeat the preloading it was meant to
+improve.

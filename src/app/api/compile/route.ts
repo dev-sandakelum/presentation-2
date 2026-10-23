@@ -1,5 +1,6 @@
 import { compileFile, compileUrlFor, compileVirtual } from "@/lib/stagesmith/compile";
 import { deckExists, deckFiles, readFileInDeck, validDeckId, validRelPath } from "@/lib/stagesmith/store";
+import { mapPool } from "@/lib/stagesmith/parallel";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -84,9 +85,19 @@ export async function POST(req: Request) {
       const overrides = (body.overrides ?? {}) as Record<string, unknown>;
       files = {};
       const rows = await deckFiles(deckId);
-      for (const row of rows) {
-        if (!/\.(tsx?|jsx?|css|json)$/i.test(row.path) || row.size > 1_500_000) continue;
-        try { files[row.path] = await readFileInDeck(deckId, row.path); } catch { /* report a normal compile resolution error */ }
+      const textRows = rows.filter((row) => /\.(tsx?|jsx?|css|json)$/i.test(row.path) && row.size <= 1_500_000);
+      // Parallel bounded reads: the old one-file-at-a-time loop made every
+      // stateless compile of a server deck pay the full sum of disk read
+      // latencies. A read failure leaves the file absent (the compiler
+      // reports a normal resolution error), exactly like the old catch.
+      const contents = await mapPool(
+        textRows,
+        (row) => readFileInDeck(deckId, row.path),
+        { concurrency: 8, label: `compile-read:${deckId}` },
+      );
+      for (let i = 0; i < textRows.length; i++) {
+        const content = contents[i];
+        if (!(content instanceof Error)) files[textRows[i].path] = content;
       }
       for (const [path, content] of Object.entries(overrides)) {
         if (!validRelPath(path) || typeof content !== "string") {

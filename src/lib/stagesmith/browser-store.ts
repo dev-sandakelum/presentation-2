@@ -24,6 +24,8 @@ import type {
   ThemeMode,
 } from "./types";
 import { starterDeckFiles, templateByKey } from "./templates";
+import { blobsToDataUrls } from "./dataurl-worker";
+import { mapPool } from "./parallel";
 
 /* ------------------------------------------------------------------ */
 /* tiny IndexedDB wrapper (no deps)                                    */
@@ -589,14 +591,24 @@ async function deviceFolderNameOf(rec: BrowserDeckRecord): Promise<string | unde
 
 export async function listDecks(): Promise<DeckSummary[]> {
   const raws = await idbGetAll<BrowserDeckRecord>(STORE_DECKS);
+  const valid = raws.filter((raw) => validDeckId(raw.id));
+  // Parallel, bounded: every deck's record + summary resolve concurrently
+  // (each involves IndexedDB reads); results keep their input order and a
+  // failing deck is simply skipped, exactly like the old sequential loop.
+  const slots = await mapPool(
+    valid,
+    async (raw) => {
+      // merge blob-store assets + v1 inline handling before using the record
+      // (raw records from STORE_DECKS carry no assets since the v2 split)
+      const rec = await getRecord(raw.id);
+      if (!rec) return null;
+      return await summaryOf(rec);
+    },
+    { concurrency: 4, label: "browser-list-decks" },
+  );
   const out: DeckSummary[] = [];
-  for (const raw of raws) {
-    if (!validDeckId(raw.id)) continue;
-    // merge blob-store assets + v1 inline handling before using the record
-    // (raw records from STORE_DECKS carry no assets since the v2 split)
-    const rec = await getRecord(raw.id);
-    if (!rec) continue;
-    out.push(await summaryOf(rec));
+  for (const slot of slots) {
+    if (!(slot instanceof Error) && slot) out.push(slot);
   }
   out.sort((a, b) => (a.modified < b.modified ? 1 : -1));
   return out;
@@ -1135,13 +1147,14 @@ export async function getAssetMap(deckId: string, version: string | number): Pro
       assetMapCache.set(deckId, { sig, map: {} });
       return {};
     }
+    // Parallel, off-main-thread conversion: every blob converts in the small
+    // worker pool (FileReaderSync), bounded so only a couple of large base64
+    // strings exist at once. One broken asset never stops the others, and
+    // the results drop back into the original key order.
+    const slots = await blobsToDataUrls(keys.map((k) => rec.assets[k]), `assetmap:${deckId}`);
     const map: Record<string, string> = {};
-    for (const k of keys) {
-      try {
-        map[k] = await blobToDataUrl(rec.assets[k]);
-      } catch {
-        /* skip broken asset */
-      }
+    for (let i = 0; i < keys.length; i++) {
+      if (!(slots[i] instanceof Error)) map[keys[i]] = slots[i] as string;
     }
     assetMapCache.set(deckId, { sig, map });
     return map;
